@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (Stage 1, v2: sign-in + name grid)
+// SHOP BOARD — server.js (Stage 1, v3: sign-in + clock-in/out + TV board skeleton)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -96,6 +96,17 @@ function strike(empId) {
 function locked(empId) {
   const s = pinStrikes.get(empId);
   return s && s.lockedUntil > Date.now();
+}
+
+// Q52 SHOP-WI-FI GATE for clock actions: if SHOP_EGRESS_IP is set on Railway,
+// clock in/out only works from that public IP (the shop's connection).
+// UNSET during the build phase = gate open, so testing works from anywhere.
+// At cutover: set SHOP_EGRESS_IP to the shop's IP and the fence goes up.
+function wifiGate(req) {
+  const shopIp = process.env.SHOP_EGRESS_IP;
+  if (!shopIp) return null; // build phase — gate open
+  const from = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return from === shopIp ? null : "Clock actions only work on shop Wi-Fi";
 }
 
 // Read a JSON request body (small, so no streaming worries).
@@ -215,20 +226,97 @@ const loginPage = (employees) => `<!doctype html>
   }
 </script></body></html>`;
 
-const homePage = (emp, lineNames) => `<!doctype html>
+// THE HOME SCREEN, v2 — clock-in / clock-out (the floor's first real tool).
+// Q90: your USUAL lines are the big one-tap buttons; other lines sit below.
+// Clock-out asks WHY from the admin-managed reason list (Q77).
+// `state` = { clockedIn: bool, lineName } derived from the latest clock event.
+const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
-  <h2>You're in, ${emp.first_name}.</h2>
-  <p style="text-align:center;opacity:.7">
-    ${lineNames.length ? "Your usual spot: " + lineNames.join(" · ") : "No usual line set — any line works."}<br><br>
-    Clock-in and the cab screen arrive in the next build stage.<br>
-    This page proves sign-in works end to end.
+  <h2 id="hi">${state.clockedIn
+    ? `${emp.first_name} — ON THE CLOCK · ${state.lineName}`
+    : `Hi ${emp.first_name} — clock in to start`}</h2>
+
+  <!-- CLOCK IN: shown when off the clock. Usual lines first (Q90). -->
+  <div id="in" style="display:${state.clockedIn ? "none" : "block"}">
+    <div class="grid">
+      ${usualLines.map((l) => `<button class="name" data-line="${l.id}">${l.name}<small>your usual line — one tap</small></button>`).join("")}
+    </div>
+    ${otherLines.length ? `<p class="msg" style="margin-top:18px">Other lines</p>
+    <div class="grid">
+      ${otherLines.map((l) => `<button class="name" style="opacity:.75" data-line="${l.id}">${l.name}</button>`).join("")}
+    </div>` : ""}
+  </div>
+
+  <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
+  <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
+    <p class="msg">Clocking out — what kind?</p>
+    <div class="grid">
+      ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
+    </div>
+  </div>
+
+  <div class="msg err" id="err" style="margin-top:14px"></div>
+  <p style="text-align:center;margin-top:22px">
+    <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
-  <p style="text-align:center"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
-</div></body></html>`;
+</div>
+<script>
+  // claimed_at rides with every tap (Q103-1: the REAL tap time governs;
+  // the server separately stamps received_at). Offline queueing = later stage.
+  async function act(url, payload){
+    const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...payload, claimed_at:new Date().toISOString()})});
+    const out = await r.json();
+    if(out.ok) location.reload(); else document.getElementById("err").textContent = out.error||"Something went wrong";
+  }
+  document.getElementById("in").addEventListener("click",(e)=>{
+    const b=e.target.closest("[data-line]"); if(b) act("/api/clock/in",{line_id:Number(b.dataset.line)});
+  });
+  document.getElementById("out").addEventListener("click",(e)=>{
+    const b=e.target.closest("[data-reason]"); if(b) act("/api/clock/out",{reason:b.dataset.reason});
+  });
+</script></body></html>`;
+
+// THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
+// Today it shows each enabled line + who's clocked on; cab tiles, colors,
+// and pace arrive with the time engine (Stage 2). Refreshes itself every 30 s.
+const boardPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
+<style>
+  .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px;padding:10px}
+  .tile{background:#1c1c1e;border:1px solid #2c2c2e;border-radius:18px;padding:26px;min-height:170px}
+  .tile h3{margin:0 0 6px;font-size:1.5rem}
+  .idle{opacity:.45}
+  .techs{font-size:1.15rem;opacity:.85;margin-top:10px}
+  .stamp{position:fixed;bottom:12px;right:18px;opacity:.35;font-size:.85rem}
+</style></head>
+<body>
+  <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
+  <div class="board" id="board"></div>
+  <div class="stamp" id="stamp"></div>
+<script>
+  // Plain fetch-poll every 30 s — Realtime push replaces this in Stage 3.
+  async function refresh(){
+    try{
+      const r = await fetch("/api/board-state"); const s = await r.json();
+      document.getElementById("board").innerHTML = s.lines.map(l => \`
+        <div class="tile \${l.techs.length ? "" : "idle"}">
+          <h3>\${l.name}</h3>
+          <div>\${l.techs.length ? "Working now" : "Idle line"}</div>
+          <div class="techs">\${l.techs.join(" · ")}</div>
+        </div>\`).join("");
+      document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
+    }catch(e){ /* board never crashes; next poll retries */ }
+  }
+  refresh(); setInterval(refresh, 30000);
+</script></body></html>`;
 
 const shellPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -301,15 +389,69 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
-    // HOME — the logged-in landing page (real cab screen = Stage 3).
+    // HOME — clock in / clock out (real cab task screen = Stage 3).
     if (url.pathname === "/home") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,lines&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const lines = emp.lines && emp.lines.length
-        ? await db(`line?select=id,name&id=in.(${emp.lines.join(",")})`) : [];
-      return send(200, "text/html; charset=utf-8", homePage(emp, lines.map((l) => l.name)));
+      // Latest clock event tells us on/off the clock (the time engine proper
+      // arrives in Stage 2 — this is just current state).
+      const [last] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const usual = allLines.filter((l) => (emp.lines || []).includes(l.id));
+      const other = allLines.filter((l) => !(emp.lines || []).includes(l.id));
+      const clockedIn = last && last.kind === "clock_in";
+      const lineName = clockedIn ? (allLines.find((l) => l.id === last.line_id) || {}).name || "" : "";
+      const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+      return send(200, "text/html; charset=utf-8",
+        homePage(emp, { clockedIn, lineName }, usual, other, reasons));
+    }
+
+    // CLOCK IN (Q90 one-tap; Q52 Wi-Fi gate below). Payroll-grade rows (C3.8).
+    if (url.pathname === "/api/clock/in" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { line_id, claimed_at } = await body(req);
+      if (!line_id) return json(400, { ok: false, error: "Pick a line" });
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
+      logEvent("clock.in", empId, { line_id });
+      return json(200, { ok: true });
+    }
+
+    // CLOCK OUT — reason label maps to the event kind (Q77 list drives the UI).
+    if (url.pathname === "/api/clock/out" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { reason, claimed_at } = await body(req);
+      const kind = reason === "Lunch" ? "clock_out_lunch"
+        : reason === "End of shift" ? "clock_out_shift" : "clock_out_early";
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: empId, kind, reason: reason || null, claimed_at: claimed_at || new Date().toISOString() }) });
+      logEvent("clock.out", empId, { reason, kind });
+      return json(200, { ok: true });
+    }
+
+    // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
+    if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
+
+    // Board data: who is clocked on each line RIGHT NOW (latest event per person).
+    if (url.pathname === "/api/board-state") {
+      const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=500`);
+      const emps = await db(`employee?select=id,first_name&active=is.true`);
+      const nameOf = Object.fromEntries(emps.map((e) => [e.id, e.first_name]));
+      const seen = new Set(); const onLine = {}; // employee's LATEST event wins
+      for (const ev of events) {
+        if (seen.has(ev.employee_id)) continue;
+        seen.add(ev.employee_id);
+        if (ev.kind === "clock_in" && nameOf[ev.employee_id])
+          (onLine[ev.line_id] = onLine[ev.line_id] || []).push(nameOf[ev.employee_id]);
+      }
+      return json(200, { lines: lines.map((l) => ({ id: l.id, name: l.name, techs: onLine[l.id] || [] })) });
     }
 
     if (url.pathname === "/logout") {
@@ -325,4 +467,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v2 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v3 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
