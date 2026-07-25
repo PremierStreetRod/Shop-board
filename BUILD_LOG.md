@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-25 — Build block 5 — THE TIME ENGINE (Stage 2 begins)
+- server.js v5: coverage pace clock rebuilt from raw clock_event history (Q103-2 — cab clock only runs under coverage; lunches never redden a cab).
+- Color math crew-agnostic (Q104): behind = coverage man-hours - earned; green <1 / amber 1-4 / red >4 (Q6 defaults). Earned v1 = completed tasks at standard (in-progress partial credit joins with per-task attribution later).
+- Q57 clock-driven DAY x/y: ceil(covered wall-hours / 8), floating per-cab boundaries. File-17 voice on all statuses.
+- Interval math unit-tested pre-ship; LIVE verification: L1 amber 1.4 behind D3/6, L2 green 25.0 ahead D3/7, L3 red 7.0 behind D3/6, L4 neutral — all match hand computations exactly.
+- Engine defensively rejected overlapping single-person coverage in my first demo seed (correct behavior; reseeded sequentially).
+- Logsdons relabeled 'Admin' on grid (owner-rep). Ops note: Supabase SQL editor hides DELETE behind a confirm dialog.
+- NEXT: manager tools (start build, inspection sign-off, day switch) or finish projection + on-deck tiles.
+
 ## 2026-07-25 — Build block 4 — cab task screen + full roster + test data
 - Q95 AMENDED (owner-rep): ALL 17 employees + owners on the login grid w/ department subtitles (new employee.department column, Q94 model). Rob + Ross can sign in and watch.
 - Migration 0003: 11 remaining roster rows + 5 TEST- builds (purge key: order # prefix) + frozen Q97 task lists (116 tasks) + believable progress.
