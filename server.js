@@ -437,6 +437,54 @@ const shellPage = `<!doctype html>
   </div>
 </div></body></html>`;
 
+// THE MANAGER COCKPIT v1 (file 20) — manager + admin roles only.
+// Per line: the active cab (sign-off completes it — the file 11 completion
+// gate's manager half; note/photo requirements join in a later block) and
+// the waiting queue (start = cab goes Active + its Q97 task list freezes).
+const managerPage = (rows) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .lane h3{margin:0 0 8px}
+  .btn{background:var(--red);border:none;border-radius:10px;color:#fff;font-weight:700;
+       padding:12px 18px;font-size:1rem;cursor:pointer;margin-top:8px}
+  .btn.gray{background:#3a3a3c}
+  .qrow{opacity:.8;padding:4px 0}
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>Manager</h2>
+  ${rows.map((r) => `
+    <div class="lane">
+      <h3>${r.line.name}</h3>
+      ${r.active ? `
+        <div><b>ORDER ${r.active.order_number}</b> · ${r.active.part_number} · active</div>
+        <button class="btn" data-complete="${r.active.id}">Sign off — production complete</button>`
+      : `<div style="opacity:.6">No active cab</div>
+        ${r.queue.length ? `<button class="btn" data-start="${r.queue[0].id}">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
+      ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting:</div>
+        ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number} · ${q.part_number}</div>`).join("")}` : ""}
+    </div>`).join("")}
+  <div class="msg err" id="err"></div>
+  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div>
+<script>
+  document.addEventListener("click", async (e) => {
+    const c = e.target.closest("[data-complete]"), s = e.target.closest("[data-start]");
+    if (!c && !s) return;
+    const r = await fetch(c ? "/api/build/complete" : "/api/build/start", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ build_id: (c || s).dataset.complete || (c || s).dataset.start,
+        claimed_at: new Date().toISOString() }) });
+    const out = await r.json();
+    if (out.ok) location.reload();
+    else document.getElementById("err").textContent = out.error || "Something went wrong";
+  });
+</script></body></html>`;
+
 // ---------- the server ----------
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -682,6 +730,63 @@ http.createServer(async (req, res) => {
       }) });
     }
 
+    // MANAGER COCKPIT — manager + admin only (file 07 permissions).
+    if (url.pathname === "/manager") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return send(403, "text/plain", "Manager or admin only");
+      const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,state,started_at,created_at&state=in.(active,upcoming)&order=created_at`);
+      const rows = lines.map((l) => ({ line: l,
+        active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
+        queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
+      return send(200, "text/html; charset=utf-8", managerPage(rows));
+    }
+
+    // SIGN-OFF: manager completes the active cab (file 11 gate, manager half —
+    // final-note/photo requirements arrive with the tech-side finish flow).
+    if (url.pathname === "/api/build/complete" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, claimed_at } = await body(req);
+      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "active") return json(400, { ok: false, error: "Cab is not active" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
+      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, signed_off_at: claimed_at });
+      return json(200, { ok: true });
+    }
+
+    // START NEXT BUILD: upcoming -> active, and the Q97 FREEZE happens here —
+    // the template's steps are copied into this cab's own task list, so later
+    // template edits never rewrite a started cab's checklist.
+    if (url.pathname === "/api/build/start" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, claimed_at } = await body(req);
+      const [b] = await db(`build?select=id,state,line_id,part_number,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
+      const clash = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
+      if (clash.length) return json(400, { ok: false, error: "That line already has an active cab" }); // one-per-line
+      const startedAt = claimed_at || new Date().toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt }) });
+      const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
+      const steps = await db(`step_template?select=display_no,name,day_no,man_hours,is_background,sort_order&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
+      for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
+        await db("task", { method: "POST", body: JSON.stringify({ build_id, display_no: st.display_no,
+          name: st.name, day_no: st.day_no, man_hours: st.man_hours, is_background: st.is_background,
+          source: "template", state: "not_started", sort_order: st.sort_order }) });
+      logEvent("build.start", empId, { build_id, order_number: b.order_number, tasks_frozen: steps.length });
+      return json(200, { ok: true });
+    }
+
     if (url.pathname === "/logout") {
       const empId = readSession(req.headers.cookie);
       if (empId) logEvent("employee.logout", empId, {});
@@ -695,4 +800,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v5 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v6 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
