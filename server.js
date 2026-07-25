@@ -414,8 +414,10 @@ const boardPage = `<!doctype html>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${l.cab.order} <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
-            <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>\`
+            <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
+            <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>Idle line</div>\`}
+          \${l.ondeck ? \`<div style="opacity:.6;margin-top:8px">ON DECK: ORDER \${l.ondeck.order} · \${l.ondeck.family}</div>\` : ""}
           <div class="techs">\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : ""}</div>
         </div>\`).join("");
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
@@ -461,9 +463,9 @@ const managerPage = (rows) => `<!doctype html>
       <h3>${r.line.name}</h3>
       ${r.active ? `
         <div><b>ORDER ${r.active.order_number}</b> · ${r.active.part_number} · active</div>
-        <button class="btn" data-complete="${r.active.id}">Sign off — production complete</button>`
+        <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
       : `<div style="opacity:.6">No active cab</div>
-        ${r.queue.length ? `<button class="btn" data-start="${r.queue[0].id}">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
+        ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting:</div>
         ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number} · ${q.part_number}</div>`).join("")}` : ""}
     </div>`).join("")}
@@ -472,17 +474,20 @@ const managerPage = (rows) => `<!doctype html>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
-  document.addEventListener("click", async (e) => {
-    const c = e.target.closest("[data-complete]"), s = e.target.closest("[data-start]");
-    if (!c && !s) return;
-    const r = await fetch(c ? "/api/build/complete" : "/api/build/start", { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ build_id: (c || s).dataset.complete || (c || s).dataset.start,
-        claimed_at: new Date().toISOString() }) });
-    const out = await r.json();
-    if (out.ok) location.reload();
-    else document.getElementById("err").textContent = out.error || "Something went wrong";
-  });
+  // Plain global handler wired by onclick= on each button — sturdier than
+  // delegated listeners under automation and on older shop tablets.
+  async function act(kind, id, btn) {
+    btn.disabled = true; btn.textContent = "Working…";
+    try {
+      const r = await fetch("/api/build/" + kind, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false;
+  }
 </script></body></html>`;
 
 // ---------- the server ----------
@@ -653,7 +658,7 @@ http.createServer(async (req, res) => {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.asc&limit=2000`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at&state=eq.active&order=started_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at&state=in.(active,upcoming)&order=created_at`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
@@ -683,7 +688,11 @@ http.createServer(async (req, res) => {
       }
 
       const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
-      for (const b of builds) if (!cabOf[b.line_id]) cabOf[b.line_id] = b;
+      const deckOf = {}; // first UPCOMING cab per line = "on deck" (C19 single-owner)
+      for (const b of builds) {
+        if (b.state === "active" && !cabOf[b.line_id]) cabOf[b.line_id] = b;
+        if (b.state === "upcoming" && !deckOf[b.line_id]) deckOf[b.line_id] = b;
+      }
       const ids = Object.values(cabOf).map((b) => b.id);
       const tasks = ids.length
         ? await db(`task?select=build_id,state,man_hours&build_id=in.(${ids.join(",")})`) : [];
@@ -696,7 +705,8 @@ http.createServer(async (req, res) => {
 
       return json(200, { lines: lines.map((l) => {
         const b = cabOf[l.id];
-        if (!b) return { id: l.id, name: l.name, techs: onLine[l.id] || [], cab: null };
+        const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "" } : null;
+        if (!b) return { id: l.id, name: l.name, techs: onLine[l.id] || [], cab: null, ondeck: deck };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
         // Clip this line's coverage to the cab's life (Q103-2).
@@ -722,10 +732,14 @@ http.createServer(async (req, res) => {
           : behind <= -1 ? `${(-behind).toFixed(1)} hrs ahead` : "On pace";
         const totalDays = daysOfTmpl[tmplOf[b.part_number]] || 0;
         const day = Math.min(Math.max(1, Math.ceil(wallHrs / 8 || 1)), totalDays || 99);
-        return { id: l.id, name: l.name, techs: onLine[l.id] || [],
+        return { id: l.id, name: l.name, techs: onLine[l.id] || [], ondeck: deck,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "",
             done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
             pct: a.total ? Math.round(100 * a.done / a.total) : 0,
+            // Promised date is FIXED at start (Q103-6); remaining standard
+            // man-hours is the honest v1 "how much is left" figure.
+            promised: b.promised_finish || null,
+            remaining_mh: (a.total - a.done).toFixed(1),
             color, status, day, total_days: totalDays } };
       }) });
     }
@@ -800,4 +814,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v6 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v7 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
