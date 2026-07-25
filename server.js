@@ -327,6 +327,18 @@ const cabPage = (emp, build, tasks, lineName) => {
         <span class="no">${t.display_no}</span> ${t.name}
         <span class="tag">${t.is_background ? "background" : t.state === "complete" ? "done — tap to undo" : t.state === "in_progress" ? "IN PROGRESS — tap when done" : "tap to start"}</span>
       </button>`).join("")}`).join("")}
+  ${tasks.every((t) => t.is_background || t.state === "complete") ? `
+  <!-- FINISH GATE (file 11, builder half): every step done -> final note ->
+       cab goes AWAITING INSPECTION for the manager. Photos join when
+       storage plumbing lands (noted in BUILD_LOG). -->
+  <div class="cabbar" style="border-color:#30d158;margin-top:18px">
+    <b>Every step is checked off.</b><br>
+    <textarea id="fnote" placeholder="Final note for this cab (what the next set of eyes should know)"
+      style="width:100%;min-height:80px;margin-top:10px;background:#111;color:#fff;
+             border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit"></textarea>
+    <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px"
+      onclick="finishCab('${build.id}',this)">Finished — send for inspection</button>
+  </div>` : ""}
   <div class="msg err" id="err"></div>
   <p style="text-align:center;margin:22px 0">
     <button class="back" id="clockout">Clock out</button> ·
@@ -351,6 +363,18 @@ const cabPage = (emp, build, tasks, lineName) => {
     }
     if (e.target.id === "clockout") location.href = "/home?clockout=1";
   });
+  // Finish gate submit (file 11 builder half).
+  async function finishCab(id, btn) {
+    btn.disabled = true; btn.textContent = "Sending…";
+    const r = await fetch("/api/build/finish", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ build_id: id, note: document.getElementById("fnote").value,
+        claimed_at: new Date().toISOString() }) });
+    const out = await r.json();
+    if (out.ok) return location.reload();
+    document.getElementById("err").textContent = out.error || "Something went wrong";
+    btn.disabled = false; btn.textContent = "Finished — send for inspection";
+  }
 </script></body></html>`;
 };
 
@@ -461,6 +485,12 @@ const managerPage = (rows) => `<!doctype html>
   ${rows.map((r) => `
     <div class="lane">
       <h3>${r.line.name}</h3>
+      ${(r.awaiting || []).map((w) => `
+        <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
+          <b>ORDER ${w.order_number}</b> · AWAITING INSPECTION
+          ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
+          <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
+        </div>`).join("")}
       ${r.active ? `
         <div><b>ORDER ${r.active.order_number}</b> · ${r.active.part_number} · active</div>
         <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
@@ -658,7 +688,7 @@ http.createServer(async (req, res) => {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.asc&limit=2000`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at&state=in.(active,upcoming)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at&state=in.(active,upcoming,awaiting_inspection)&order=created_at`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
@@ -689,8 +719,10 @@ http.createServer(async (req, res) => {
 
       const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
       const deckOf = {}; // first UPCOMING cab per line = "on deck" (C19 single-owner)
+      const waitOf = {}; // awaiting-inspection cab (shows if the line has no active cab)
       for (const b of builds) {
         if (b.state === "active" && !cabOf[b.line_id]) cabOf[b.line_id] = b;
+        if (b.state === "awaiting_inspection" && !waitOf[b.line_id]) waitOf[b.line_id] = b;
         if (b.state === "upcoming" && !deckOf[b.line_id]) deckOf[b.line_id] = b;
       }
       const ids = Object.values(cabOf).map((b) => b.id);
@@ -706,6 +738,15 @@ http.createServer(async (req, res) => {
       return json(200, { lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "" } : null;
+        // No active cab but one waiting on Mike? The board says so plainly.
+        if (!b && waitOf[l.id]) {
+          const w = waitOf[l.id];
+          return { id: l.id, name: l.name, techs: onLine[l.id] || [], ondeck: deck,
+            cab: { order: w.order_number, family: familyOf[w.part_number] || "",
+              done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
+              remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
+              day: 0, total_days: 0 } };
+        }
         if (!b) return { id: l.id, name: l.name, techs: onLine[l.id] || [], cab: null, ondeck: deck };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
@@ -752,15 +793,37 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,state,started_at,created_at&state=in.(active,upcoming)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,started_at,created_at&state=in.(active,upcoming,awaiting_inspection)&order=created_at`);
       const rows = lines.map((l) => ({ line: l,
         active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
+        awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
       return send(200, "text/html; charset=utf-8", managerPage(rows));
     }
 
-    // SIGN-OFF: manager completes the active cab (file 11 gate, manager half —
-    // final-note/photo requirements arrive with the tech-side finish flow).
+    // TECH FINISH (file 11, builder half): every non-background step complete
+    // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
+    // (Q104); the paused clock there is management's bottleneck (Q53/C11).
+    if (url.pathname === "/api/build/finish" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in")
+        return json(403, { ok: false, error: "Clock in first" });
+      const { build_id, note, claimed_at } = await body(req);
+      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "active") return json(400, { ok: false, error: "Cab is not active" });
+      const open = await db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete&limit=1`);
+      if (open.length) return json(400, { ok: false, error: "There are still open steps on this cab" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH",
+        body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
+      logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", at: claimed_at });
+      return json(200, { ok: true });
+    }
+
+    // SIGN-OFF: manager completes the cab (file 11 gate, manager half).
+    // Normal path = from AWAITING INSPECTION; direct from active allowed too
+    // (manager judgment call — both are logged with the state they came from).
     if (url.pathname === "/api/build/complete" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -769,9 +832,10 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, claimed_at } = await body(req);
       const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
-      if (!b || b.state !== "active") return json(400, { ok: false, error: "Cab is not active" });
+      if (!b || (b.state !== "active" && b.state !== "awaiting_inspection"))
+        return json(400, { ok: false, error: "Cab is not active or awaiting inspection" });
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
-      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, signed_off_at: claimed_at });
+      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at });
       return json(200, { ok: true });
     }
 
@@ -814,4 +878,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v7 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v8 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
