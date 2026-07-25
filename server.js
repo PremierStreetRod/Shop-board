@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (Stage 1, v4: sign-in + clock + cab task screen + TV board)
+// SHOP BOARD — server.js (v5: Stage-1 screens + Stage-2 time engine v1 — pace colors live)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -384,11 +384,18 @@ const boardPage = `<!doctype html>
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
 <style>
   .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px;padding:10px}
-  .tile{background:#1c1c1e;border:1px solid #2c2c2e;border-radius:18px;padding:26px;min-height:170px}
+  .tile{background:#1c1c1e;border:1px solid #2c2c2e;border-radius:18px;padding:26px;min-height:170px;
+        border-left-width:8px}
   .tile h3{margin:0 0 6px;font-size:1.5rem}
   .idle{opacity:.45}
   .techs{font-size:1.15rem;opacity:.85;margin-top:10px}
   .stamp{position:fixed;bottom:12px;right:18px;opacity:.35;font-size:.85rem}
+  /* Green = on track · amber = running behind · red = needs help (the whole point) */
+  .c-green{border-left-color:#30d158}.c-amber{border-left-color:#ffd60a}
+  .c-red{border-left-color:#C8102E}.c-none{border-left-color:#3a3a3c}
+  .status{font-weight:700;margin-top:6px}
+  .s-green{color:#30d158}.s-amber{color:#ffd60a}.s-red{color:#ff453a}.s-none{color:#8e8e93}
+  .day{float:right;font-size:1.1rem;opacity:.8;font-weight:700}
 </style></head>
 <body>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
@@ -399,12 +406,15 @@ const boardPage = `<!doctype html>
   async function refresh(){
     try{
       const r = await fetch("/api/board-state"); const s = await r.json();
+      const bar = { green:"#30d158", amber:"#ffd60a", red:"#C8102E", none:"#5a5a5e" };
       document.getElementById("board").innerHTML = s.lines.map(l => \`
-        <div class="tile \${l.cab || l.techs.length ? "" : "idle"}">
+        <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}">
+          \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.name}</h3>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${l.cab.order} <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
+            <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
-            <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:#C8102E;height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>\`
+            <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>\`
           : \`<div>Idle line</div>\`}
           <div class="techs">\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : ""}</div>
         </div>\`).join("");
@@ -577,24 +587,53 @@ http.createServer(async (req, res) => {
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
 
-    // Board data: active cab + progress per line, plus who's clocked on.
-    // Progress = completed standard man-hours / total (in-progress partial
-    // credit joins with the Stage-2 time engine).
+    // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
+    // Board data: active cab + PACE COLOR per line, from first principles:
+    //   COVERAGE (Q103-2): the cab's pace clock only runs while somebody is
+    //     clocked onto its line. We rebuild coverage intervals from the raw
+    //     clock_event history (a clock_in opens an interval on its line; the
+    //     tech's next clock_out of any kind closes it).
+    //   EARNED (Q103-4 v1): completed tasks earn their standard man-hours.
+    //     (In-progress partial credit — time-worked-capped — joins when
+    //     per-task time attribution lands; noted simplification.)
+    //   COLOR (Q6 defaults, crew-agnostic by construction Q104):
+    //     behind = coverage man-hours − earned man-hours
+    //     green < 1 · amber 1–4 · red > 4 (½ day). Ahead is just green.
+    //   DAY COUNTER (Q57): clock-driven — ceil(covered WALL hours ÷ 8);
+    //     day boundaries float per cab, a mid-day start wastes nothing.
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=500`);
+      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.asc&limit=2000`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,started_at&state=eq.active&order=started_at`);
-      const prods = await db(`product?select=part_number,family`);
+      const prods = await db(`product?select=part_number,family,template_id`);
+      const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
+      const daysOfTmpl = Object.fromEntries(tmpls.map((t) => [t.id, t.total_days]));
+      const tmplOf = Object.fromEntries(prods.map((p) => [p.part_number, p.template_id]));
       const nameOf = Object.fromEntries(emps.map((e) => [e.id, e.first_name]));
-      const seen = new Set(); const onLine = {}; // employee's LATEST event wins
+
+      // Rebuild coverage intervals per line from the event stream.
+      const open = {};                 // employee_id -> {line, start}
+      const intervals = {};            // line_id -> [{s, e}]
+      const lastKind = {};             // employee_id -> last event (for on-clock names)
+      const now = Date.now();
       for (const ev of events) {
-        if (seen.has(ev.employee_id)) continue;
-        seen.add(ev.employee_id);
-        if (ev.kind === "clock_in" && nameOf[ev.employee_id])
-          (onLine[ev.line_id] = onLine[ev.line_id] || []).push(nameOf[ev.employee_id]);
+        const t = new Date(ev.claimed_at).getTime();
+        if (ev.kind === "clock_in") open[ev.employee_id] = { line: ev.line_id, start: t };
+        else if (open[ev.employee_id]) {
+          const o = open[ev.employee_id];
+          (intervals[o.line] = intervals[o.line] || []).push({ s: o.start, e: t });
+          delete open[ev.employee_id];
+        }
+        lastKind[ev.employee_id] = ev;
       }
+      const onLine = {};
+      for (const [empId, o] of Object.entries(open)) {   // still on the clock now
+        (intervals[o.line] = intervals[o.line] || []).push({ s: o.start, e: now });
+        if (nameOf[empId]) (onLine[o.line] = onLine[o.line] || []).push(nameOf[empId]);
+      }
+
       const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
       for (const b of builds) if (!cabOf[b.line_id]) cabOf[b.line_id] = b;
       const ids = Object.values(cabOf).map((b) => b.id);
@@ -606,12 +645,40 @@ http.createServer(async (req, res) => {
         a.total += Number(t.man_hours);
         if (t.state === "complete") a.done += Number(t.man_hours);
       }
+
       return json(200, { lines: lines.map((l) => {
-        const b = cabOf[l.id]; const a = b ? agg[b.id] || { done: 0, total: 0 } : null;
+        const b = cabOf[l.id];
+        if (!b) return { id: l.id, name: l.name, techs: onLine[l.id] || [], cab: null };
+        const a = agg[b.id] || { done: 0, total: 0 };
+        const startMs = new Date(b.started_at).getTime();
+        // Clip this line's coverage to the cab's life (Q103-2).
+        const clipped = (intervals[l.id] || [])
+          .map((iv) => ({ s: Math.max(iv.s, startMs), e: Math.min(iv.e, now) }))
+          .filter((iv) => iv.e > iv.s);
+        const manHrs = clipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
+        // Union for WALL covered hours (the Q57 day counter).
+        const sorted = [...clipped].sort((x, y) => x.s - y.s);
+        let wallMs = 0, curS = null, curE = null;
+        for (const iv of sorted) {
+          if (curE === null || iv.s > curE) { if (curE !== null) wallMs += curE - curS; curS = iv.s; curE = iv.e; }
+          else curE = Math.max(curE, iv.e);
+        }
+        if (curE !== null) wallMs += curE - curS;
+        const wallHrs = wallMs / 3600000;
+        const behind = manHrs - a.done;
+        const color = manHrs === 0 ? "none" : behind > 4 ? "red" : behind >= 1 ? "amber" : "green";
+        // File 17 voice: blame the cab, never the person.
+        const status = manHrs === 0 ? "Waiting for first clock-in"
+          : behind > 4 ? `Needs help — ${behind.toFixed(1)} hrs behind`
+          : behind >= 1 ? `Running behind — ${behind.toFixed(1)} hrs`
+          : behind <= -1 ? `${(-behind).toFixed(1)} hrs ahead` : "On pace";
+        const totalDays = daysOfTmpl[tmplOf[b.part_number]] || 0;
+        const day = Math.min(Math.max(1, Math.ceil(wallHrs / 8 || 1)), totalDays || 99);
         return { id: l.id, name: l.name, techs: onLine[l.id] || [],
-          cab: b ? { order: b.order_number, family: familyOf[b.part_number] || "",
+          cab: { order: b.order_number, family: familyOf[b.part_number] || "",
             done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
-            pct: a.total ? Math.round(100 * a.done / a.total) : 0 } : null };
+            pct: a.total ? Math.round(100 * a.done / a.total) : 0,
+            color, status, day, total_days: totalDays } };
       }) });
     }
 
@@ -628,4 +695,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v4 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v5 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
