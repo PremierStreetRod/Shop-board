@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (Stage 1, v3: sign-in + clock-in/out + TV board skeleton)
+// SHOP BOARD — server.js (Stage 1, v4: sign-in + clock + cab task screen + TV board)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -160,7 +160,7 @@ const loginPage = (employees) => `<!doctype html>
         <button class="name" data-id="${e.id}" data-haspin="${e.has_pin}"
                 data-name="${e.first_name}">
           ${e.first_name} ${e.last_name}
-          <small>${e.role === "production" ? "Production" : e.role === "manager" ? "Manager" : "Admin"}</small>
+          <small>${e.dept_label}</small>
         </button>`).join("")}
     </div>
   </div>
@@ -282,6 +282,99 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
   });
 </script></body></html>`;
 
+// THE CAB TASK SCREEN — shown to a clocked-in Production tech/manager.
+// One cab front-center (Q90: ORDER # + LINE is the identity), Mike's
+// numbered steps grouped by day, two-step check-off (Q45): tap to start,
+// tap again to complete; tap a completed task to undo (Q90 instant+undo).
+// ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
+const cabPage = (emp, build, tasks, lineName) => {
+  const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
+  const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
+  const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
+<style>
+  .task{display:flex;align-items:center;gap:14px;width:100%;text-align:left;
+        background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:14px 16px;color:#fff;font-size:1.05rem;cursor:pointer;margin-bottom:10px}
+  .task .no{opacity:.5;min-width:2.2em}
+  .task.done{opacity:.45;text-decoration:line-through}
+  .task.doing{border-color:var(--red)}
+  .task .tag{margin-left:auto;font-size:.8rem;opacity:.8}
+  .task.doing .tag{color:var(--red);opacity:1}
+  .dayhead{margin:22px 0 10px;font-weight:700;opacity:.85}
+  .cabbar{background:var(--card);border:1px solid var(--line);border-radius:14px;
+          padding:16px;margin-bottom:8px}
+  .cabbar b{font-size:1.2rem}
+  .note{background:#3a2a00;border:1px solid #7a5900;border-radius:10px;padding:10px 14px;
+        margin:10px 0;font-size:.95rem}
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="cabbar">
+    <b>ORDER ${build.order_number}</b> · ${lineName}<br>
+    <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
+    <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
+  </div>
+  ${build.note_flagged && build.invoice_note ? `<div class="note">⚠ ORDER NOTE: ${build.invoice_note}</div>` : ""}
+  ${days.map((d) => `
+    <div class="dayhead">DAY ${d}</div>
+    ${tasks.filter((t) => t.day_no === d).map((t) => `
+      <button class="task ${t.state === "complete" ? "done" : t.state === "in_progress" ? "doing" : ""}"
+              data-id="${t.id}" data-state="${t.state}">
+        <span class="no">${t.display_no}</span> ${t.name}
+        <span class="tag">${t.is_background ? "background" : t.state === "complete" ? "done — tap to undo" : t.state === "in_progress" ? "IN PROGRESS — tap when done" : "tap to start"}</span>
+      </button>`).join("")}`).join("")}
+  <div class="msg err" id="err"></div>
+  <p style="text-align:center;margin:22px 0">
+    <button class="back" id="clockout">Clock out</button> ·
+    <a href="/board" style="color:#8e8e93">TV board</a> ·
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+</div>
+<script>
+  // Two-step check-off (Q45): not_started -> in_progress -> complete.
+  // Tapping a completed task backs it up one step (undo, Q90).
+  const next = { not_started: "in_progress", in_progress: "complete", complete: "in_progress" };
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest(".task");
+    if (b) {
+      const r = await fetch("/api/task/state", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: b.dataset.id, to: next[b.dataset.state],
+          claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) location.reload();
+      else document.getElementById("err").textContent = out.error || "Something went wrong";
+    }
+    if (e.target.id === "clockout") location.href = "/home?clockout=1";
+  });
+</script></body></html>`;
+};
+
+// THE WATCHER HOME — owners + not-yet-live departments (Q95 amendment
+// 2026-07-25: everyone's on the grid; functionality follows later).
+const watcherPage = (emp) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>Welcome, ${emp.first_name}.</h2>
+  <p style="text-align:center;opacity:.75">
+    The production board is live and building.<br>
+    ${emp.department === "Owner" || emp.department === "Admin"
+      ? "Watch the floor in real time below."
+      : `The ${emp.department} board is coming in a later phase — your login is ready for it.`}
+  </p>
+  <p style="text-align:center;margin-top:26px">
+    <a href="/board" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
+  </p>
+  <p style="text-align:center"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div></body></html>`;
+
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
 // and pace arrive with the time engine (Stage 2). Refreshes itself every 30 s.
@@ -307,10 +400,13 @@ const boardPage = `<!doctype html>
     try{
       const r = await fetch("/api/board-state"); const s = await r.json();
       document.getElementById("board").innerHTML = s.lines.map(l => \`
-        <div class="tile \${l.techs.length ? "" : "idle"}">
+        <div class="tile \${l.cab || l.techs.length ? "" : "idle"}">
           <h3>\${l.name}</h3>
-          <div>\${l.techs.length ? "Working now" : "Idle line"}</div>
-          <div class="techs">\${l.techs.join(" · ")}</div>
+          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${l.cab.order} <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
+            <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
+            <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:#C8102E;height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>\`
+          : \`<div>Idle line</div>\`}
+          <div class="techs">\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : ""}</div>
         </div>\`).join("");
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
     }catch(e){ /* board never crashes; next poll retries */ }
@@ -351,9 +447,14 @@ http.createServer(async (req, res) => {
          <p style="font-family:sans-serif">SUPABASE_URL / SUPABASE_SERVICE_KEY are not set on Railway.</p>`);
 
     // SIGN-IN SCREEN — name grid built from ACTIVE employees only (Q70).
+    // Q95 AMENDED 2026-07-25: EVERYONE is on the grid — owners, warehouse,
+    // body, build, accounting. The subtitle shows their department; what
+    // they can DO after sign-in is gated at /home, not hidden here.
     if (url.pathname === "/login") {
-      const emps = await db("employee?select=id,first_name,last_name,role,pin_hash&active=is.true&order=first_name");
-      const view = emps.map((e) => ({ ...e, has_pin: Boolean(e.pin_hash) }));
+      const emps = await db("employee?select=id,first_name,last_name,role,department,pin_hash&active=is.true&order=first_name");
+      const view = emps.map((e) => ({ ...e, has_pin: Boolean(e.pin_hash),
+        dept_label: e.department || (e.role === "manager" ? "Manager" : e.role === "admin" ? "Admin" : "Production"),
+      })).map((e) => ({ ...e, dept_label: e.role === "manager" ? "Manager" : e.dept_label }));
       return send(200, "text/html; charset=utf-8", loginPage(view));
     }
 
@@ -389,23 +490,61 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
-    // HOME — clock in / clock out (real cab task screen = Stage 3).
+    // HOME — three shapes, gated by DEPARTMENT (Q94: role=can-do, dept=where):
+    //  Production dept  -> clock in/out; while ON the clock -> the cab task screen.
+    //  Everyone else    -> watcher home (owners watch the board; future
+    //                      departments see "your board is coming" — Q95 amendment).
     if (url.pathname === "/home") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=first_name,lines&id=eq.${empId}`);
+      const [emp] = await db(`employee?select=first_name,lines,department&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      // Latest clock event tells us on/off the clock (the time engine proper
-      // arrives in Stage 2 — this is just current state).
+      if (emp.department !== "Production")
+        return send(200, "text/html; charset=utf-8", watcherPage(emp));
       const [last] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const usual = allLines.filter((l) => (emp.lines || []).includes(l.id));
-      const other = allLines.filter((l) => !(emp.lines || []).includes(l.id));
       const clockedIn = last && last.kind === "clock_in";
       const lineName = clockedIn ? (allLines.find((l) => l.id === last.line_id) || {}).name || "" : "";
       const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+      // ?clockout=1 = the task screen's Clock-out button — show the reason picker.
+      if (clockedIn && url.searchParams.get("clockout") !== "1") {
+        // ON THE CLOCK: front-center cab = the active build on YOUR line (Q90).
+        const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged&line_id=eq.${last.line_id}&state=eq.active&order=started_at&limit=1`);
+        if (build) {
+          const tasks = await db(`task?select=id,display_no,name,day_no,man_hours,is_background,state&build_id=eq.${build.id}&order=day_no,sort_order`);
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName));
+        }
+        // No active cab on this line -> fall through to the clock screen.
+      }
+      const usual = allLines.filter((l) => (emp.lines || []).includes(l.id));
+      const other = allLines.filter((l) => !(emp.lines || []).includes(l.id));
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName }, usual, other, reasons));
+    }
+
+    // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
+    // Rules enforced here: you must be signed in AND clocked on (Q104);
+    // only legal transitions; who-did-what recorded; everything event-logged.
+    if (url.pathname === "/api/task/state" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in")
+        return json(403, { ok: false, error: "Clock in first — task changes need you on the clock" });
+      const { task_id, to, claimed_at } = await body(req);
+      const [t] = await db(`task?select=id,state,build_id,display_no&id=eq.${task_id}`);
+      if (!t) return json(404, { ok: false, error: "Task not found" });
+      const legal = { not_started: ["in_progress"], in_progress: ["complete"], complete: ["in_progress"] };
+      if (!(legal[t.state] || []).includes(to))
+        return json(400, { ok: false, error: `Can't go ${t.state} → ${to}` });
+      const patch = { state: to };
+      if (to === "in_progress" && t.state === "not_started") { patch.started_by = empId; patch.started_at = claimed_at || new Date().toISOString(); }
+      if (to === "complete") { patch.completed_by = empId; patch.completed_at = claimed_at || new Date().toISOString(); }
+      if (to === "in_progress" && t.state === "complete") { patch.completed_by = null; patch.completed_at = null; }
+      await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      logEvent(t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
+        empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
+      return json(200, { ok: true });
     }
 
     // CLOCK IN (Q90 one-tap; Q52 Wi-Fi gate below). Payroll-grade rows (C3.8).
@@ -438,11 +577,16 @@ http.createServer(async (req, res) => {
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
 
-    // Board data: who is clocked on each line RIGHT NOW (latest event per person).
+    // Board data: active cab + progress per line, plus who's clocked on.
+    // Progress = completed standard man-hours / total (in-progress partial
+    // credit joins with the Stage-2 time engine).
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=500`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at&state=eq.active&order=started_at`);
+      const prods = await db(`product?select=part_number,family`);
+      const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
       const nameOf = Object.fromEntries(emps.map((e) => [e.id, e.first_name]));
       const seen = new Set(); const onLine = {}; // employee's LATEST event wins
       for (const ev of events) {
@@ -451,7 +595,24 @@ http.createServer(async (req, res) => {
         if (ev.kind === "clock_in" && nameOf[ev.employee_id])
           (onLine[ev.line_id] = onLine[ev.line_id] || []).push(nameOf[ev.employee_id]);
       }
-      return json(200, { lines: lines.map((l) => ({ id: l.id, name: l.name, techs: onLine[l.id] || [] })) });
+      const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
+      for (const b of builds) if (!cabOf[b.line_id]) cabOf[b.line_id] = b;
+      const ids = Object.values(cabOf).map((b) => b.id);
+      const tasks = ids.length
+        ? await db(`task?select=build_id,state,man_hours&build_id=in.(${ids.join(",")})`) : [];
+      const agg = {};
+      for (const t of tasks) {
+        const a = (agg[t.build_id] = agg[t.build_id] || { done: 0, total: 0 });
+        a.total += Number(t.man_hours);
+        if (t.state === "complete") a.done += Number(t.man_hours);
+      }
+      return json(200, { lines: lines.map((l) => {
+        const b = cabOf[l.id]; const a = b ? agg[b.id] || { done: 0, total: 0 } : null;
+        return { id: l.id, name: l.name, techs: onLine[l.id] || [],
+          cab: b ? { order: b.order_number, family: familyOf[b.part_number] || "",
+            done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
+            pct: a.total ? Math.round(100 * a.done / a.total) : 0 } : null };
+      }) });
     }
 
     if (url.pathname === "/logout") {
@@ -467,4 +628,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v3 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v4 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
