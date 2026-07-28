@@ -1,6 +1,18 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 11: rework flow (the inspection gate's second outcome)
+
+- server.js v11 + migration 0005: cockpit gains "Send back — rework" on awaiting-inspection cabs — Q77 reason list (rework_reason: Weld quality / Panel fit / Missed step / Surface damage / Other) + note + TIME FRAME in hours. awaiting_inspection -> rework (manager-only, file 18); reason/note/hours/assigned_at stamped on the build; an R-numbered fix task (day_no 0, source 'rework', 0 standard hours — Q85 own bucket, pace/earned untouched) lands at the top of the tech's cab screen with an orange sent-back banner.
+- Board: rework tile = dashed orange border + REWORK badge + its own green/amber/red countdown vs the time frame (green <75% used, amber approaching, red over) — file 11 visuals, file 17 voice.
+- Resubmit path: all fixes checked -> finish gate returns as "Fixes done — send back for re-inspection" -> back to awaiting_inspection. Rework can NEVER jump straight to production_complete — enforced in /api/build/complete's accepted-states list, not just the UI.
+- Full loop E2E live (fresh TEST-23706, started via cockpit w/ Q97 freeze): finish -> sent back (Panel fit / gaps, 2 hrs, door-gap note) -> cockpit IN REWORK box + board badge/countdown + tech banner/R1 verified -> R1 two-tap -> resubmit -> awaiting -> sign-off -> production_complete. Event trail read back in one query: build.finish(active) -> build.rework_assigned -> build.finish(rework) -> build.production_complete.
+- Block-10 carry-overs closed at block open: ZZ TEST STEP hard-deleted; all admin events verified (employee.updated x3, step add/move/retire x1 each, toggle.flipped x2).
+- Pick-list tidy: 0002 had Q85 RETURN reasons inside rework_reason — Body Shop kickback + Customer return re-keyed to fixjob_reason (parked for the returned-cab flow), redundant 'Failed inspection' retired.
+- File 11's "admin is notified of rework add-ons": event logged now; the actual send ships with the Q106-sandboxed notification layer.
+- Test account retired via the admin console; login grid verified at 17 real names.
+- Next: Coyote intake mapping job (developer's posts expected within days) · finish-gate photos (Storage) · Realtime board push · Q83 day start/end switch.
+
 ## 2026-07-28 — build block 10: admin console v1 (people · step editor · feature switches)
 
 - server.js v10: /admin, admin role only. PEOPLE: dept/role/usual-lines editing, deactivate/reactivate (Q70), C18 PIN reset (clears pin_hash → Q68 choose-your-PIN re-onboard). BUILD STEPS: the Q97 editor — rename/renumber/hours/day/reorder (sort_order swap)/retire-not-delete/add, per family; template edits shape FUTURE cabs only (started cabs keep their frozen copies). FEATURES: Q65 toggles with plain-language labels, flips stamped changed_by/changed_at + event-logged.
