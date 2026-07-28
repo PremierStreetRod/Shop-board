@@ -1,6 +1,13 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — block 12 patch (v13): HEIC photos handled
+
+- Owner-rep catch: iPhones shoot HEIC; desktop browsers can't show it — a raw HEIC would have made broken cockpit thumbnails.
+- server.js v13: every photo normalized to JPEG ON THE PHONE before upload (canvas re-encode — the phone that took the HEIC can decode it), long edge capped at 2000 px (~7x smaller in test), rotation corrected from orientation data.
+- Server backstop: a raw HEIC that still arrives gets a plain-English 415 instead of a stored-but-unviewable photo.
+- Verified live: HEIC POST -> 415 with the friendly message; 3000-px PNG -> 2000-px JPEG (91 KB -> 12.5 KB). Test account retired after.
+
 ## 2026-07-28 — build block 12: completion photos (the file-11 gate is whole)
 
 - server.js v12 + migration 0006: PRIVATE cab-photos Storage bucket (app-only access — photos served exclusively through an authenticated route; spec §10 held) + build_photo metadata table (kind finish/task/rework for later).
