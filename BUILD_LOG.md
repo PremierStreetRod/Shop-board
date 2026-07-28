@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — housekeeping (Sonnet, block-14 resume verify pass — no new build block)
+
+- Q99 resume protocol run cold-start: pulled BUILD_LOG + last commits, re-checked live app/DB against the log -- zero drift found (server.js v14 live on Railway matching the block-14 commit; migrations 0001-0007 all present; 17 active employees with the test account correctly retired; TEST-23704 still sitting in awaiting_inspection exactly as block 12 left it; coyote_intake has only our 2 test rows -- nothing real from the developer yet).
+- Mike's read-back worksheet (Cab_Build_Steps_ReadBack.pdf) has NOT come back yet -- no step-editor work this session.
+- Model check: this session ran on Sonnet, not Fable 5 (00_START_HERE directive) -- stayed on the green list only. Two docs/comment-only fixes, no logic or schema touched:
+  1. docs/EVENT_TAXONOMY.md had drifted since Stage 1 (still listed aspirational GO-day event names like task.completed, coyote.received, toggle.changed). Grepped every logEvent() call in server.js + queried distinct event_type in the live event_log table -> reconciled to 23 real names (20 have fired at least once; task.undo is wired but unfired live). Rewrote the doc as LIVE vs PLANNED.
+  2. server.js's header comment still said "v5" -- corrected to v14 with an accurate one-line summary; verified via a CM6 doc-length diff that only that one line changed.
+- Both commits auto-deployed clean (Railway showed the server.js commit ACTIVE + "Deployment successful"; /health returned ok:true/db:true throughout, before and after).
+- Next real work still needs either: Mike's read-back (whenever it lands -- green-list safe) or the stronger model for the Coyote mapping job / Realtime / Q83 day switch / notification layer / reporting v1.
+
 ## 2026-07-28 — build block 14: per-task notes & photos (file 11 fully implemented)
 
 - server.js v14 + migration 0007: task_note table; task photos reuse build_photo (task_id, kind 'task').
