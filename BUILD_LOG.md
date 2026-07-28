@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 15 (Fable): navigation restructure — the Sonnet escalation, closed
+
+- server.js v15 closes all three escalated issues: C16 — Manager cockpit top nav with "Admin console" (admin-role only) + TV board + Sign out; C17 — Admin console sticky top tab bar (People · Build steps · Features + Manager/TV/Sign-out cross-links), visible while scrolling, built to grow toward file 21's nine sections; C18 — cab-switch links carry #steps so the ?tpl= reload lands ON the Build steps section (live-verified: scroll lands on-section, not at 0). Same top placement on both consoles per 22.4.
+- Rider (risk sweep): the TV board fully reloads itself every 6 hours — long-running browser-tab hygiene.
+- E2E as admin on the live domain: Manager top links render, sticky bar anchors work, cab switch verified at scrollY 1211 on-section. Test account retired via console after.
+- CORRECTION to the earlier read of the Sonnet session: its file-09 notes WERE on disk — this Fable session's staged copy arrived stale, was misread as "never written," and Fable's edit overwrote Sonnet's version (caught same session by byte-count comparison; substance preserved via Sonnet's BUILD_LOG detail; C16–C18 reconstructed in file 09, incident logged as C19). New playbook guard: compare staged size vs the stage report before editing any recently-touched file.
+- Model lanes verdict after their first full cycle: Sonnet found + escalated correctly, Fable fixed; the one failure was in cross-session file handling, now guarded.
+- Next: engine hardening package (2,000-event window + forgotten-clock-out tools — Fable) · Coyote mapping job (still no developer posts) · Realtime · reporting v1.
+
 ## 2026-07-28 — UX debug pass: navigation issues found + escalated to Fable (Sonnet, no code changed)
 
 - Daniel reported live navigation problems using Shop Board from his iPad as an admin-role user; asked me to reproduce and write up a to-do for Fable.
