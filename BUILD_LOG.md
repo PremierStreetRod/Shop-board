@@ -1,6 +1,20 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 17 (Fable)
+
+**Wi-Fi retry layer on the floor screens — server.js v17.** The shop floor runs on Wi-Fi, and a dropped packet must never eat a tech's tap (pre-cutover requirement from the foresight sweep). Shipped:
+
+- **sbPost(url, payload)** — shared fetch wrapper injected into the home screen and cab screen (one `netJs` template, one copy of the logic). On a network error or a 5xx it retries with backoff (1s / 2s / 4s / 8s), showing "Wi-Fi hiccup — retrying (n of 4)…" so the tech knows the board heard them. A 4xx (a real answer from the server, like "already claimed") returns immediately — no pointless retries. After 4 failed tries: "Can't reach the board — check Wi-Fi and tap again (nothing was lost)."
+- **sbUpload** — same idea for photo uploads (3 tries), wired into the finish-cab photo flow and per-task attachments.
+- **Keystone (Q103-1): `claimed_at` is stamped ONCE at the moment of the tap**, client-side, and carried through every retry — so even if the network flaps for 15 seconds, the recorded time is the true tap time, not the retry time. Task taps disable the button while a send is in flight (no double-fire).
+
+**Verified live, not on faith:** pointed sbPost at a dead host (`unreachable.invalid`) from the real cab screen — watched all four ordered retry statuses fire, then the final friendly failure with nothing lost; confirmed `/home` is serving `async function sbPost`. Hash-verified the deploy (101,150 units / 367550921) and node --check clean.
+
+**Deliberately NOT built:** a full offline queue (taps stored on-device and replayed later). That's a Stage-5 call per the C6 rules — the retry layer covers Wi-Fi hiccups; a true offline queue only earns its complexity if the pilot shows sustained outages. On the menu, not on the board.
+
+**Next-block menu (unchanged):** Coyote mapping job (waiting on his first real posts — intake still has only our 2 test rows) · Supabase Realtime · reporting v1 (file 12) · Q83 day start/end switch · EVENT_TAXONOMY.md update for clock.auto_out / clock.force_out (docs pass, green-list). Next-session verify items (Q99): E2E the manager force-clock-out button and the deactivation-close path through the UI.
+
 ## 2026-07-28 — build block 16: engine hardening (the risk-sweep package, proven live)
 
 - server.js v16 + migration 0008.
