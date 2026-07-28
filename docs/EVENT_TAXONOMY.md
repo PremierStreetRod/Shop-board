@@ -1,51 +1,56 @@
-# Event Taxonomy - the append-only log's vocabulary (Stage-1 artifact, spec s3/audit C21)
-  Every action writes exactly one of these. Reports derive ONLY from this log.
-  Format: event_type - payload keys - cites.
+# Event Taxonomy — the append-only log's vocabulary (Stage-1 artifact, spec §3/audit C21)
 
-    ## Clock & presence
-    - clock.in - {line_id, build_id, via} - Q103-1 claimed_at rules
-    - clock.out.lunch / clock.out.shift / clock.out.early - {reason} - Q42/Q88
-    - clock.auto_out - {at_time} - 4:00 auto-stop (Q82); note-missing flag if day-end note absent
-    - coverage.lost / coverage.restored - {build_id} - No-coverage pause (Q41; C12 lunch exemption)
+Every action writes exactly one of these. Reports derive ONLY from this log. Format: event_type — payload keys — cites.
 
-    ## Tasks
-    - task.started - {task_id} - two-step check-off (Q45)
-    - task.completed - {task_id, by} - any clocked-on tech (Q104); instant+undo (Q90)
-    - task.undo - {task_id, prior_state} - 5-second undo toast
-    - task.note / task.photo - {task_id, note|photo_ref} - file 11; photos phone-only
-    - task.adhoc_added - {source} - yellow-note manager pass (Q11)
+**RECONCILED 2026-07-28 (Sonnet, Q99 resume-protocol verify pass, block 14).** This doc had drifted since Stage 1 — it still listed the aspirational GO-day names (task.completed, coyote.received, toggle.changed, step.combined...) instead of what server.js v14 actually writes. Below, "LIVE" is grep-confirmed against every `logEvent(...)` call site in server.js AND cross-checked against distinct event_type rows in the live event_log table (20 of 23 have fired at least once as of this pass; task.undo is wired but nobody has tapped undo live yet). "PLANNED" is everything from the original Stage-1 list that isn't built yet — kept here so the roadmap isn't lost, not because it's real today. **Keep this file honest going forward (Q98): update it in the same commit whenever a new logEvent() call is added,** or it drifts again.
 
-    ## Build lifecycle (Q53 states; file 18 transitions)
-    - build.created - {from, order_number} - Q100 Queued trigger
-    - build.split - {parent, children[]} - auto-split (Q13)
-    - build.started - {} - server-stamped start; Terms s5 fact; promise fixed (Q103-6)
-    - build.state_changed - {from, to, reason}
-- build.day_advanced - {day_no} - clock-driven ceil(hrs/8) (Q57)
-  - build.color_changed - {from, to, behind_hours} - hysteresis before notify (C14/15)
-  - build.inspection_requested / build.signed_off - {by, self_signed, admin_signed} - Q86 tags
-  - build.rework_assigned / build.rework_completed - {tasks[], timeframe} - file 11
-  - build.fix_job_opened - {source} - Q85
-  - build.cancelled / build.converted_stock - {} - Terms s5 flow
+## LIVE in server.js v14 (confirmed 2026-07-28)
 
-  ## Coyote intake
-  - coyote.received - {order_number, status, raw_ref} - full snapshot (Q100)
-  - coyote.change_applied - {fields[], pre_start} - quiet update vs manager flag (Q13)
-  - coyote.needs_setup - {unknown_option} - Q15 queue
-  - coyote.needs_split - {order_number} - unsplit multi-cab guard
-  - coyote.sync_failing - {since} - 1-hr admin SMS (Q74)
+### Clock & presence
+- employee.login — {} or {first_login:true} — name-grid sign-in (Q90)
+- employee.logout — {} — clock-out / session end
+- pin.set — {} — first-login choose-your-PIN (Q68)
+- pin.fail — {} — wrong PIN attempt (feeds C17 lockout)
+- pin.reset — {employee_id} — manager/admin reset (C18)
+- clock.in — {line_id} — Q103-1
+- clock.out — {reason, kind} — Q42/Q88 reason-coded
 
-  ## People & admin
-  - employee.updated / employee.deactivated - {} - Q70
-  - pin.reset - {by, temp_issued} - C18
-  - pin.lockout - {employee_id} - per-person 5-try (C17)
-  - standard.edited - {step_id, old, new, affects_n} - Q6/Q97 preview; promise untouched (Q103-6)
-  - step.combined / step.retired / step.added - {} - Q97 (histories sum)
-  - toggle.changed - {key, enabled, by} - Q65
-  - timeoff.requested / timeoff.decided - {dates, decision} - Q92
-  - override.summary_item - {kind} - weekly manager-override digest to admins (Q84)
+### Tasks
+- task.start — {task_id, build_id, display_no, from, to} — 1st tap (Q45)
+- task.complete — {task_id, build_id, display_no, from, to} — 2nd tap
+- task.undo — {task_id, build_id, display_no, from, to} — 5-second undo toast (wired, unfired live as of 2026-07-28)
+- task.note_added — {task_id, build_id, display_no, note_id, at} — file 11
 
-  ## Notifications & system
-  - notify.sent - {event_key, channel, to} - file 16
-  - notify.acked - {via} - C13 definition
-  - day.started / day.ended - {by} - Q7; calendar-aware nudge if absent (Q91)
-  - watchdog.app_down / watchdog.heartbeat_lost - {} - external pinger (Q74)
+### Build lifecycle
+- build.start — {build_id, order_number} — cab pulled from queue (Q97 freeze)
+- build.finish — {build_id, order_number} — tech's final note → awaiting_inspection (file 11)
+- build.production_complete — {build_id, order_number} — manager/admin sign-off; from_state logged
+- build.rework_assigned — {build_id, order_number} — cockpit "send back" (Q77 reason + time frame)
+
+### Photos
+- photo.added — {build_id, task_id, photo_id, bytes} — finish-gate or per-task photo (kind: finish/task)
+
+### Coyote intake
+- coyote.order_received — {intake_id, order_number, parse_ok, bytes} — raw landing-zone insert (file 28 opt 1)
+
+### Admin console
+- employee.updated — {employee_id, changes} — roster edit (dept/role/lines/deactivate, Q70)
+- template.step_added — {step_id, template_id, name} — Q97 step editor
+- template.step_moved — {step_id, dir} — Q97 reorder
+- template.step_retired — {step_id} — Q97 retire-not-delete
+- template.step_updated — {step_id, changes} — Q97 rename/renumber/hours edit
+- toggle.flipped — {key, enabled} — Q65 feature switch
+
+## PLANNED — not yet built (Stage-1 spec names; will get real event_type strings when their features ship — do NOT assume these exist in the log today)
+- build.created / build.split — Q100 Queued trigger, auto-split (Q13) — ships with the Coyote mapping job
+- build.state_changed / build.day_advanced / build.color_changed — full state-machine + time-engine events (Q57, C14/15)
+- build.inspection_requested / build.fix_job_opened / build.cancelled / build.converted_stock — file 18 states not yet wired beyond finish/rework/complete
+- coyote.change_applied / coyote.needs_setup / coyote.needs_split / coyote.sync_failing — Coyote mapping job (waits on the developer's real posts + the stronger model per file 36)
+- coverage.lost / coverage.restored — No-coverage pause (Q41) — ships with the full time engine
+- pin.lockout — {employee_id} — per-person 5-try lockout (C17); currently pin.fail accumulates but no lockout event fires yet
+- standard.edited — Q6/Q97 standard-time change-impact preview
+- timeoff.requested / timeoff.decided — Q92
+- override.summary_item — weekly manager-override digest (Q84)
+- notify.sent / notify.acked — ships WITH the Q106-sandboxed notification layer (reserved-lane build)
+- day.started / day.ended — Q7 Start/End-the-day switch (Q83 day switch — reserved-lane build)
+- watchdog.app_down / watchdog.heartbeat_lost — Q74 external uptime watchdog
