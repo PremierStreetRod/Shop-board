@@ -1,6 +1,18 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 12: completion photos (the file-11 gate is whole)
+
+- server.js v12 + migration 0006: PRIVATE cab-photos Storage bucket (app-only access — photos served exclusively through an authenticated route; spec §10 held) + build_photo metadata table (kind finish/task/rework for later).
+- Tech side: the finish gate gains a phone-camera photo input (capture=environment, multiple). Photos upload one-by-one with progress, then the finish posts. Q86 soft gate: zero-photo finish warns once, second tap sends; the hard per-product minimum ships with product settings in the admin console.
+- Upload mechanics: raw image body (no multipart — zero-dependency rule), 8 MB cap, session + clocked-in required, photo.added event with byte count.
+- Manager side: awaiting-inspection box shows tap-to-open thumbnails beside the final note and both inspection buttons — note + photos inspected together per file 11.
+- E2E live on TEST-23704: two photos attached -> uploaded -> finish -> cockpit renders both thumbnails from the private bucket; rows + storage paths verified by query. LEFT AS A DEMO: TEST-23704 sits awaiting inspection with its photos — open /manager to see the complete gate.
+- Q52 bonus: /api/my-ip echoes the caller's public IP for the on-site egress check at cutover. Candidate SHOP_EGRESS_IP recorded: 38.252.117.231 (from the owner-rep's VPN endpoint; verify via /api/my-ip on shop Wi-Fi before setting).
+- Ops note: Railway's build farm had a transient rough patch — one docs-only deploy failed at 'build image' and the v12 build took ~9 min instead of ~90 s. The service stayed online on the prior deploy the whole time.
+- Test account clocked out + retired via the console; lockout verified (admin API 403, login grid at 17 real names).
+- Next: Coyote intake mapping job (his posts expected shortly) · Supabase Realtime · Q83 day start/end switch · per-task photos/notes.
+
 ## 2026-07-28 — build block 11: rework flow (the inspection gate's second outcome)
 
 - server.js v11 + migration 0005: cockpit gains "Send back — rework" on awaiting-inspection cabs — Q77 reason list (rework_reason: Weld quality / Panel fit / Missed step / Surface damage / Other) + note + TIME FRAME in hours. awaiting_inspection -> rework (manager-only, file 18); reason/note/hours/assigned_at stamped on the build; an R-numbered fix task (day_no 0, source 'rework', 0 standard hours — Q85 own bucket, pace/earned untouched) lands at the top of the tech's cab screen with an orange sent-back banner.
