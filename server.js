@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v16, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v17, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -163,6 +163,44 @@ function body(req) {
   });
 }
 
+// ---------- shared floor-network resilience (risk sweep 2026-07-28) ----------
+// A metal building full of welders is Wi-Fi's natural enemy. Every floor
+// tap posts through sbPost: network drops and 5xx retry automatically with
+// backoff (1s/2s/4s/8s) and a plain status line; rule answers (4xx) surface
+// immediately. claimed_at is stamped at the ORIGINAL tap and rides through
+// every retry (Q103-1), so a delayed landing still records the true time.
+const netJs = `
+  async function sbPost(url, payload, onStatus) {
+    const delays = [1000, 2000, 4000, 8000];
+    for (let i = 0; ; i++) {
+      try {
+        const r = await fetch(url, { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        if (r.status >= 500) throw new Error("server " + r.status);
+        return await r.json();
+      } catch (e) {
+        if (i >= delays.length)
+          return { ok: false, error: "Can't reach the board — check Wi-Fi and tap again (nothing was lost)" };
+        if (onStatus) onStatus("Wi-Fi hiccup — retrying (" + (i + 1) + " of " + delays.length + ")…");
+        await new Promise((res) => setTimeout(res, delays[i]));
+      }
+    }
+  }
+  async function sbUpload(url, blob, ctype, onStatus) {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": ctype }, body: blob });
+        if (r.status >= 500) throw new Error("server " + r.status);
+        return await r.json();
+      } catch (e) {
+        if (i === 2) return { ok: false, error: "Photo didn't make it — check Wi-Fi and try again" };
+        if (onStatus) onStatus("Wi-Fi hiccup — retrying the photo…");
+        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
+      }
+    }
+  }
+`;
+
 // ---------- shared look (file 24: dark, Premier monochrome + red) ----------
 const style = `<style>
   :root{--red:#C8102E;--bg:#111;--card:#1c1c1e;--line:#2c2c2e}
@@ -310,14 +348,15 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
-<script>
+<script>${netJs}
   // claimed_at rides with every tap (Q103-1: the REAL tap time governs;
-  // the server separately stamps received_at). Offline queueing = later stage.
+  // the server separately stamps received_at) — and it is stamped ONCE at
+  // the tap, so Wi-Fi retries still land the true time.
   async function act(url, payload){
-    const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...payload, claimed_at:new Date().toISOString()})});
-    const out = await r.json();
-    if(out.ok) location.reload(); else document.getElementById("err").textContent = out.error||"Something went wrong";
+    const err = document.getElementById("err");
+    const out = await sbPost(url, {...payload, claimed_at:new Date().toISOString()},
+      (m) => { err.textContent = m; });
+    if(out.ok) location.reload(); else err.textContent = out.error||"Something went wrong";
   }
   document.getElementById("in").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-line]"); if(b) act("/api/clock/in",{line_id:Number(b.dataset.line)});
@@ -428,20 +467,21 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
-<script>
+<script>${netJs}
   // Two-step check-off (Q45): not_started -> in_progress -> complete.
   // Tapping a completed task backs it up one step (undo, Q90).
   const next = { not_started: "in_progress", in_progress: "complete", complete: "in_progress" };
   document.addEventListener("click", async (e) => {
     const b = e.target.closest(".task");
-    if (b) {
-      const r = await fetch("/api/task/state", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task_id: b.dataset.id, to: next[b.dataset.state],
-          claimed_at: new Date().toISOString() }) });
-      const out = await r.json();
-      if (out.ok) location.reload();
-      else document.getElementById("err").textContent = out.error || "Something went wrong";
+    if (b && !b.disabled) {
+      b.disabled = true;   // no double-taps while a retry is in flight
+      const err = document.getElementById("err");
+      const out = await sbPost("/api/task/state",
+        { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString() },
+        (m) => { err.textContent = m; });
+      if (out.ok) return location.reload();
+      err.textContent = out.error || "Something went wrong";
+      b.disabled = false;
     }
     if (e.target.id === "clockout") location.href = "/home?clockout=1";
   });
@@ -469,21 +509,21 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
     btn.disabled = true; btn.textContent = "Saving…";
     try {
       const files = document.getElementById("ap-" + taskId).files;
+      const errEl = document.getElementById("err");
       for (let i = 0; i < files.length; i++) {
         const f = await toJpeg(files[i]);
-        const up = await fetch("/api/photo/upload?build_id=" + buildId + "&task_id=" + taskId, { method: "POST",
-          headers: { "Content-Type": f.type || "image/jpeg" }, body: f });
-        const uo = await up.json();
+        const uo = await sbUpload("/api/photo/upload?build_id=" + buildId + "&task_id=" + taskId,
+          f, f.type || "image/jpeg", (m) => { errEl.textContent = m; });
         if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
       }
       const note = document.getElementById("an-" + taskId).value.trim();
       if (note) {
-        const r = await fetch("/api/task/note", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ task_id: taskId, note, claimed_at: new Date().toISOString() }) });
-        const out = await r.json();
+        const out = await sbPost("/api/task/note",
+          { task_id: taskId, note, claimed_at: new Date().toISOString() },
+          (m) => { errEl.textContent = m; });
         if (!out.ok) throw new Error(out.error || "Note failed");
       }
+      errEl.textContent = "";
       if (!note && !files.length) throw new Error("Nothing to save — write a note or pick a photo");
       return location.reload();
     } catch (e) {
@@ -503,20 +543,19 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
     }
     btn.disabled = true; btn.textContent = "Sending…";
     try {
+      const upEl = document.getElementById("upmsg");
       for (let i = 0; i < files.length; i++) {
-        document.getElementById("upmsg").textContent = "Uploading photo " + (i + 1) + " of " + files.length + "…";
+        upEl.textContent = "Uploading photo " + (i + 1) + " of " + files.length + "…";
         const f = await toJpeg(files[i]);
-        const up = await fetch("/api/photo/upload?build_id=" + id, { method: "POST",
-          headers: { "Content-Type": f.type || "image/jpeg" }, body: f });
-        const uo = await up.json();
+        const uo = await sbUpload("/api/photo/upload?build_id=" + id,
+          f, f.type || "image/jpeg", (m) => { upEl.textContent = m; });
         if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
       }
-      document.getElementById("upmsg").textContent = "";
-      const r = await fetch("/api/build/finish", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ build_id: id, note: document.getElementById("fnote").value,
-          claimed_at: new Date().toISOString() }) });
-      const out = await r.json();
+      upEl.textContent = "";
+      const out = await sbPost("/api/build/finish",
+        { build_id: id, note: document.getElementById("fnote").value,
+          claimed_at: new Date().toISOString() },
+        (m) => { document.getElementById("err").textContent = m; });
       if (out.ok) return location.reload();
       throw new Error(out.error || "Something went wrong");
     } catch (e) {
@@ -1577,4 +1616,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v16 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v17 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
