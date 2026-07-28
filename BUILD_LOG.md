@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 14: per-task notes & photos (file 11 fully implemented)
+
+- server.js v14 + migration 0007: task_note table; task photos reuse build_photo (task_id, kind 'task').
+- Every step gets a "+ note / photo" line OUTSIDE the check-off button (documenting never moves task state) -> inline panel: existing notes (append-only, author recorded) + thumbnails + new-note box + phone-camera input (v13 JPEG normalizer applies). Attached steps read "2 attached — view / add".
+- Endpoints: /api/task/note (session + clocked-in Q104, build looked up server-side, task.note_added event) and /api/photo/upload extended with task_id.
+- E2E live on TEST-23701 (mid-build cab): note + photo saved through the page's own form -> count flipped, note rendered, thumbnail served from the private bucket. Rows + event verified by query; test account retired (17 grid names).
+- FILE 11 SCORECARD — all in production: two-step check-off · per-task notes/photos · finish gate (final note + completion photos) · manager inspection · reason-coded rework with time frame · re-inspection rule.
+- Next: Coyote intake mapping job (developer's posts expected within days) · Supabase Realtime · Q83 day start/end switch · reporting v1.
+
 ## 2026-07-28 — block 12 patch (v13): HEIC photos handled
 
 - Owner-rep catch: iPhones shoot HEIC; desktop browsers can't show it — a raw HEIC would have made broken cockpit thumbnails.
