@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 16: engine hardening (the risk-sweep package, proven live)
+
+- server.js v16 + migration 0008.
+- Event-window fix: board engine now windows clock events from the oldest live cab's start minus 24 h (cap 10,000) instead of a flat last-2,000 read — kills the silent pace-math corruption that would have surfaced ~a month after go-live. Board verified on the new window.
+- Forgotten-clock-out sweeper (Q82): boot + 10-minute ticks; closes any interval still open 4+ h past its Phoenix day end, stamped AT 4:00 PM day end (UTC-7 fixed; day-end math unit-tested on 3 edge cases pre-ship); after-hours stints get their own +8 h cap. PROVEN LIVE: seeded stale open interval -> first tick fired exactly at boot+10 min and was REJECTED by the clock_event kind check constraint (schema predated 'clock_out_auto' — the schema doing its job) -> migration 0008 extends the constraint -> next pass closed the interval at exactly 2026-07-27 23:00:00 UTC (4:00 PM Phoenix of its open day), to the second.
+- Double clock-in guard: second clock-in refused with a plain message naming the current line (used to silently orphan the first interval) — proven live.
+- Deactivation now closes an open interval; cockpit gains an "On the clock" panel with an audited per-person manager Clock-out button (clock.force_out). Shipped; E2E rides on next session's Q99 verify (their shared failure mode — the constraint — is fixed).
+- New event types: clock.auto_out, clock.force_out — EVENT_TAXONOMY.md update rides with the next docs pass.
+- Test account remained retired throughout (its still-valid session cookie served for API tests only).
+- Next: Coyote mapping job (still no developer posts) · Realtime · reporting v1 · offline retry (pre-cutover requirement).
+
 ## 2026-07-28 — build block 15 (Fable): navigation restructure — the Sonnet escalation, closed
 
 - server.js v15 closes all three escalated issues: C16 — Manager cockpit top nav with "Admin console" (admin-role only) + TV board + Sign out; C17 — Admin console sticky top tab bar (People · Build steps · Features + Manager/TV/Sign-out cross-links), visible while scrolling, built to grow toward file 21's nine sections; C18 — cab-switch links carry #steps so the ?tpl= reload lands ON the Build steps section (live-verified: scroll lands on-section, not at 0). Same top placement on both consoles per 22.4.
