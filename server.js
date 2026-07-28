@@ -19,6 +19,8 @@
 //   SUPABASE_URL          e.g. https://xxxx.supabase.co
 //   SUPABASE_SERVICE_KEY  the server-side key (rotate at cutover)
 //   SESSION_SECRET        random string that signs login cookies
+//   COYOTE_INTAKE_KEY     secret the Coyote/FileMaker POST must present
+//                         in its X-Shopboard-Key header (file 28 §5, opt 1)
 // ============================================================
 const http = require("http");
 const crypto = require("crypto");
@@ -865,6 +867,46 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // ---------- COYOTE INTAKE (file 28 §5, option 1: HTTPS POST) ----------
+    // Coyote/FileMaker posts ONE full order snapshot per order event to
+    // /api/coyote/order. Guarded by a secret header (X-Shopboard-Key) whose
+    // value lives in the COYOTE_INTAKE_KEY env var on Railway.
+    // This endpoint deliberately does the DUMBEST safe thing: authenticate,
+    // store the payload EXACTLY as received in coyote_intake, answer 200 OK.
+    // Dedup / multi-cab auto-split / field mapping run OFF the stored rows in
+    // a later block (file 28 internal notes) — so the FileMaker side can go
+    // live and start sending before our mapping logic exists. "When in doubt,
+    // send" (packet §2) is safe because storage is cheap and append-only.
+    if (url.pathname === "/api/coyote/order" && req.method === "POST") {
+      const key = process.env.COYOTE_INTAKE_KEY;
+      if (!key) return json(503, { ok: false, error: "Intake not configured yet" });
+      if (String(req.headers["x-shopboard-key"] || "") !== key) {
+        console.error("coyote intake: bad or missing key from", String(req.headers["x-forwarded-for"] || "unknown"));
+        return json(401, { ok: false, error: "Bad key" });
+      }
+      // Read the raw body ourselves (2 MB cap) instead of using body(), so a
+      // malformed JSON still gets STORED for debugging instead of becoming {}.
+      const raw = await new Promise((resolve) => {
+        let data = "", over = false;
+        req.on("data", (c) => { data += c; if (data.length > 2000000) { over = true; req.destroy(); } });
+        req.on("end", () => resolve(over ? null : data));
+        req.on("close", () => resolve(over ? null : data));
+      });
+      if (raw === null) return json(413, { ok: false, error: "Payload too large" });
+      let parsed = null, parseOk = true;
+      try { parsed = JSON.parse(raw || "{}"); } catch { parseOk = false; }
+      // Best-effort Order # pull for at-a-glance queries — Coyote's own field
+      // name first (packet §4: sent as TEXT, exactly as stored, never reformatted).
+      const orderNo = parseOk && parsed && typeof parsed === "object"
+        ? String(parsed["Order #"] ?? parsed.order_number ?? parsed.OrderNumber ?? parsed.order ?? "") : "";
+      const [row] = await db("coyote_intake", { method: "POST",
+        body: JSON.stringify({ order_number: orderNo || null, payload: parseOk ? parsed : null,
+          raw_text: parseOk ? null : raw, parse_ok: parseOk }) });
+      logEvent("coyote.order_received", null, { intake_id: row ? row.id : null,
+        order_number: orderNo, parse_ok: parseOk, bytes: raw.length });
+      return json(200, { ok: true });
+    }
+
     if (url.pathname === "/logout") {
       const empId = readSession(req.headers.cookie);
       if (empId) logEvent("employee.logout", empId, {});
@@ -878,4 +920,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v8 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v9 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
