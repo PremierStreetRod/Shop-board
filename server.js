@@ -349,6 +349,10 @@ const cabPage = (emp, build, tasks, lineName) => {
     <textarea id="fnote" placeholder="Final note for this cab (what the next set of eyes should know)"
       style="width:100%;min-height:80px;margin-top:10px;background:#111;color:#fff;
              border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit"></textarea>
+    <!-- Completion photos (file 11): captured on the phone camera. -->
+    <div style="margin-top:10px;opacity:.85">Completion photos:
+      <input type="file" id="fphotos" accept="image/*" capture="environment" multiple style="color:#8e8e93"></div>
+    <div class="msg" id="upmsg"></div>
     <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px"
       onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
@@ -376,17 +380,38 @@ const cabPage = (emp, build, tasks, lineName) => {
     }
     if (e.target.id === "clockout") location.href = "/home?clockout=1";
   });
-  // Finish gate submit (file 11 builder half).
+  // Finish gate submit (file 11 builder half): photos first, then the note.
   async function finishCab(id, btn) {
+    const files = document.getElementById("fphotos").files;
+    // Q86 nudge (per-product minimum, default 1 — hard gate arrives with
+    // product settings): one warning tap, second tap sends without photos.
+    if (!files.length && !btn.dataset.warned) {
+      btn.dataset.warned = "1";
+      btn.textContent = "No photos attached — tap again to send without";
+      return;
+    }
     btn.disabled = true; btn.textContent = "Sending…";
-    const r = await fetch("/api/build/finish", { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ build_id: id, note: document.getElementById("fnote").value,
-        claimed_at: new Date().toISOString() }) });
-    const out = await r.json();
-    if (out.ok) return location.reload();
-    document.getElementById("err").textContent = out.error || "Something went wrong";
-    btn.disabled = false; btn.textContent = "Finished — send for inspection";
+    try {
+      for (let i = 0; i < files.length; i++) {
+        document.getElementById("upmsg").textContent = "Uploading photo " + (i + 1) + " of " + files.length + "…";
+        const f = files[i];
+        const up = await fetch("/api/photo/upload?build_id=" + id, { method: "POST",
+          headers: { "Content-Type": f.type || "image/jpeg" }, body: f });
+        const uo = await up.json();
+        if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
+      }
+      document.getElementById("upmsg").textContent = "";
+      const r = await fetch("/api/build/finish", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, note: document.getElementById("fnote").value,
+          claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      throw new Error(out.error || "Something went wrong");
+    } catch (e) {
+      document.getElementById("err").textContent = e.message;
+      btn.disabled = false; btn.textContent = "Finished — send for inspection";
+    }
   }
 </script></body></html>`;
 };
@@ -507,6 +532,9 @@ const managerPage = (rows, reworkReasons = []) => `<!doctype html>
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b> · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
+          ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
+            `<a href="/photo/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
+            : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
           <!-- The OTHER inspection outcome (files 11/18): send it back,
                reason-coded (Q77 list), with a note + a time frame in hours. -->
@@ -985,10 +1013,16 @@ http.createServer(async (req, res) => {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
+      // Completion photos for the inspection boxes (file 11: the manager
+      // inspects note + photos together).
+      const waitIds = builds.filter((b) => b.state === "awaiting_inspection").map((b) => b.id);
+      const photos = waitIds.length
+        ? await db(`build_photo?select=id,build_id&build_id=in.(${waitIds.join(",")})&order=created_at`) : [];
       const rows = lines.map((l) => ({ line: l,
         active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
         rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
-        awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
+        awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
+          .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
       return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons));
     }
@@ -1187,6 +1221,61 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // ---------- COMPLETION PHOTOS (file 11 — the finish gate's photo half) ----------
+    // Upload: the phone camera file is POSTed as a RAW image body (no
+    // multipart — zero-dependency rule), metadata in the query string.
+    // 8 MB cap per photo. Stored in the PRIVATE cab-photos bucket; the
+    // metadata row lands in build_photo. Q86's per-product minimum becomes
+    // a hard gate when product settings arrive; today the gate nudges.
+    if (url.pathname === "/api/photo/upload" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
+      const build_id = url.searchParams.get("build_id");
+      const ctype = String(req.headers["content-type"] || "");
+      if (!build_id) return json(400, { ok: false, error: "Missing build" });
+      if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
+      const chunks = []; let size = 0, over = false;
+      await new Promise((resolve) => {
+        req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
+        req.on("end", resolve); req.on("close", resolve);
+      });
+      if (over) return json(413, { ok: false, error: "Photo too large (8 MB max)" });
+      const buf = Buffer.concat(chunks);
+      const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
+      const path = `${build_id}/${Date.now()}.${ext}`;
+      const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
+        method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": ctype },
+        body: buf });
+      if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
+      const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
+        build_id, uploaded_by: empId, storage_path: path, kind: "finish" }) });
+      logEvent("photo.added", empId, { build_id, photo_id: row ? row.id : null, bytes: buf.length });
+      return json(200, { ok: true, id: row ? row.id : null });
+    }
+
+    // Serve a photo to any SIGNED-IN person — the bucket is private and the
+    // app is the only door (spec §10: anon reaches nothing directly).
+    if (url.pathname.startsWith("/photo/")) {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const pid = url.pathname.slice("/photo/".length);
+      const [p] = await db(`build_photo?select=storage_path&id=eq.${pid}`);
+      if (!p) return send(404, "text/plain", "Not found");
+      const f = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${p.storage_path}`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      if (!f.ok) return send(404, "text/plain", "Not found");
+      const buf = Buffer.from(await f.arrayBuffer());
+      res.writeHead(200, { "content-type": f.headers.get("content-type") || "image/jpeg", "cache-control": "private, max-age=3600" });
+      return res.end(buf);
+    }
+
+    // Q52 cutover helper: echoes the caller's public IP so the shop's real
+    // egress address can be confirmed on-site before SHOP_EGRESS_IP is set.
+    if (url.pathname === "/api/my-ip")
+      return json(200, { ip: String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || null });
+
     // ---------- COYOTE INTAKE (file 28 §5, option 1: HTTPS POST) ----------
     // Coyote/FileMaker posts ONE full order snapshot per order event to
     // /api/coyote/order. Guarded by a secret header (X-Shopboard-Key) whose
@@ -1240,4 +1329,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v11 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v12 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
