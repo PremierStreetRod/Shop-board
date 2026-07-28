@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v5: Stage-1 screens + Stage-2 time engine v1 — pace colors live)
+// SHOP BOARD — server.js (v14, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
