@@ -289,8 +289,11 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
   const inRework = build.state === "rework";
+  // Per-task documentation (file 11): count what's attached to each step.
+  const notesOf = {}; for (const n of notes) (notesOf[n.task_id] = notesOf[n.task_id] || []).push(n);
+  const photosOf = {}; for (const p of tphotos) (photosOf[p.task_id] = photosOf[p.task_id] || []).push(p);
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -339,7 +342,26 @@ const cabPage = (emp, build, tasks, lineName) => {
               data-id="${t.id}" data-state="${t.state}">
         <span class="no">${t.display_no}</span> ${t.name}
         <span class="tag">${t.is_background ? "background" : t.state === "complete" ? "done — tap to undo" : t.state === "in_progress" ? "IN PROGRESS — tap when done" : "tap to start"}</span>
-      </button>`).join("")}`).join("")}
+      </button>
+      <!-- Per-task notes/photos (file 11): document a problem or the work
+           right where it happened. Lives OUTSIDE the task button so a
+           documentation tap never moves the check-off state. -->
+      <div style="margin:-6px 0 10px 8px;font-size:.85rem">
+        <a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
+          (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
+            ? `📎 ${(notesOf[t.id] || []).length + (photosOf[t.id] || []).length} attached — view / add`
+            : "＋ note / photo"}</a>
+        <div id="att-${t.id}" hidden style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px">
+          ${(notesOf[t.id] || []).map((n) => `<div style="opacity:.85;padding:3px 0;border-bottom:1px solid var(--line)">${String(n.note).replace(/</g, "&lt;")}</div>`).join("")}
+          ${(photosOf[t.id] || []).length ? `<div style="margin-top:6px">${(photosOf[t.id] || []).map((p) =>
+            `<a href="/photo/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:56px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>` : ""}
+          <textarea id="an-${t.id}" placeholder="Note about this step"
+            style="width:100%;min-height:44px;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-family:inherit"></textarea>
+          <input type="file" id="ap-${t.id}" accept="image/*" capture="environment" multiple style="color:#8e8e93;margin-top:6px">
+          <button class="back" style="color:#fff;background:#3a3a3c;border-radius:8px;margin-top:6px"
+            onclick="saveAtt('${t.id}','${build.id}',this)">Save</button>
+        </div>
+      </div>`).join("")}`).join("")}
   ${tasks.every((t) => t.is_background || t.state === "complete") ? `
   <!-- FINISH GATE (file 11, builder half): every step done -> final note ->
        cab goes AWAITING INSPECTION for the manager. Photos join when
@@ -397,6 +419,34 @@ const cabPage = (emp, build, tasks, lineName) => {
       const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
       return blob || file;
     } catch (e) { return file; }
+  }
+  // Per-task documentation (file 11): note and/or photos on one step.
+  function toggleAtt(id) { const d = document.getElementById("att-" + id); d.hidden = !d.hidden; }
+  async function saveAtt(taskId, buildId, btn) {
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const files = document.getElementById("ap-" + taskId).files;
+      for (let i = 0; i < files.length; i++) {
+        const f = await toJpeg(files[i]);
+        const up = await fetch("/api/photo/upload?build_id=" + buildId + "&task_id=" + taskId, { method: "POST",
+          headers: { "Content-Type": f.type || "image/jpeg" }, body: f });
+        const uo = await up.json();
+        if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
+      }
+      const note = document.getElementById("an-" + taskId).value.trim();
+      if (note) {
+        const r = await fetch("/api/task/note", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task_id: taskId, note, claimed_at: new Date().toISOString() }) });
+        const out = await r.json();
+        if (!out.ok) throw new Error(out.error || "Note failed");
+      }
+      if (!note && !files.length) throw new Error("Nothing to save — write a note or pick a photo");
+      return location.reload();
+    } catch (e) {
+      document.getElementById("err").textContent = e.message;
+      btn.disabled = false; btn.textContent = "Save";
+    }
   }
   // Finish gate submit (file 11 builder half): photos first, then the note.
   async function finishCab(id, btn) {
@@ -824,7 +874,10 @@ http.createServer(async (req, res) => {
         const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours&line_id=eq.${last.line_id}&state=in.(active,rework)&order=started_at&limit=1`);
         if (build) {
           const tasks = await db(`task?select=id,display_no,name,day_no,man_hours,is_background,state&build_id=eq.${build.id}&order=day_no,sort_order`);
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName));
+          // Per-task documentation (file 11) rides along with the task list.
+          const notes = await db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`);
+          const tphotos = await db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`);
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -1266,6 +1319,8 @@ http.createServer(async (req, res) => {
       });
       if (over) return json(413, { ok: false, error: "Photo too large (8 MB max)" });
       const buf = Buffer.concat(chunks);
+      // task_id present = a PER-TASK photo (file 11); absent = a finish-gate photo.
+      const task_id = url.searchParams.get("task_id") || null;
       const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
       const path = `${build_id}/${Date.now()}.${ext}`;
       const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
@@ -1273,9 +1328,28 @@ http.createServer(async (req, res) => {
         body: buf });
       if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
       const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
-        build_id, uploaded_by: empId, storage_path: path, kind: "finish" }) });
-      logEvent("photo.added", empId, { build_id, photo_id: row ? row.id : null, bytes: buf.length });
+        build_id, task_id, uploaded_by: empId, storage_path: path, kind: task_id ? "task" : "finish" }) });
+      logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length });
       return json(200, { ok: true, id: row ? row.id : null });
+    }
+
+    // PER-TASK NOTE (file 11): a written note attached to one step —
+    // documents a problem or the work right where it happened. Append-only
+    // from the floor; who wrote it is recorded.
+    if (url.pathname === "/api/task/note" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
+      const { task_id, note, claimed_at } = await body(req);
+      if (!task_id || !note || !String(note).trim()) return json(400, { ok: false, error: "Write the note first" });
+      const [t] = await db(`task?select=id,build_id,display_no&id=eq.${task_id}`);
+      if (!t) return json(404, { ok: false, error: "Task not found" });
+      const [row] = await db("task_note", { method: "POST", body: JSON.stringify({
+        task_id, build_id: t.build_id, author_id: empId, note: String(note).trim() }) });
+      logEvent("task.note_added", empId, { task_id, build_id: t.build_id,
+        display_no: t.display_no, note_id: row ? row.id : null, at: claimed_at });
+      return json(200, { ok: true });
     }
 
     // Serve a photo to any SIGNED-IN person — the bucket is private and the
@@ -1352,4 +1426,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v13 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v14 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
