@@ -398,6 +398,10 @@ const watcherPage = (emp) => `<!doctype html>
   <p style="text-align:center;margin-top:26px">
     <a href="/board" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
+  ${emp.role === "admin" ? `<p style="text-align:center;margin-top:6px">
+    <a href="/admin" style="color:#8e8e93">Admin console</a> ·
+    <a href="/manager" style="color:#8e8e93">Manager cockpit</a>
+  </p>` : ""}
   <p style="text-align:center"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div></body></html>`;
 
@@ -522,6 +526,127 @@ const managerPage = (rows) => `<!doctype html>
   }
 </script></body></html>`;
 
+// THE ADMIN CONSOLE v1 (file 21) — admin role only.
+// Three panels this block: EMPLOYEES (roles/departments/lines/active +
+// the C18 PIN reset — clearing the PIN sends them back through Q68
+// choose-your-PIN at next login) · BUILD STEPS (the Q97 editor: rename,
+// hours, day, reorder, retire, add — template edits NEVER touch a started
+// cab, its task list froze at start) · FEATURES (the Q65 plain-language
+// switches; data keeps computing while OFF, flips are audit-logged).
+const DEPTS = ["Production", "Admin", "Warehouse", "Build", "Body Shop", "Accounting"];
+const ROLES = ["production", "manager", "admin"];
+// Plain-language names for every toggle key (file 22: no jargon on screens).
+const TOGGLE_INFO = {
+  tv_board: ["The TV board", "The big board on the shop TV."],
+  sms_alerts: ["Text alerts", "Text messages for red lines and daily events. Stays OFF until cutover."],
+  email_notifications: ["Email notifications", "System emails. Stays OFF until cutover."],
+  morning_prebrief: ["Morning pre-brief", "A short summary to the manager before the day starts."],
+  line_frees_soon_alert: ["Line-frees-soon heads-up", "A nudge when a line looks like it will open up soon."],
+  inspect_before_close_nudge: ["Inspect-before-close nudge", "A reminder to sign off finished cabs before day end."],
+  early_red_standards_guard: ["Early-red standards guard", "Flags a cab that goes red unusually early — usually the standard, not the crew."],
+  customer_names_on_tv: ["Customer names on the TV", "Show customer names on the board tiles."],
+  time_off_requests: ["Time-off requests", "Techs can ask for time off from their phones."],
+};
+const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
+<style>
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:18px}
+  .panel h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 6px;font-weight:600}
+  td{padding:6px 6px;border-top:1px solid var(--line);vertical-align:middle}
+  input,select{background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-family:inherit;font-size:.92rem}
+  input.num{width:4.2em} input.dno{width:3.4em} input.nm{width:100%;min-width:180px} input.ln{width:4.6em}
+  .b{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer;font-size:.88rem}
+  .b.red{background:var(--red)} .b.grn{background:#1d5a2d}
+  .off{opacity:.45}
+  .tglrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line)}
+  .tglrow:first-of-type{border-top:none}
+  .tglrow small{display:block;opacity:.55}
+</style></head>
+<body><div class="wrap" style="max-width:980px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>Admin</h2>
+
+  <div class="panel"><h3>People</h3>
+  <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Usual lines</th><th></th><th></th><th></th></tr>
+  ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
+    <td><b>${e.first_name} ${e.last_name}</b></td>
+    <td><select id="d-${e.id}">${DEPTS.map((d) => `<option ${e.department === d ? "selected" : ""}>${d}</option>`).join("")}</select></td>
+    <td><select id="r-${e.id}">${ROLES.map((r) => `<option ${e.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
+    <td><input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2"></td>
+    <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
+    <td><button class="b ${e.active ? "" : "grn"}" onclick="setActive('${e.id}',${e.active ? "false" : "true"},this)">${e.active ? "Deactivate" : "Reactivate"}</button></td>
+    <td><button class="b" onclick="arm(this,()=>resetPin('${e.id}'))">${e.pin_hash ? "Reset PIN" : "No PIN yet"}</button></td>
+  </tr>`).join("")}</table>
+  <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN lets that person choose a new one at their next sign-in.</p>
+  </div>
+
+  <div class="panel"><h3>Build steps</h3>
+  <p>${tmpls.map((t) => t.id === tplId
+    ? `<b style="color:var(--red)">${t.family}</b>`
+    : `<a href="/admin?tpl=${t.id}" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
+  <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th><th></th><th></th><th></th></tr>
+  ${steps.map((s, i) => `<tr>
+    <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
+    <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}</td>
+    <td><input class="num" id="sd-${s.id}" value="${s.day_no}"></td>
+    <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
+    <td><button class="b" onclick="saveStep('${s.id}',this)">Save</button></td>
+    <td>${i > 0 ? `<button class="b" onclick="moveStep('${s.id}','up',this)">&uarr;</button>` : ""}
+        ${i < steps.length - 1 ? `<button class="b" onclick="moveStep('${s.id}','down',this)">&darr;</button>` : ""}</td>
+    <td><button class="b red" onclick="arm(this,()=>retireStep('${s.id}'))">Retire</button></td>
+  </tr>`).join("")}</table>
+  <p style="margin-top:10px">Add a step:
+    <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
+    Day <input class="num" id="new-day" value="1"> Hrs <input class="num" id="new-hrs" value="1">
+    <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
+  <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>
+  </div>
+
+  <div class="panel"><h3>Features</h3>
+  ${toggles.map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
+    <div class="tglrow"><div style="flex:1"><b>${info[0]}</b><small>${info[1]}</small></div>
+    <b style="opacity:.7">${t.enabled ? "ON" : "OFF"}</b>
+    <button class="b ${t.enabled ? "red" : "grn"}" onclick="flip('${t.key}',${t.enabled ? "false" : "true"},this)">Turn ${t.enabled ? "OFF" : "ON"}</button></div>`; }).join("")}
+  <p style="opacity:.5;font-size:.85rem">Everything keeps tracking underneath while a feature is OFF — turning it back ON reveals full history. Every flip is logged.</p>
+  </div>
+
+  <div class="msg err" id="err"></div>
+  <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
+  <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div>
+<script>
+  // Same sturdy pattern as the cockpit: plain global handlers, no dialogs.
+  // Destructive taps use arm(): first tap arms the button, second fires.
+  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  async function post(url, payload, btn){
+    if (btn) { btn.disabled = true; }
+    try {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch(e){ document.getElementById("err").textContent = "Network hiccup — try again"; }
+    if (btn) { btn.disabled = false; }
+  }
+  const v = (id) => document.getElementById(id).value;
+  function saveEmp(id, btn){ post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
+    lines: v("l-"+id).split(",").map(s=>Number(s.trim())).filter(n=>n>0) }, btn); }
+  function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
+  function resetPin(id){ post("/api/admin/employee", { id, reset_pin: true }); }
+  function saveStep(id, btn){ post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
+    name: v("sm-"+id), day_no: Number(v("sd-"+id)), man_hours: Number(v("sh-"+id)) }, btn); }
+  function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
+  function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
+  function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
+    display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
+  function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
+</script></body></html>`;
+
 // ---------- the server ----------
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -592,7 +717,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=first_name,lines,department&id=eq.${empId}`);
+      const [emp] = await db(`employee?select=first_name,lines,department,role&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       if (emp.department !== "Production")
         return send(200, "text/html; charset=utf-8", watcherPage(emp));
@@ -867,6 +992,101 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // ---------- ADMIN CONSOLE (file 21) — admin role only ----------
+    // One shared gate for the page + its three APIs.
+    const requireAdmin = async () => {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return [null, json(401, { ok: false, error: "Signed out — sign in again" })];
+      const [me] = await db(`employee?select=id,role&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return [null, json(403, { ok: false, error: "Admin only" })];
+      return [empId, null];
+    };
+
+    if (url.pathname === "/admin") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash&order=active.desc,first_name");
+      const tmpls = await db("build_template?select=id,family&order=family");
+      const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
+      const steps = tplId ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
+      const toggles = await db("feature_toggle?select=key,enabled&order=key");
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles));
+    }
+
+    // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
+    if (url.pathname === "/api/admin/employee" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { id, department, role, lines, active, reset_pin } = await body(req);
+      if (!id) return json(400, { ok: false, error: "Missing employee" });
+      if (reset_pin) {
+        await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ pin_hash: null }) });
+        logEvent("pin.reset", adminId, { employee_id: id }); // next login = Q68 choose-your-PIN
+        return json(200, { ok: true });
+      }
+      const patch = {};
+      if (department !== undefined) { if (!DEPTS.includes(department)) return json(400, { ok: false, error: "Unknown department" }); patch.department = department; }
+      if (role !== undefined) { if (!ROLES.includes(role)) return json(400, { ok: false, error: "Unknown role" }); patch.role = role; }
+      if (lines !== undefined) patch.lines = lines;
+      if (active !== undefined) patch.active = Boolean(active);
+      await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      logEvent("employee.updated", adminId, { employee_id: id, changes: patch });
+      return json(200, { ok: true });
+    }
+
+    // BUILD STEPS: the Q97 editor. Template edits shape FUTURE cabs only —
+    // started cabs keep the frozen copy made at start. Delete = retire (history kept).
+    if (url.pathname === "/api/admin/step" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      if (p.action === "update") {
+        const patch = { display_no: String(p.display_no || ""), name: String(p.name || ""),
+          day_no: Number(p.day_no) || 1, man_hours: Number(p.man_hours) || 0 };
+        if (!patch.name) return json(400, { ok: false, error: "A step needs a name" });
+        await db(`step_template?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+        logEvent("template.step_updated", adminId, { step_id: p.id, changes: patch });
+        return json(200, { ok: true });
+      }
+      if (p.action === "move") {
+        const [s] = await db(`step_template?select=id,template_id,sort_order&id=eq.${p.id}`);
+        if (!s) return json(404, { ok: false, error: "Step not found" });
+        const dirOp = p.dir === "up" ? `sort_order=lt.${s.sort_order}&order=sort_order.desc` : `sort_order=gt.${s.sort_order}&order=sort_order.asc`;
+        const [n] = await db(`step_template?select=id,sort_order&template_id=eq.${s.template_id}&retired=is.false&${dirOp}&limit=1`);
+        if (!n) return json(400, { ok: false, error: "Already at the end" });
+        await db(`step_template?id=eq.${s.id}`, { method: "PATCH", body: JSON.stringify({ sort_order: n.sort_order }) });
+        await db(`step_template?id=eq.${n.id}`, { method: "PATCH", body: JSON.stringify({ sort_order: s.sort_order }) });
+        logEvent("template.step_moved", adminId, { step_id: s.id, dir: p.dir, swapped_with: n.id });
+        return json(200, { ok: true });
+      }
+      if (p.action === "retire") {
+        await db(`step_template?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: true }) });
+        logEvent("template.step_retired", adminId, { step_id: p.id });
+        return json(200, { ok: true });
+      }
+      if (p.action === "add") {
+        if (!p.name) return json(400, { ok: false, error: "A step needs a name" });
+        const [last] = await db(`step_template?select=sort_order&template_id=eq.${p.template_id}&order=sort_order.desc&limit=1`);
+        const [row] = await db("step_template", { method: "POST", body: JSON.stringify({
+          template_id: p.template_id, display_no: String(p.display_no || ""), name: String(p.name),
+          day_no: Number(p.day_no) || 1, man_hours: Number(p.man_hours) || 0,
+          is_background: false, sort_order: ((last || {}).sort_order || 0) + 1 }) });
+        logEvent("template.step_added", adminId, { step_id: row ? row.id : null, template_id: p.template_id, name: p.name });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+
+    // FEATURES: the Q65 switches. Flip is stamped with who + when and event-logged.
+    if (url.pathname === "/api/admin/toggle" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { key, enabled } = await body(req);
+      await db(`feature_toggle?key=eq.${encodeURIComponent(key)}`, { method: "PATCH",
+        body: JSON.stringify({ enabled: Boolean(enabled), changed_by: adminId, changed_at: new Date().toISOString() }) });
+      logEvent("toggle.flipped", adminId, { key, enabled: Boolean(enabled) });
+      return json(200, { ok: true });
+    }
+
     // ---------- COYOTE INTAKE (file 28 §5, option 1: HTTPS POST) ----------
     // Coyote/FileMaker posts ONE full order snapshot per order event to
     // /api/coyote/order. Guarded by a secret header (X-Shopboard-Key) whose
@@ -920,4 +1140,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v9 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v10 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
