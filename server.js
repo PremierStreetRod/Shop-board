@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v14, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v15, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -559,6 +559,9 @@ const boardPage = `<!doctype html>
     }catch(e){ /* board never crashes; next poll retries */ }
   }
   refresh(); setInterval(refresh, 30000);
+  // TV hygiene (risk sweep 2026-07-28): browsers running one tab for weeks
+  // leak — a full reload every 6 hours keeps the board fresh forever.
+  setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
 </script></body></html>`;
 
 const shellPage = `<!doctype html>
@@ -578,7 +581,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = []) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -592,6 +595,14 @@ const managerPage = (rows, reworkReasons = []) => `<!doctype html>
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
+  <!-- Top nav (Sonnet UX escalation 2026-07-28, C16: there was no way BACK
+       from Manager to Admin — nav now lives at the top of every console,
+       same placement everywhere per file 22.4). -->
+  <p style="text-align:center;margin:-4px 0 14px">
+    ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
+    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
   <h2>Manager</h2>
   ${rows.map((r) => `
     <div class="lane">
@@ -709,9 +720,23 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
 </style></head>
 <body><div class="wrap" style="max-width:980px">
   <div class="logo">SHOP <span>BOARD</span></div>
+  <!-- Sticky console nav (Sonnet UX escalation 2026-07-28, C17: the admin
+       console was one long scroll with nav buried at the bottom). Tabs jump
+       to sections; room to grow toward file 21's nine sections. Same top
+       placement as the Manager cockpit (file 22.4: learn it once). -->
+  <div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;
+              text-align:center;border-bottom:1px solid var(--line)">
+    <a href="#people" style="color:#fff;font-weight:700;margin-right:16px">People</a>
+    <a href="#steps" style="color:#fff;font-weight:700;margin-right:16px">Build steps</a>
+    <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
+    <span style="opacity:.35">|</span>
+    <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
+    <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </div>
   <h2>Admin</h2>
 
-  <div class="panel"><h3>People</h3>
+  <div class="panel" id="people"><h3>People</h3>
   <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Usual lines</th><th></th><th></th><th></th></tr>
   ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
     <td><b>${e.first_name} ${e.last_name}</b></td>
@@ -725,10 +750,12 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
   <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN lets that person choose a new one at their next sign-in.</p>
   </div>
 
-  <div class="panel"><h3>Build steps</h3>
+  <div class="panel" id="steps"><h3>Build steps</h3>
+  <!-- C18: switching cabs is a full page load (?tpl=), which used to dump
+       the scroll back to the top — the #steps fragment lands you right here. -->
   <p>${tmpls.map((t) => t.id === tplId
     ? `<b style="color:var(--red)">${t.family}</b>`
-    : `<a href="/admin?tpl=${t.id}" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
+    : `<a href="/admin?tpl=${t.id}#steps" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
   <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th><th></th><th></th><th></th></tr>
   ${steps.map((s, i) => `<tr>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
@@ -747,7 +774,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
   <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>
   </div>
 
-  <div class="panel"><h3>Features</h3>
+  <div class="panel" id="features"><h3>Features</h3>
   ${toggles.map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
     <div class="tglrow"><div style="flex:1"><b>${info[0]}</b><small>${info[1]}</small></div>
     <b style="opacity:.7">${t.enabled ? "ON" : "OFF"}</b>
@@ -1095,7 +1122,7 @@ http.createServer(async (req, res) => {
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin"));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
@@ -1426,4 +1453,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v14 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v15 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
