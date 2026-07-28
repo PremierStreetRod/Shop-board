@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v15, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v16, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -110,6 +110,49 @@ function wifiGate(req) {
   const from = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return from === shopIp ? null : "Clock actions only work on shop Wi-Fi";
 }
+
+// ---------- FORGOTTEN-CLOCK-OUT SWEEPER (risk sweep 2026-07-28) ----------
+// The human truth: someone WILL walk out at 4:00 without tapping clock-out,
+// and an interval left open accrues coverage all night and corrupts pace
+// math. Q82's answer: the day auto-stops at 4:00 as a backup. Phoenix time
+// is UTC-7 year-round (no DST — Q82 America/Phoenix), so the math is plain.
+const PHX_OFFSET_MS = 7 * 60 * 60 * 1000;
+const DAY_END_HOUR_PHX = 16;   // 4:00 PM shop day end (Q82; admin-adjustable later)
+const SWEEP_GRACE_MS = 4 * 60 * 60 * 1000; // only close 4+ hrs past day end — never cuts real late work short
+// 4:00 PM Phoenix on the same Phoenix DAY as the given timestamp, in ms UTC.
+function dayEndOf(ms) {
+  const phxMidnight = Math.floor((ms - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+  return phxMidnight + DAY_END_HOUR_PHX * 3600000;
+}
+// Close every interval still open long past its day end. Runs at boot (catches
+// anything that happened while the server was down) and every 10 minutes.
+async function sweepForgottenClockOuts() {
+  if (!DB_READY) return;
+  try {
+    const recent = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=400");
+    const latest = {};
+    for (const ev of recent) if (!latest[ev.employee_id]) latest[ev.employee_id] = ev;
+    const now = Date.now();
+    for (const ev of Object.values(latest)) {
+      if (ev.kind !== "clock_in") continue;
+      const inMs = new Date(ev.claimed_at).getTime();
+      const end = dayEndOf(inMs);
+      // Clock-in AFTER day end (opt-in Saturday / evening, Q82): give that
+      // stint its own day-end at +8h so it can never run forever either.
+      const closeAt = inMs >= end ? inMs + 8 * 3600000 : end;
+      if (now < closeAt + SWEEP_GRACE_MS) continue; // still plausibly working — leave it
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: ev.employee_id, line_id: ev.line_id, kind: "clock_out_auto",
+        reason: "Auto — day end (no clock-out recorded)",
+        claimed_at: new Date(closeAt).toISOString() }) });
+      logEvent("clock.auto_out", null, { employee_id: ev.employee_id, line_id: ev.line_id,
+        opened_at: ev.claimed_at, closed_at: new Date(closeAt).toISOString() });
+      console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
+    }
+  } catch (e) { console.error("sweeper failed (will retry):", e.message); }
+}
+sweepForgottenClockOuts();                       // boot sweep
+setInterval(sweepForgottenClockOuts, 10 * 60 * 1000); // steady sweep
 
 // Read a JSON request body (small, so no streaming worries).
 function body(req) {
@@ -581,7 +624,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -604,6 +647,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false) => `<!doctype ht
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
   <h2>Manager</h2>
+  ${onClock.length ? `
+  <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
+       clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
+       button is for catching it sooner. Audited (who forced it is logged). -->
+  <div class="lane"><h3>On the clock</h3>
+    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
+  </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
       <h3>${r.line.name}</h3>
@@ -658,6 +710,19 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false) => `<!doctype ht
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false;
+  }
+  // Forgotten-clock-out correction: manager taps the person out (audited).
+  async function forceOut(id, btn) {
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/api/clock/force-out", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee_id: id }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Clock out";
   }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
   async function sendBack(id, btn) {
@@ -946,6 +1011,14 @@ http.createServer(async (req, res) => {
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { line_id, claimed_at } = await body(req);
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
+      // Double clock-in guard (risk sweep 2026-07-28): a second clock-in used
+      // to silently orphan the first interval — real coverage lost. Refuse it
+      // plainly instead; the reload shows the clock-out screen.
+      const [already] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (already && already.kind === "clock_in") {
+        const [l] = await db(`line?select=name&id=eq.${already.line_id}`);
+        return json(400, { ok: false, error: `You're already on the clock${l ? " — " + l.name : ""}. Clock out first, then switch.` });
+      }
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
       logEvent("clock.in", empId, { line_id });
@@ -985,9 +1058,17 @@ http.createServer(async (req, res) => {
     //     day boundaries float per cab, a mid-day start wastes nothing.
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.asc&limit=2000`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
+      // would silently drop a long-running cab's EARLIEST coverage after about
+      // a month of real usage — corrupting pace math invisibly. Now the window
+      // starts at the oldest live cab's start minus a 24h cushion (with the
+      // sweeper running, no single interval can span longer than that).
+      const liveStarts = builds.filter((b) => b.state === "active" || b.state === "rework")
+        .map((b) => new Date(b.started_at).getTime()).filter((n) => !isNaN(n));
+      const windowStart = new Date((liveStarts.length ? Math.min(...liveStarts) : Date.now() - 7 * 86400000) - 86400000).toISOString();
+      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
@@ -1111,6 +1192,18 @@ http.createServer(async (req, res) => {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
+      // Who's on the clock right now — feeds the forgotten-clock-out tool.
+      const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=200");
+      const latestCk = {};
+      for (const ev of recentCk) if (!latestCk[ev.employee_id]) latestCk[ev.employee_id] = ev;
+      const empNames = await db("employee?select=id,first_name,last_name&active=is.true");
+      const onClock = Object.values(latestCk).filter((e) => e.kind === "clock_in")
+        .map((e) => { const emp = empNames.find((x) => x.id === e.employee_id);
+          return emp ? { id: e.employee_id, name: `${emp.first_name} ${emp.last_name}`,
+            line: (lines.find((l) => l.id === e.line_id) || {}).name || "",
+            // HH:MM in Phoenix time (UTC-7 fixed, Q82) — rendered server-side.
+            since_hhmm: new Date(new Date(e.claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) } : null; })
+        .filter(Boolean);
       // Completion photos for the inspection boxes (file 11: the manager
       // inspects note + photos together).
       const waitIds = builds.filter((b) => b.state === "awaiting_inspection").map((b) => b.id);
@@ -1122,7 +1215,7 @@ http.createServer(async (req, res) => {
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin"));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
@@ -1144,6 +1237,26 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
       logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at });
+      return json(200, { ok: true });
+    }
+
+    // MANAGER CLOCK-OUT (risk sweep 2026-07-28): the same-day correction tool
+    // for a forgotten clock-out — manager/admin taps the person out from the
+    // cockpit's "On the clock" list. Audited: who forced it is in the event.
+    if (url.pathname === "/api/clock/force-out" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { employee_id } = await body(req);
+      const [lastCk] = await db(`clock_event?select=kind,line_id&employee_id=eq.${employee_id}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in")
+        return json(400, { ok: false, error: "They're not on the clock" });
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id, line_id: lastCk.line_id, kind: "clock_out_auto",
+        reason: "Manager clock-out", claimed_at: new Date().toISOString() }) });
+      logEvent("clock.force_out", empId, { employee_id, cause: "manager" });
       return json(200, { ok: true });
     }
 
@@ -1263,6 +1376,17 @@ http.createServer(async (req, res) => {
       if (lines !== undefined) patch.lines = lines;
       if (active !== undefined) patch.active = Boolean(active);
       await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      // Deactivating someone still ON the clock used to leave their interval
+      // open forever (risk sweep) — close it at the moment of deactivation.
+      if (active === false) {
+        const [lastCk] = await db(`clock_event?select=kind,line_id&employee_id=eq.${id}&order=claimed_at.desc&limit=1`);
+        if (lastCk && lastCk.kind === "clock_in") {
+          await db("clock_event", { method: "POST", body: JSON.stringify({
+            employee_id: id, line_id: lastCk.line_id, kind: "clock_out_auto",
+            reason: "Deactivated while on the clock", claimed_at: new Date().toISOString() }) });
+          logEvent("clock.force_out", adminId, { employee_id: id, cause: "deactivation" });
+        }
+      }
       logEvent("employee.updated", adminId, { employee_id: id, changes: patch });
       return json(200, { ok: true });
     }
@@ -1453,4 +1577,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v15 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v16 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
