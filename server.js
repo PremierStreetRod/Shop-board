@@ -380,6 +380,24 @@ const cabPage = (emp, build, tasks, lineName) => {
     }
     if (e.target.id === "clockout") location.href = "/home?clockout=1";
   });
+  // Normalize EVERY photo to a web-friendly JPEG on the phone itself
+  // (owner-rep catch 2026-07-28: iPhones shoot HEIC, which desktop
+  // browsers can't display). The phone that TOOK the HEIC can decode it —
+  // redraw on a canvas, cap the long edge at 2000 px (faster uploads,
+  // less storage), fix rotation from the photo's own orientation data.
+  // If the browser can't decode it, the original goes up and the server
+  // gives a plain-English answer.
+  async function toJpeg(file) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
+      return blob || file;
+    } catch (e) { return file; }
+  }
   // Finish gate submit (file 11 builder half): photos first, then the note.
   async function finishCab(id, btn) {
     const files = document.getElementById("fphotos").files;
@@ -394,7 +412,7 @@ const cabPage = (emp, build, tasks, lineName) => {
     try {
       for (let i = 0; i < files.length; i++) {
         document.getElementById("upmsg").textContent = "Uploading photo " + (i + 1) + " of " + files.length + "…";
-        const f = files[i];
+        const f = await toJpeg(files[i]);
         const up = await fetch("/api/photo/upload?build_id=" + id, { method: "POST",
           headers: { "Content-Type": f.type || "image/jpeg" }, body: f });
         const uo = await up.json();
@@ -1236,6 +1254,11 @@ http.createServer(async (req, res) => {
       const ctype = String(req.headers["content-type"] || "");
       if (!build_id) return json(400, { ok: false, error: "Missing build" });
       if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
+      // HEIC backstop: phones convert before upload; if a raw HEIC still
+      // arrives (odd browser path), answer in plain English instead of
+      // storing a photo desktop screens can't show.
+      if (/hei[cf]/.test(ctype))
+        return json(415, { ok: false, error: "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it" });
       const chunks = []; let size = 0, over = false;
       await new Promise((resolve) => {
         req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
@@ -1329,4 +1352,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v12 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v13 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
