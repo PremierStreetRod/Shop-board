@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — build block 10: admin console v1 (people · step editor · feature switches)
+
+- server.js v10: /admin, admin role only. PEOPLE: dept/role/usual-lines editing, deactivate/reactivate (Q70), C18 PIN reset (clears pin_hash → Q68 choose-your-PIN re-onboard). BUILD STEPS: the Q97 editor — rename/renumber/hours/day/reorder (sort_order swap)/retire-not-delete/add, per family; template edits shape FUTURE cabs only (started cabs keep their frozen copies). FEATURES: Q65 toggles with plain-language labels, flips stamped changed_by/changed_at + event-logged.
+- New events: employee.updated · pin.reset · template.step_updated / step_moved / step_retired / step_added · toggle.flipped. (EVENT_TAXONOMY.md update rides with the next docs commit.)
+- Destructive buttons use a two-tap arm ("Sure? Tap again") — no browser dialogs, per kiosk/automation sturdiness rule.
+- E2E live through the page's real buttons: add throwaway step to 47-53 → appears at end → move ↑ → armed retire → gone; time-off toggle OFF→ON round-trip; people-edit save persisted. Cleanup performed through the console itself (Supabase dashboard was hanging): test account deactivated + role dropped, then verified 403 "Admin only" + login grid back to 17 names.
+- Pending at next SQL-editor access: hard-delete the retired 'ZZ TEST STEP' row (invisible, zero-impact) and read back the admin event rows (endpoints ok'd; logEvent is fire-and-forget) — part of the next block's resume verify.
+- Same-day extras: Cab_Build_Steps_ReadBack.pdf delivered for the manager's read-back (data cross-checked against the live DB, sums exact); product→line mapping confirmed by owner-rep (5557-SM = typo for PSR-5557-SW); Railway upgraded to Hobby.
+- Next: Coyote intake mapping job (intake rows → builds w/ product→line routing) · finish-gate photos (Storage) · Realtime board push · rework flow.
+
 ## 2026-07-28 — build block 9: Coyote intake endpoint live (the developer has his URL)
 
 - The FileMaker developer picked packet delivery option 1 (HTTPS POST) and asked for the URL — the receiving side was built and shipped the same day.
