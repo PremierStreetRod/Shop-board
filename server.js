@@ -290,6 +290,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
 const cabPage = (emp, build, tasks, lineName) => {
+  const inRework = build.state === "rework";
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -321,8 +322,18 @@ const cabPage = (emp, build, tasks, lineName) => {
     <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
   </div>
   ${build.note_flagged && build.invoice_note ? `<div class="note">⚠ ORDER NOTE: ${build.invoice_note}</div>` : ""}
+  ${inRework ? `
+  <!-- REWORK BANNER (files 11/18): the manager sent this cab back with a
+       reason + a time frame. The fix tasks sit in the REWORK group below
+       (day_no 0 sorts first). Finish them all and the finish gate returns —
+       resubmit sends the cab back to AWAITING INSPECTION (file 18: rework
+       can NEVER jump straight to production complete). -->
+  <div class="note" style="background:#3a1200;border-color:#ff9f0a">
+    ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"} · fix within ${Number(build.rework_hours) || "—"} hrs
+    ${build.rework_note ? `<br><span style="opacity:.8">Manager's note: ${build.rework_note}</span>` : ""}
+  </div>` : ""}
   ${days.map((d) => `
-    <div class="dayhead">DAY ${d}</div>
+    <div class="dayhead">${d === 0 ? "REWORK — fix these first" : `DAY ${d}`}</div>
     ${tasks.filter((t) => t.day_no === d).map((t) => `
       <button class="task ${t.state === "complete" ? "done" : t.state === "in_progress" ? "doing" : ""}"
               data-id="${t.id}" data-state="${t.state}">
@@ -339,7 +350,7 @@ const cabPage = (emp, build, tasks, lineName) => {
       style="width:100%;min-height:80px;margin-top:10px;background:#111;color:#fff;
              border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit"></textarea>
     <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px"
-      onclick="finishCab('${build.id}',this)">Finished — send for inspection</button>
+      onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
   <div class="msg err" id="err"></div>
   <p style="text-align:center;margin:22px 0">
@@ -438,7 +449,8 @@ const boardPage = `<!doctype html>
       const r = await fetch("/api/board-state"); const s = await r.json();
       const bar = { green:"#30d158", amber:"#ffd60a", red:"#C8102E", none:"#5a5a5e" };
       document.getElementById("board").innerHTML = s.lines.map(l => \`
-        <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}">
+        <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" \${l.cab && l.cab.badge ? 'style="border-style:dashed;border-color:#ff9f0a;border-left-width:8px"' : ""}>
+          \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.name}</h3>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${l.cab.order} <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
@@ -473,7 +485,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows) => `<!doctype html>
+const managerPage = (rows, reworkReasons = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -496,6 +508,22 @@ const managerPage = (rows) => `<!doctype html>
           <b>ORDER ${w.order_number}</b> · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
+          <!-- The OTHER inspection outcome (files 11/18): send it back,
+               reason-coded (Q77 list), with a note + a time frame in hours. -->
+          <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
+            <select id="rr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+              ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}
+            </select>
+            Hrs <input id="rh-${w.id}" value="2" style="width:3.4em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+            <input id="rn-${w.id}" placeholder="What needs fixing (shows on the tech's screen)"
+              style="width:100%;margin-top:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+            <button class="btn gray" onclick="sendBack('${w.id}',this)">Send back — rework</button>
+          </div>
+        </div>`).join("")}
+      ${(r.rework || []).map((w) => `
+        <div style="border:1px dashed #ff9f0a;border-radius:10px;padding:10px;margin-bottom:8px">
+          <b>ORDER ${w.order_number}</b> · IN REWORK — ${w.rework_reason || ""} (${Number(w.rework_hours) || "—"} hrs given)
+          <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
         </div>`).join("")}
       ${r.active ? `
         <div><b>ORDER ${r.active.order_number}</b> · ${r.active.part_number} · active</div>
@@ -523,6 +551,23 @@ const managerPage = (rows) => `<!doctype html>
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false;
+  }
+  // Failed-inspection path: reason + note + time frame -> /api/build/rework.
+  async function sendBack(id, btn) {
+    btn.disabled = true; btn.textContent = "Working…";
+    try {
+      const r = await fetch("/api/build/rework", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id,
+          reason: document.getElementById("rr-" + id).value,
+          note: document.getElementById("rn-" + id).value,
+          hours: Number(document.getElementById("rh-" + id).value),
+          claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Send back — rework";
   }
 </script></body></html>`;
 
@@ -729,7 +774,8 @@ http.createServer(async (req, res) => {
       // ?clockout=1 = the task screen's Clock-out button — show the reason picker.
       if (clockedIn && url.searchParams.get("clockout") !== "1") {
         // ON THE CLOCK: front-center cab = the active build on YOUR line (Q90).
-        const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged&line_id=eq.${last.line_id}&state=eq.active&order=started_at&limit=1`);
+        // A cab in REWORK still owns its line and its screen (files 11/18).
+        const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours&line_id=eq.${last.line_id}&state=in.(active,rework)&order=started_at&limit=1`);
         if (build) {
           const tasks = await db(`task?select=id,display_no,name,day_no,man_hours,is_background,state&build_id=eq.${build.id}&order=day_no,sort_order`);
           return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName));
@@ -815,7 +861,7 @@ http.createServer(async (req, res) => {
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.asc&limit=2000`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at&state=in.(active,upcoming,awaiting_inspection)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
@@ -848,7 +894,9 @@ http.createServer(async (req, res) => {
       const deckOf = {}; // first UPCOMING cab per line = "on deck" (C19 single-owner)
       const waitOf = {}; // awaiting-inspection cab (shows if the line has no active cab)
       for (const b of builds) {
-        if (b.state === "active" && !cabOf[b.line_id]) cabOf[b.line_id] = b;
+        // A rework cab owns the line tile exactly like an active one (file 18:
+        // distinct badge, its own countdown vs the manager's time frame).
+        if ((b.state === "active" || b.state === "rework") && !cabOf[b.line_id]) cabOf[b.line_id] = b;
         if (b.state === "awaiting_inspection" && !waitOf[b.line_id]) waitOf[b.line_id] = b;
         if (b.state === "upcoming" && !deckOf[b.line_id]) deckOf[b.line_id] = b;
       }
@@ -900,6 +948,21 @@ http.createServer(async (req, res) => {
           : behind <= -1 ? `${(-behind).toFixed(1)} hrs ahead` : "On pace";
         const totalDays = daysOfTmpl[tmplOf[b.part_number]] || 0;
         const day = Math.min(Math.max(1, Math.ceil(wallHrs / 8 || 1)), totalDays || 99);
+        // REWORK OVERRIDE (files 11/18): distinct badge + the cab's OWN
+        // amber->red countdown against the manager's time frame — the normal
+        // pace math stays out of it (rework hours are their own bucket, Q85).
+        let rcolor = color, rstatus = status, badge = null;
+        if (b.state === "rework") {
+          badge = "REWORK";
+          const rwStart = new Date(b.rework_assigned_at || b.started_at).getTime();
+          const rwClipped = (intervals[l.id] || [])
+            .map((iv) => ({ s: Math.max(iv.s, rwStart), e: Math.min(iv.e, now) }))
+            .filter((iv) => iv.e > iv.s);
+          const rwHrs = rwClipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
+          const frame = Number(b.rework_hours) || 0;
+          rcolor = !frame ? "amber" : rwHrs > frame ? "red" : rwHrs > frame * 0.75 ? "amber" : "green";
+          rstatus = `In extra time — ${b.rework_reason || "fixes"} · ${rwHrs.toFixed(1)} of ${frame || "—"} hrs used`;
+        }
         return { id: l.id, name: l.name, techs: onLine[l.id] || [], ondeck: deck,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "",
             done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
@@ -908,7 +971,7 @@ http.createServer(async (req, res) => {
             // man-hours is the honest v1 "how much is left" figure.
             promised: b.promised_finish || null,
             remaining_mh: (a.total - a.done).toFixed(1),
-            color, status, day, total_days: totalDays } };
+            color: rcolor, status: rstatus, badge, day, total_days: totalDays } };
       }) });
     }
 
@@ -920,12 +983,14 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,started_at,created_at&state=in.(active,upcoming,awaiting_inspection)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       const rows = lines.map((l) => ({ line: l,
         active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
+        rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
-      return send(200, "text/html; charset=utf-8", managerPage(rows));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
@@ -939,12 +1004,47 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Clock in first" });
       const { build_id, note, claimed_at } = await body(req);
       const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
-      if (!b || b.state !== "active") return json(400, { ok: false, error: "Cab is not active" });
+      // Accepts ACTIVE (first finish) and REWORK (resubmit after fixes, file 18).
+      if (!b || (b.state !== "active" && b.state !== "rework"))
+        return json(400, { ok: false, error: "Cab is not in a finishable state" });
       const open = await db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete&limit=1`);
       if (open.length) return json(400, { ok: false, error: "There are still open steps on this cab" });
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
-      logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", at: claimed_at });
+      logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at });
+      return json(200, { ok: true });
+    }
+
+    // REWORK ASSIGNMENT (files 11/18, manager half of a FAILED inspection):
+    // awaiting_inspection -> rework, manager-only, reason-coded (Q77 list)
+    // with a note and a TIME FRAME in hours. A fix task (day_no 0, source
+    // 'rework', 0 standard hours — rework hours live in their OWN bucket,
+    // Q85, so pace/earned never gains from fix work) lands on the cab's
+    // screen. The admin notification rides with the notification block
+    // (Q106 sandbox ships with the first notification code — logged for now).
+    if (url.pathname === "/api/build/rework" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, reason, note, hours, claimed_at } = await body(req);
+      if (!reason) return json(400, { ok: false, error: "Pick a reason" });
+      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "awaiting_inspection")
+        return json(400, { ok: false, error: "Only a cab awaiting inspection can be sent back" });
+      const when = claimed_at || new Date().toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        state: "rework", rework_reason: reason, rework_note: note || null,
+        rework_hours: Number(hours) || null, rework_assigned_at: when }) });
+      const priors = await db(`task?select=id&build_id=eq.${build_id}&source=eq.rework`);
+      await db("task", { method: "POST", body: JSON.stringify({
+        build_id, display_no: `R${priors.length + 1}`,
+        name: `Fix: ${reason}${note ? ` — ${note}` : ""}`,
+        day_no: 0, man_hours: 0, is_background: false,
+        source: "rework", state: "not_started", sort_order: 1000 + priors.length }) });
+      logEvent("build.rework_assigned", empId, { build_id, order_number: b.order_number,
+        reason, note: note || "", hours: Number(hours) || null, at: when });
       return json(200, { ok: true });
     }
 
@@ -1140,4 +1240,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v10 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v11 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
