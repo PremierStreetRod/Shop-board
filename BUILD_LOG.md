@@ -1,6 +1,18 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-28 — UX debug pass: navigation issues found + escalated to Fable (Sonnet, no code changed)
+
+- Daniel reported live navigation problems using Shop Board from his iPad as an admin-role user; asked me to reproduce and write up a to-do for Fable.
+- Woke Zz Test-Account as role=admin (pin_hash was stale from earlier testing -- wrong-PIN error; cleared pin_hash, re-onboarded through the "choose your PIN" flow, set PIN 4321) to test as admin firsthand.
+- Reproduced all three issues live:
+  1. **No way back from Manager to Admin.** /manager's only nav links (page bottom) are "TV board" and "Sign out" -- no "Admin" link, even for an admin-role user. /admin links down to "Manager cockpit" but the reverse link doesn't exist anywhere on the page. Confirmed via a DOM read of both screens.
+  2. **Admin console has no sub-navigation.** /admin is one long single-page scroll (currently People -> Build steps -> Features, in that order) with the only nav links (Manager cockpit / TV board / Sign out) buried at the very bottom, after all three sections. File 21 specs 9 admin sections total; there's no tab/sidebar to jump between them as more come online. Also violates 22.4 ("same list controls, same icons, same action placement everywhere -- learn it once, know it everywhere").
+  3. **Build-steps cab switch scrolls to page top.** Clicking a different cab/product link (47-53 / 55-59 / etc.) in the Build steps section correctly loads that cab's step list (verified the data was right), but resets scroll to 0 above the People section. Confirmed via the page's own performance API -- navigation type is a full page reload to /admin?tpl=<uuid>, not an in-place update, so the browser drops scroll position. Pure scroll bug, not a data bug.
+- Retired the test account cleanly after testing: active=false, role='production'; verified the login grid is back to exactly 17 real names.
+- **Not fixed -- flagged for Fable per the model-check lane (36):** this is UI/navigation restructuring (a shared nav component across Home/Manager/Admin/TV-board, plus an admin sub-nav), not a small patch on an existing pattern. Full reproduction notes + fix directions logged to 09_Design_QA_and_SelfCheck.md (register C16-C18) for Fable to pick up.
+- No server.js or schema changes this session -- pure QA/debug pass.
+
 ## 2026-07-28 — housekeeping (Sonnet, block-14 resume verify pass — no new build block)
 
 - Q99 resume protocol run cold-start: pulled BUILD_LOG + last commits, re-checked live app/DB against the log -- zero drift found (server.js v14 live on Railway matching the block-14 commit; migrations 0001-0007 all present; 17 active employees with the test account correctly retired; TEST-23704 still sitting in awaiting_inspection exactly as block 12 left it; coyote_intake has only our 2 test rows -- nothing real from the developer yet).
