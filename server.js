@@ -1016,7 +1016,10 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/pin/set" && req.method === "POST") {
       const { id, pin } = await body(req);
       if (!/^\d{4}$/.test(String(pin))) return json(400, { ok: false, error: "PIN must be 4 digits" });
-      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}`);
+      // Q70 hardening (2026-07-29 soak-test find): the grid HIDES retired
+      // accounts but this endpoint used to accept any id — a deactivated
+      // account could still authenticate. Now the API enforces it too.
+      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}&active=is.true`);
       if (!emp) return json(404, { ok: false, error: "Unknown employee" });
       if (emp.pin_hash) return json(400, { ok: false, error: "PIN already set — enter it instead" });
       await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ pin_hash: hashPin(pin) }) });
@@ -1030,7 +1033,9 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/login" && req.method === "POST") {
       const { id, pin } = await body(req);
       if (locked(id)) return json(429, { ok: false, error: "Too many tries — locked for 5 minutes" });
-      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}`);
+      // Q70 hardening (2026-07-29 soak-test find): same active enforcement
+      // as /api/pin/set above — a retired account can't sign in by id.
+      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}&active=is.true`);
       if (!emp || !emp.pin_hash) return json(404, { ok: false, error: "No PIN on file — go back and tap your name" });
       if (!checkPin(pin, emp.pin_hash)) {
         const s = strike(id);
