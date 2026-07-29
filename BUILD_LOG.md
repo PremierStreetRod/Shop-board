@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — build block 21: WAREHOUSE IS LIVE (server.js v20 + migration 0011)
+
+**Q109 built and E2E-proven the same day it was locked.** The warehouse board is real: sign in with a Warehouse-department account and /home is the whole job on one screen.
+
+- **Shipped:** warehousePage (per-line state + upcoming queues + the amber "AWAITING INSPECTION — pull the next kit now" trigger + green "LINE CLEAR") · three-state kit verify with optional short-note · queue reorder (▲▼, upcoming only, audited) · two-step pull task with ARMED Delivered · **/api/kit/status, /kit/move, /kit/pull, /kit/deliver** (all gated warehouse-dept-or-manager/admin, all audited) · **freezeAndStart() is now the ONE start path** — warehouse Delivered is the normal way a cab begins; the manager Start button rides the same code as an override · Warehouse work area (line 9, enabled=false — invisible to the TV board and the pace engine by construction) with clock in/out on the board · manager cockpit queue now shows KIT ✓ / SHORT chips and follows warehouse's queue order.
+- **E2E, live through the real buttons:** clock in — Warehouse ✓ · marked TEST-23707 SHORT w/ note "brake brace box" ✓ · verified TEST-23708 ✓ · moved it to the front ✓ · Pull started ✓ · armed Delivered ✓ → **TEST-23708 went ACTIVE on Line 3 with 24 frozen tasks — the post-read-back template, so this also E2E-proved migration 0010's freeze path** · full kit audit trail (kit.status ×2, kit.queue_move, kit.pull_started, kit.delivered w/ pull_minutes) · clock out End of shift ✓ · Zz retired FULL cycle incl. department, 17 active.
+- **Also proven en route:** the 4-second arm window resets correctly (automation that waited too long between taps got re-armed instead of fired — the safety doing its job). Note for the taxonomy pass: clock-out rows carry no line_id (pairing is by employee) — fine for the engine, noted for reports.
+- **v20 = 141415 units / 3471363342**, 9-pair injection proven by reversal to v19.1 first; node --check clean; migrations now 0001–0011.
+
+**Launch scope now includes warehouse.** Remaining external gate: Coyote posts. Next-block menu: Coyote mapping (delivers straight into the warehouse queue) · notification layer (Q106 sandbox; awaiting-inspection push + line-frees-soon) · Realtime · Q83 day switch · reports lane for kit pulls.
+
 ## 2026-07-29 — decision session: Q109 locked — WAREHOUSE joins the launch (no code shipped)
 
 **Owner-rep expanded the launch scope: the warehouse role ships in Phase 1**, centered on the handoff INTO production. Full detail in register Q109; the shape for the next build block (21):
