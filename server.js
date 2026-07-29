@@ -909,7 +909,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
     <td><select id="r-${e.id}">${ROLES.map((r) => `<option ${e.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
     <td><input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2"></td>
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
-    <td><button class="b ${e.active ? "" : "grn"}" onclick="setActive('${e.id}',${e.active ? "false" : "true"},this)">${e.active ? "Deactivate" : "Reactivate"}</button></td>
+    <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
     <td><button class="b" onclick="arm(this,()=>resetPin('${e.id}'))">${e.pin_hash ? "Reset PIN" : "No PIN yet"}</button></td>
   </tr>`).join("")}</table>
   <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN lets that person choose a new one at their next sign-in.</p>
