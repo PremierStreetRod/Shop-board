@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — block 19 amendment: Reports are ADMIN-first (owner-rep call, same day)
+
+**Owner-rep flagged it within the hour: reports are ADMIN work — the manager runs the floor, admins run the numbers.** Fix shipped as **v19.1** + **migration 0009**, the Q65 toggle framework doing exactly what it was built for:
+
+- New switch in the admin console Features section: **"Managers can see Reports"** — default **OFF**.
+- OFF: a manager gets a polite refusal on /reports (with directions to the switch) and the Reports link disappears from the cockpit nav. Admins always have full access.
+- ON: manager gets the page + the nav link — one flip, no redeploy.
+
+**E2E proven both directions live** (Zz-as-manager: OFF → 403 + hidden link · ON → 200 + link back), then the switch restored to OFF and Zz retired clean (17 active). v19.1 = 126895 units / 3360811429, injection proven by reversal to v19 first.
+
 ## 2026-07-29 — build block 19: REPORTS v1 live (file 12 first slice)
 
 **server.js v19 — the reporting suite's first real page, owner-picked as the block.** `/reports` (+ `/reports.csv`), manager/admin only, linked from the cockpit nav and the admin sticky bar. Five lanes, all computed from data the app already captures — zero new data entry (file 12's core promise):
