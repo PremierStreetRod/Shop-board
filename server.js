@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v19, 2026-07-29: Reports v1 — actual-vs-standard by product and cab, open-cab aging, labor hours, rework reasons, CSV export. Plus v18 Q107 hardening + v18.1/.2 security patches. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v19.1, 2026-07-29: Reports v1 is ADMIN-first — managers see it only via the "Managers can see Reports" switch (Q65, default OFF). Reports: actual-vs-standard, aging, labor, rework, CSV. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -690,7 +690,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = []) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -709,7 +709,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        same placement everywhere per file 22.4). -->
   <p style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
-    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
+    ${isAdmin || showReports ? `<a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>` : ""}
     <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -864,6 +864,9 @@ const TOGGLE_INFO = {
   early_red_standards_guard: ["Early-red standards guard", "Flags a cab that goes red unusually early — usually the standard, not the crew."],
   customer_names_on_tv: ["Customer names on the TV", "Show customer names on the board tiles."],
   time_off_requests: ["Time-off requests", "Techs can ask for time off from their phones."],
+  // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
+  // is running the floor. This switch lets an admin share the page if wanted.
+  manager_reports: ["Managers can see Reports", "Let the manager role open the Reports page. OFF = admins only."],
 };
 const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1582,7 +1585,10 @@ http.createServer(async (req, res) => {
         recentDone = dones.filter((t) => t.completed_at)
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.completed_by] || "?", hhmm: phx(t.completed_at) }));
       }
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone));
+      // Reports link only if the admin has shared the page (Q65 toggle,
+      // owner-rep 2026-07-29: reports are admin work by default).
+      const [repTog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled)));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -1593,6 +1599,13 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
+      // Reports are ADMIN work (owner-rep 2026-07-29); a manager only gets in
+      // if an admin flipped the "Managers can see Reports" switch (Q65).
+      if (me.role === "manager") {
+        const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
+        if (!tog || !tog.enabled)
+          return send(403, "text/plain", "Reports are admin-only right now. An admin can share them from the console — Features, 'Managers can see Reports'.");
+      }
       const days = [7, 30, 90, 365].includes(Number(url.searchParams.get("days")))
         ? Number(url.searchParams.get("days")) : 30;
       const data = await reportData(days);
