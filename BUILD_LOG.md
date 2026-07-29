@@ -1,6 +1,23 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — build block 18 CLOSE: full E2E suite PASSED + two hardening patches (v18.1, v18.2)
+
+Supabase's dashboard recovered (the outage was a local screen-saver/automation hiccup on the driving machine, not Supabase — noted for the ops record) and the whole owed suite ran:
+
+- **Step attribution** — proven through the real tap path: started TEST-23702 step 16 as Zz → "Started by Zz · 08:22" rendered; completed it → "Done by Zz · 08:22". Steps seeded complete by SQL correctly show "?" (no tap, no actor — honest).
+- **Un-complete, BOTH paths** — while clocked in (step 14, TEST-23701) and via the manager bypass while NOT clocked in (step 16, TEST-23702). Both audited as task.undo. Bonus proof of the lane interplay: un-completed step 14 reappeared in "Running long" with its original old start time; freshly-tapped step 16 did NOT (only 1 hr old) — both lanes filtering exactly as designed.
+- **One-tap Switch line** — tapped from the cab screen: Line 2 → Line 3. Rows exact: clock_out_early "Switched lines" @ 15:22:38.717 + clock_in Line 3 @ 15:22:39.717 — the +1.000 s replay-determinism gap to the millisecond. clock.switch audited.
+- **Force-out** — the cockpit "On the clock" panel rendered Zz (Line 2 · since 07:28), button closed the interval. ALSO: the audit trail shows the button was already exercised live at 10:56 PM Phoenix on 7/28 — someone (owner-rep, presumably, on the smart-TV soak test; awaiting his confirmation) clocked Zz in and force-clocked-out from a real device. It worked then too.
+- **Deactivation-close** — deactivated Zz through the real console control while clocked in → interval auto-closed with "Deactivated while on the clock", clock.force_out(cause=deactivation) audited. The block-16 carry-over is now fully proven.
+
+**Two REAL findings, both fixed and deployed same hour:**
+
+- **v18.1 (Q70 hardening):** the soak-test trail revealed /api/login and /api/pin/set never checked `active` — the grid hides retired accounts but the API would authenticate one by id. Both endpoints now enforce `active=is.true`.
+- **v18.2 (C20):** the console's Deactivate/Reactivate fired on a SINGLE tap — no arm(), unlike every other destructive control. Found the hard way: a stray automation tap deactivated a real roster row (Andrew) during the E2E; caught and reversed inside three minutes, full audit trail, zero operational impact (pre-cutover, nobody on the system). Deactivate/Reactivate now require the two-tap "Sure? Tap again" arm like Retire and Reset-PIN.
+
+**Closing state:** Zz retired (production / inactive / PIN cleared — the unknown PIN set during the soak test is gone), 17 active names, zero open intervals, Andrew active, v18.2 = 111786 units / hash 2290481340 on main and deploying. Q99 verify ledger is CLEAR — nothing owed from blocks 16 or 18.
+
 ## 2026-07-29 — build block 18: Q107 shipped (task check-off hardening)
 
 **server.js v18 — the Q107 package, same day it was locked.** Four pieces:
