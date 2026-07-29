@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v18, 2026-07-29: Q107 task check-off hardening — who-started/finished shown on every step, manager un-complete + long-runner flags in the cockpit, one-tap Switch line. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v19, 2026-07-29: Reports v1 — actual-vs-standard by product and cab, open-cab aging, labor hours, rework reasons, CSV export. Plus v18 Q107 hardening + v18.1/.2 security patches. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -709,6 +709,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        same placement everywhere per file 22.4). -->
   <p style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
+    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
     <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -896,6 +897,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
+    <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -979,6 +981,187 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
 </script></body></html>`;
+
+// REPORTS v1 (file 12 / Q26, block 19) — the first slice of the reporting
+// suite, built ONLY from data the app already captures (no new data entry):
+//   · Completed cabs: actual vs standard man-hours, per cab and per product
+//     (file 12 suite 2 — "the money report")
+//   · Open cabs aging list (suite 1)
+//   · Labor hours per employee for the period (suite 3 basics)
+//   · Rework count + reasons for the period (suite 5 basics)
+//   · CSV export of each table (file 12 universal controls)
+// Time basis (C15/Q103): ACTUAL hours = clock coverage on the cab's line
+// between start and sign-off — never summed task spans. Times shown in
+// Phoenix (Q82). Deeper suites (auto-tune, downtime, forecasting, digests)
+// arrive in later blocks; this page is built to grow.
+const phxHM = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ") : "";
+const phxDate = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
+
+// Turn the raw clock_event stream (ascending) into closed work intervals:
+// a clock_in opens one on its line; the SAME employee's next clock_out of
+// any kind closes it. Still-open intervals clip at `now` so live work counts.
+function workIntervals(events, nowMs) {
+  const open = {}; const out = [];
+  for (const ev of events) {
+    const t = new Date(ev.claimed_at).getTime();
+    if (ev.kind === "clock_in") { open[ev.employee_id] = { emp: ev.employee_id, line: ev.line_id, start: t }; }
+    else if (open[ev.employee_id]) { out.push({ ...open[ev.employee_id], end: t }); delete open[ev.employee_id]; }
+  }
+  for (const k of Object.keys(open)) out.push({ ...open[k], end: nowMs });
+  return out;
+}
+// Hours of an interval that overlap a window — the one clipping rule every
+// report below shares.
+const overlapHrs = (iv, a, b) => Math.max(0, (Math.min(iv.end, b) - Math.max(iv.start, a)) / 3600000);
+
+async function reportData(days) {
+  const nowMs = Date.now();
+  const sinceMs = nowMs - days * 86400000;
+  const lines = await db(`line?select=id,name&order=id`);
+  const emps = await db(`employee?select=id,first_name,last_name,active`);
+  const builds = await db(`build?select=id,order_number,part_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
+  // Sign-off + rework moments live in the append-only event log (spec §3).
+  const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
+  const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
+  // Same windowing caveat as the board engine: fine for years at this shop's
+  // event volume; revisit alongside the engine if history ever outgrows it.
+  const events = await db(`clock_event?select=employee_id,line_id,kind,claimed_at&order=claimed_at.asc&limit=10000`);
+  const ivs = workIntervals(events, nowMs);
+  const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
+  // Latest sign-off per build (a rework loop can sign off twice — last wins).
+  const doneAt = {}; for (const e of compEv) if (e.payload && e.payload.build_id) doneAt[e.payload.build_id] = new Date(e.at).getTime();
+  const finished = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && b.started_at);
+  const live = builds.filter((b) => ["active", "rework", "awaiting_inspection"].includes(b.state));
+  // Standard hours = the cab's own FROZEN task list (Q97); rework fix tasks
+  // carry 0 std hours (Q85 own-bucket) so they never inflate the standard.
+  const needTasks = [...finished, ...live].map((b) => b.id);
+  const taskRows = needTasks.length
+    ? await db(`task?select=build_id,man_hours,state,is_background&build_id=in.(${needTasks.join(",")})`) : [];
+  const stdOf = {}; const doneMhOf = {};
+  for (const t of taskRows) {
+    stdOf[t.build_id] = (stdOf[t.build_id] || 0) + Number(t.man_hours);
+    if (t.state === "complete") doneMhOf[t.build_id] = (doneMhOf[t.build_id] || 0) + Number(t.man_hours);
+  }
+  // Per finished cab: actual = coverage man-hours on ITS line, start → sign-off.
+  const cabs = finished.map((b) => {
+    const s = new Date(b.started_at).getTime(); const e = doneAt[b.id];
+    const actual = ivs.filter((iv) => iv.line === b.line_id).reduce((sum, iv) => sum + overlapHrs(iv, s, e), 0);
+    const std = stdOf[b.id] || 0;
+    return { order: b.order_number, part: b.part_number || "?", line: lineName[b.line_id] || "?",
+      std, actual, varPct: std ? Math.round(((actual - std) / std) * 100) : null,
+      started: phxHM(b.started_at), completed: phxHM(new Date(e).toISOString()) };
+  });
+  // Product rollup — where the standards get honest over time (feeds Q96).
+  const prodMap = {};
+  for (const c of cabs) {
+    const p = prodMap[c.part] || (prodMap[c.part] = { part: c.part, n: 0, std: 0, actual: 0 });
+    p.n++; p.std += c.std; p.actual += c.actual;
+  }
+  const products = Object.values(prodMap).map((p) => ({ part: p.part, n: p.n,
+    avgStd: p.std / p.n, avgActual: p.actual / p.n,
+    varPct: p.std ? Math.round(((p.actual - p.std) / p.std) * 100) : null }));
+  // Open cabs aging (suite 1) — plain calendar days; the board's color math
+  // stays the single source of pace truth, this is just "how long open."
+  const openCabs = live.map((b) => ({ order: b.order_number, part: b.part_number || "?",
+    line: lineName[b.line_id] || "?", state: b.state.replace(/_/g, " "),
+    daysOpen: b.started_at ? Math.round((nowMs - new Date(b.started_at).getTime()) / 86400000 * 10) / 10 : null,
+    doneMh: Math.round((doneMhOf[b.id] || 0) * 10) / 10, stdMh: Math.round((stdOf[b.id] || 0) * 10) / 10,
+    promised: b.promised_finish || "" }));
+  // Labor per employee for the window (suite 3) — clock truth only (C15).
+  const labor = emps.map((p) => {
+    const mine = ivs.filter((iv) => iv.emp === p.id);
+    const hrs = mine.reduce((s, iv) => s + overlapHrs(iv, sinceMs, nowMs), 0);
+    const daysSet = new Set(mine.filter((iv) => iv.end > sinceMs).map((iv) => phxDate(Math.max(iv.start, sinceMs))));
+    return { name: `${p.first_name} ${p.last_name}`, active: p.active, hrs, days: daysSet.size };
+  }).filter((r) => r.hrs > 0).sort((a, b) => b.hrs - a.hrs);
+  // Rework in the window (suite 5) — count + reasons from the audit trail.
+  const rw = rwEv.filter((e) => new Date(e.at).getTime() >= sinceMs);
+  const rwReasons = {};
+  for (const e of rw) { const r = (e.payload && e.payload.reason) || "(no reason)"; rwReasons[r] = (rwReasons[r] || 0) + 1; }
+  return { days, cabs, products, openCabs, labor, rework: { n: rw.length, reasons: rwReasons } };
+}
+
+const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
+const reportsPage = (d, isAdmin = false) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Reports</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.95rem}
+  th{text-align:left;opacity:.55;font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}
+  td{padding:6px 8px;border-bottom:1px solid var(--line)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .over{color:#ff9f0a}.way{color:var(--red)}.under{color:#30d158}
+  .csv{float:right;font-size:.8rem;color:#8e8e93}
+  .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 14px">
+    ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
+    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
+    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Reports</h2>
+  <p class="per">Period:
+    ${[7, 30, 90, 365].map((n) => `<a href="/reports?days=${n}" class="${d.days === n ? "on" : ""}">${n === 7 ? "Week" : n === 30 ? "Month" : n === 90 ? "Quarter" : "Year"}</a>`).join("")}
+  </p>
+  <div class="lane">
+    <a class="csv" href="/reports.csv?which=products&days=${d.days}">⬇ CSV</a>
+    <h3>Actual vs standard — by product (${d.cabs.length} cab${d.cabs.length === 1 ? "" : "s"} signed off)</h3>
+    ${d.products.length ? `<table><tr><th>Product</th><th class="num">Cabs</th><th class="num">Avg standard</th><th class="num">Avg actual</th><th class="num">Variance</th></tr>
+      ${d.products.map((p) => `<tr><td>${p.part}</td><td class="num">${p.n}</td><td class="num">${h1(p.avgStd)} h</td><td class="num">${h1(p.avgActual)} h</td>
+        <td class="num ${p.varPct === null ? "" : p.varPct > 25 ? "way" : p.varPct > 0 ? "over" : "under"}">${p.varPct === null ? "—" : (p.varPct > 0 ? "+" : "") + p.varPct + "%"}</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Actual = clocked man-hours on the cab's line from start to sign-off — never task timers. This table is what trues the standards up over time.</div>`
+    : `<div style="opacity:.6">No cabs signed off in this period.</div>`}
+  </div>
+  <div class="lane">
+    <a class="csv" href="/reports.csv?which=cabs&days=${d.days}">⬇ CSV</a>
+    <h3>Signed-off cabs — the detail</h3>
+    ${d.cabs.length ? `<table><tr><th>Order</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th></tr>
+      ${d.cabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.part}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td>
+        <td class="num ${c.varPct === null ? "" : c.varPct > 25 ? "way" : c.varPct > 0 ? "over" : "under"}">${c.varPct === null ? "—" : (c.varPct > 0 ? "+" : "") + c.varPct + "%"}</td><td style="opacity:.7">${c.completed}</td></tr>`).join("")}</table>`
+    : `<div style="opacity:.6">Nothing in this period.</div>`}
+  </div>
+  <div class="lane">
+    <h3>Open cabs — aging</h3>
+    ${d.openCabs.length ? `<table><tr><th>Order</th><th>Product</th><th>Line</th><th>State</th><th class="num">Days open</th><th class="num">Done / std</th><th>Promised</th></tr>
+      ${d.openCabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.part}</td><td>${c.line}</td><td>${c.state}</td>
+        <td class="num">${c.daysOpen === null ? "—" : c.daysOpen}</td><td class="num">${c.doneMh} / ${c.stdMh} h</td><td style="opacity:.7">${c.promised}</td></tr>`).join("")}</table>`
+    : `<div style="opacity:.6">No open cabs.</div>`}
+  </div>
+  <div class="lane">
+    <a class="csv" href="/reports.csv?which=labor&days=${d.days}">⬇ CSV</a>
+    <h3>Labor — clocked hours per person</h3>
+    ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
+      ${d.labor.map((r) => `<tr><td>${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Coaching and coverage view — never shown on the floor board (file 12 privacy rule).</div>`
+    : `<div style="opacity:.6">No clocked hours in this period.</div>`}
+  </div>
+  <div class="lane">
+    <h3>Rework (${d.rework.n} in period)</h3>
+    ${d.rework.n ? Object.entries(d.rework.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.85">${r} — ${n}</div>`).join("")
+    : `<div style="opacity:.6">No rework assigned in this period. Good.</div>`}
+  </div>
+</div></body></html>`;
+
+// CSV export (file 12 universal controls) — same numbers as the page,
+// straight into the owner's spreadsheet.
+function reportCsv(which, d) {
+  const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const row = (arr) => arr.map(esc).join(",") + "\r\n";
+  if (which === "products")
+    return row(["product", "cabs", "avg_standard_hours", "avg_actual_hours", "variance_pct"]) +
+      d.products.map((p) => row([p.part, p.n, h1(p.avgStd), h1(p.avgActual), p.varPct])).join("");
+  if (which === "labor")
+    return row(["employee", "hours", "days_present"]) +
+      d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
+  return row(["order", "product", "line", "standard_hours", "actual_hours", "variance_pct", "started", "signed_off"]) +
+    d.cabs.map((c) => row([c.order, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
+}
 
 // ---------- the server ----------
 http.createServer(async (req, res) => {
@@ -1400,6 +1583,27 @@ http.createServer(async (req, res) => {
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.completed_by] || "?", hhmm: phx(t.completed_at) }));
       }
       return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone));
+    }
+
+    // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
+    // Staff-level numbers never reach the floor (file 12 privacy rule).
+    if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return send(403, "text/plain", "Manager or admin only");
+      const days = [7, 30, 90, 365].includes(Number(url.searchParams.get("days")))
+        ? Number(url.searchParams.get("days")) : 30;
+      const data = await reportData(days);
+      if (url.pathname === "/reports.csv") {
+        const which = ["products", "labor", "cabs"].includes(url.searchParams.get("which"))
+          ? url.searchParams.get("which") : "cabs";
+        res.writeHead(200, { "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="shopboard-${which}-${days}d.csv"` });
+        return res.end(reportCsv(which, data));
+      }
+      return send(200, "text/html; charset=utf-8", reportsPage(data, me.role === "admin"));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
