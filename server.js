@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v19.1, 2026-07-29: Reports v1 is ADMIN-first — managers see it only via the "Managers can see Reports" switch (Q65, default OFF). Reports: actual-vs-standard, aging, labor, rework, CSV. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v20, 2026-07-29: Q109 WAREHOUSE role — kit verify gate (unverified/verified/SHORT), upcoming-queue reorder, two-step pull task, and the Delivered tap is now what STARTS a cab's clock. Warehouse is a clockable work area, excluded from line-pace math. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -595,6 +595,87 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 
 // THE WATCHER HOME — owners + not-yet-live departments (Q95 amendment
 // 2026-07-25: everyone's on the grid; functionality follows later).
+// THE WAREHOUSE BOARD (Q109) — warehouse's whole launch job on one screen:
+// clock in/out (Warehouse work area, line id 9 — never counted in line pace),
+// see every line's state + what's on deck, verify kits (the three-state
+// gate), reorder the upcoming queue, and run the two-step pull task whose
+// "Delivered" tap starts the cab's clock on production's side.
+const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .lane h3{margin:0 0 8px}
+  .qrow{padding:6px 0;border-bottom:1px solid var(--line)}
+  .chip{display:inline-block;border-radius:8px;padding:2px 10px;font-size:.8rem;font-weight:700;margin-left:8px}
+  .ok{background:#1d3a24;color:#30d158}.short{background:#3a1200;color:#ff9f0a}.unv{background:#3a3a3c;color:#aaa}
+  .b{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;font-size:.85rem;cursor:pointer;margin-left:6px}
+  .b.grn{background:#1d3a24}.b.red{background:var(--red)}
+  .pull{border:1px solid #30d158;border-radius:10px;padding:10px;margin-top:8px}
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>Warehouse — ${emp.first_name}</h2>
+  <div class="lane">
+    ${clockedIn
+      ? `<b>ON THE CLOCK — Warehouse</b><br><span style="opacity:.6;font-size:.9rem">Clocking out — what kind?</span><br>
+         ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}`
+      : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">Morning, back from lunch — same habit as the floor.</span>`}
+  </div>
+  ${rows.map((r) => `
+  <div class="lane">
+    <h3>${r.line.name}</h3>
+    ${r.active ? `<div style="opacity:.8">Working now: <b>ORDER ${r.active.order_number}</b> (${r.active.state.replace(/_/g, " ")})</div>` : ""}
+    ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
+    ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
+    ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
+    ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
+      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b> · ${q.part_number || ""}
+        ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
+        ${q.kit_note ? `<span style="opacity:.6;font-size:.85rem"> · ${q.kit_note}</span>` : ""}
+        <span style="float:right">
+          ${i > 0 ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
+          ${i < r.queue.length - 1 ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
+          ${q.kit_status !== "verified" ? `<button class="b grn" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts ✓</button>` : ""}
+          ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
+        </span>
+        <div style="clear:both"></div>
+        ${q.kit_status !== "short" ? `<input id="kn-${q.id}" placeholder="optional note (what's short — if you know)" style="width:60%;margin-top:4px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem">` : ""}
+        ${i === 0 && q.kit_status === "verified" ? `
+          <div class="pull">${q.kit_pull_started_at
+            ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC — deliver when it's all on the line:
+               <button class="b grn" onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">Delivered — start the cab</button>`
+            : `<button class="b grn" onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">Pull started — gathering the kit</button>`}
+          </div>` : ""}
+      </div>`).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
+  </div>`).join("")}
+  <div class="msg err" id="err"></div>
+  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div>
+<script>
+  // Same sturdy patterns as the consoles: two-tap arm on anything that
+  // changes another team's world; plain posts; full reload on success.
+  function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
+  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  async function post(url, payload, btn){
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    if (btn) btn.disabled = false;
+  }
+  function clockIn(btn){ post("/api/clock/in", { line_id: 9 }, btn); }
+  function clockOut(reason, btn){ post("/api/clock/out", { reason }, btn); }
+  setTimeout(() => location.reload(), 60000); // the board keeps itself fresh
+</script></body></html>`;
+
 const watcherPage = (emp) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -775,8 +856,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
       : `<div style="opacity:.6">No active cab</div>
         ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
-      ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting:</div>
-        ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number} · ${q.part_number}</div>`).join("")}` : ""}
+      ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
+        ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number} · ${q.part_number}
+          ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
     </div>`).join("")}
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
@@ -1166,6 +1248,20 @@ function reportCsv(which, d) {
     d.cabs.map((c) => row([c.order, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
 }
 
+// Q109: the ONE true "start the cab" path — used by the warehouse Delivered
+// tap (the normal way now) and the manager's manual override. Freezes the
+// template into the cab's own task list (Q97) and stamps the start.
+async function freezeAndStart(b, empId, startedAt) {
+  await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt }) });
+  const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
+  const steps = await db(`step_template?select=display_no,name,day_no,man_hours,is_background,sort_order&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
+  for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
+    await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: st.display_no,
+      name: st.name, day_no: st.day_no, man_hours: st.man_hours, is_background: st.is_background,
+      source: "template", state: "not_started", sort_order: st.sort_order }) });
+  logEvent("build.start", empId, { build_id: b.id, order_number: b.order_number, tasks_frozen: steps.length });
+}
+
 // ---------- the server ----------
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -1243,6 +1339,21 @@ http.createServer(async (req, res) => {
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,lines,department,role&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      if (emp.department === "Warehouse") {
+        // Q109: warehouse gets its own board — the handoff INTO production.
+        const [lastW] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+        const linesW = await db(`line?select=id,name&enabled=is.true&order=id`);
+        const buildsW = await db(`build?select=id,order_number,part_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
+        const rowsW = linesW.map((l) => ({ line: l,
+          active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
+          awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
+          rework: buildsW.filter((b) => b.line_id === l.id && b.state === "rework"),
+          queue: buildsW.filter((b) => b.line_id === l.id && b.state === "upcoming")
+            .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
+        return send(200, "text/html; charset=utf-8",
+          warehousePage(emp, Boolean(lastW && lastW.kind === "clock_in"), reasonsW, linesW, rowsW));
+      }
       if (emp.department !== "Production")
         return send(200, "text/html; charset=utf-8", watcherPage(emp));
       const [last] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
@@ -1537,7 +1648,7 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=200");
@@ -1561,7 +1672,8 @@ http.createServer(async (req, res) => {
         rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
-        queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
+        queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming")
+          .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
       // Q107: two quiet watchdogs over the working cabs' tasks.
       //   LONG-RUNNERS — a step In Progress 4+ hrs with no completion. Zero
       //   crew taps required; the manager glances, sees who started it and
@@ -1715,6 +1827,17 @@ http.createServer(async (req, res) => {
     // START NEXT BUILD: upcoming -> active, and the Q97 FREEZE happens here —
     // the template's steps are copied into this cab's own task list, so later
     // template edits never rewrite a started cab's checklist.
+    // Q109 gate, shared by the four kit endpoints: warehouse department OR
+    // a manager/admin (they can always step in).
+    const requireWarehouse = async () => {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return [null, json(401, { ok: false, error: "Signed out" })];
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!me || (me.department !== "Warehouse" && me.role !== "manager" && me.role !== "admin"))
+        return [null, json(403, { ok: false, error: "Warehouse, manager or admin only" })];
+      return [empId, null];
+    };
+
     if (url.pathname === "/api/build/start" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -1726,15 +1849,78 @@ http.createServer(async (req, res) => {
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
       const clash = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
       if (clash.length) return json(400, { ok: false, error: "That line already has an active cab" }); // one-per-line
-      const startedAt = claimed_at || new Date().toISOString();
-      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt }) });
-      const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
-      const steps = await db(`step_template?select=display_no,name,day_no,man_hours,is_background,sort_order&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
-      for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
-        await db("task", { method: "POST", body: JSON.stringify({ build_id, display_no: st.display_no,
-          name: st.name, day_no: st.day_no, man_hours: st.man_hours, is_background: st.is_background,
-          source: "template", state: "not_started", sort_order: st.sort_order }) });
-      logEvent("build.start", empId, { build_id, order_number: b.order_number, tasks_frozen: steps.length });
+      await freezeAndStart(b, empId, claimed_at || new Date().toISOString());
+      return json(200, { ok: true });
+    }
+
+    // KIT STATUS (Q109 three-state gate): unverified -> verified -> short.
+    // Warehouse dept, or manager/admin. SHORT is a FLAG — part-level detail
+    // lives in Coyote and is out of launch scope; the note is optional.
+    if (url.pathname === "/api/kit/status" && req.method === "POST") {
+      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const { build_id, status, note } = await body(req);
+      if (!["unverified", "verified", "short"].includes(status))
+        return json(400, { ok: false, error: "Unknown kit status" });
+      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only an upcoming cab's kit gets verified" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        kit_status: status, kit_note: status === "short" ? (note || null) : null,
+        kit_verified_by: status === "verified" ? whoId : null,
+        kit_verified_at: status === "verified" ? new Date().toISOString() : null }) });
+      logEvent("kit.status", whoId, { build_id, order_number: b.order_number, status, note: note || "" });
+      return json(200, { ok: true });
+    }
+
+    // KIT QUEUE MOVE (Q109): reorder the UPCOMING queue only — priority/display
+    // only, clocks untouched (C9). A short kit slides back; a complete one
+    // slides forward; the line never idles waiting on a part.
+    if (url.pathname === "/api/kit/move" && req.method === "POST") {
+      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const { build_id, dir } = await body(req);
+      const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only upcoming cabs can be reordered" });
+      const q = (await db(`build?select=id,queue_pos&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`));
+      const idx = q.findIndex((x) => x.id === b.id);
+      const swap = dir === "up" ? q[idx - 1] : q[idx + 1];
+      if (!swap) return json(400, { ok: false, error: "Already at the end" });
+      // Re-stamp both positions explicitly so nulls can never make order ambiguous.
+      await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
+      await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
+      logEvent("kit.queue_move", whoId, { build_id, order_number: b.order_number, dir });
+      return json(200, { ok: true });
+    }
+
+    // KIT PULL (Q109 two-step, first tap): only a VERIFIED kit can be pulled.
+    if (url.pathname === "/api/kit/pull" && req.method === "POST") {
+      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const { build_id, claimed_at } = await body(req);
+      const [b] = await db(`build?select=id,state,kit_status,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
+      if (b.kit_status !== "verified") return json(400, { ok: false, error: "Verify the kit first — every part accounted for" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        kit_pull_started_at: claimed_at || new Date().toISOString(), kit_pull_started_by: whoId }) });
+      logEvent("kit.pull_started", whoId, { build_id, order_number: b.order_number });
+      return json(200, { ok: true });
+    }
+
+    // KIT DELIVERED (Q109 second tap, ARMED on the client): the kit is on the
+    // line — THIS is what starts the cab's clock now. Same freeze-and-start
+    // path as the manager override; one-active-per-line still enforced.
+    if (url.pathname === "/api/kit/deliver" && req.method === "POST") {
+      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const { build_id, claimed_at } = await body(req);
+      const [b] = await db(`build?select=id,state,line_id,part_number,order_number,kit_status,kit_pull_started_at&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
+      if (b.kit_status !== "verified") return json(400, { ok: false, error: "Verify the kit first" });
+      if (!b.kit_pull_started_at) return json(400, { ok: false, error: "Tap Pull started first" });
+      const clashW = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
+      if (clashW.length) return json(400, { ok: false, error: "That line still has an active cab" });
+      const when = claimed_at || new Date().toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        kit_delivered_at: when, kit_delivered_by: whoId }) });
+      await freezeAndStart(b, whoId, when);
+      const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
+      logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
       return json(200, { ok: true });
     }
 
