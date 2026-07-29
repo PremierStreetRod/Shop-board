@@ -1,6 +1,19 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — decision session: Q107 locked (no code shipped)
+
+**Shared-task check-off hardening + one-tap line switch — decided, not yet built.** Owner-rep walked a real two-person-crew scenario in a Sonnet planning thread (two techs on a firewall, one's own door task sitting open); Sonnet wrote it up and escalated per the file-36 lanes; Fable assessed; owner-rep locked. Full detail: file 10, Q107. The package for the future **"task check-off hardening"** block (Fable lane — touches earned-value netting):
+
+- **Task attribution surfaced** ("Started by Chris, 9:14a") — display work; the event log already captures it.
+- **Audited un-complete** replaces the device-local 5-second undo: line-mates within a short window, manager anytime from the cockpit, every use logged, engine nets the reversal out of pace/earned-value math.
+- **No second-person confirmation** to complete (friction rejected).
+- **Manager long-runner flag** — a task In Progress unusually long gets a quiet cockpit flag; zero crew taps.
+- **One-tap "Switch line"** — atomic audited clock-out/in, so cross-line helping moves labor truth with the tech. (Same-cab helping needs nothing: cab color runs off clocked labor vs earned value per C15/Q103, so it self-corrects — the keystone that shaped the whole decision.)
+- **Pause state DEFERRED** to Q96 calibration design; calibration will use outlier-tolerant medians so stalled spans can't skew standards. Revisit if the pilot demands it.
+
+**Also this session: cross-session stale-read false alarm resolved.** Sonnet reported 00/02/09/36 missing blocks 15–17; fresh byte-verified pulls off the live disk proved all four current — Sonnet's session was reading its pre-commit folder snapshot (the C19 mechanism, read direction). Nothing was overwritten; the stale-stage guard held. Standing instruction for any session whose local reads contradict this log: re-stage and byte-check before believing the read, and treat THIS FILE as the source of truth for build history.
+
 ## 2026-07-28 — build block 17 (Fable)
 
 **Wi-Fi retry layer on the floor screens — server.js v17.** The shop floor runs on Wi-Fi, and a dropped packet must never eat a tech's tap (pre-cutover requirement from the foresight sweep). Shipped:
