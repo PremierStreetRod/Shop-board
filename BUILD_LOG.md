@@ -1,6 +1,18 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — build block 20: MIKE'S READ-BACK LOCKED IN (migration 0010)
+
+**The gating input landed: Mike's signed read-back sheets for all six cab families (dated 7/29), applied the same day** — plus the owner-rep step combines decided in the same conversation. Migration 0010, proven by simulation before it ran (mapping completeness, clean 1..N numbering, hour conservation), then run and verified live.
+
+- **Combines (fewer floor taps, zero hours moved):** receive/organize/prep panel kit -> ONE step, all six cabs · latches + hang LH + hang RH -> ONE "Hang doors" step everywhere · Blazer rocker boxes+plates and tailgate hang+latch each -> one · 64-66 inner+outer cowl -> one. **165 live steps -> 138** (~27 fewer taps per full fleet pass).
+- **Mike's marks applied:** days all HOLD as printed (his word via owner-rep); in-day sequences per his renumbering; floor pan goes on the BASE (not the jig) on five families — 47-53 additionally runs outer-rear-sections -> pan -> jig; the 64-66 "28*" mystery = Set & square A-pillars, Day 1 (owner-rep's "run it up the ladder" answered); Blazer "Fit toe board & transmission tunnel" -> "Fit transmission tunnel"; both starred provisionals resolved into clean numbering — no gaps, no stars anywhere.
+- **Deliberately unchanged:** 47-53 "Check window openings" stays 1.75 h — Mike flagged MORE HOURS (door fit) but gave no number; owner-rep call: let the first live weeks (Q96 calibration) set it. Register note kept.
+- **Verified:** per-family live counts/hours exactly as simulated (21/48h · 25/112h · 24/48h · 24/96h · 20/56h · 24/80h); 64-66 full list spot-checked in floor order. Q97 respected: template edits shape FUTURE cabs only; frozen lists untouched; absorbed rows retired, never deleted. **Option->day mappings (Q10) unaffected by construction** — options anchor to DAYS and days did not move.
+- **Records:** signed sheets archived (Mike_ReadBack_Signed_2026-07-29/ in the working folder, HEIC decoded via a purpose-built container pipeline) · clean FINAL step-list PDF regenerated for the shop (Cab_Build_Steps_FINAL.pdf).
+
+**This closes the "await Mike's sheets" gate.** Still waiting on the outside world: Coyote developer's first posts (intake listening, zero real rows). Open flag: Q101 — confirm Blazer OPTION hours are 2-man numbers.
+
 ## 2026-07-29 — block 19 amendment: Reports are ADMIN-first (owner-rep call, same day)
 
 **Owner-rep flagged it within the hour: reports are ADMIN work — the manager runs the floor, admins run the numbers.** Fix shipped as **v19.1** + **migration 0009**, the Q65 toggle framework doing exactly what it was built for:
