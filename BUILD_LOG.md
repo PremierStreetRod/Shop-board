@@ -1,6 +1,19 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — build block 18: Q107 shipped (task check-off hardening)
+
+**server.js v18 — the Q107 package, same day it was locked.** Four pieces:
+
+- **Step attribution on the floor screens:** every In-Progress step now shows "Started by Chris · 9:14" and every completed step "Done by Aaron · 11:02" (Phoenix time), right under the step. No new capture — started_by/completed_by have been recorded on every tap since the 0001 schema; this surfaces them. Two techs sharing a cab now see each other's work.
+- **Manager un-complete (the shared undo, cockpit side):** the cockpit gains a "Recently checked off" lane (last 8 on working cabs) with an Un-complete button. Goes through the same /api/task/state engine as the floor, audited as task.undo with the manager's id; the ONE new allowance is that a manager/admin doing complete→in_progress doesn't need to be clocked in (it's a correction, not floor work). Earned-value nets out automatically — earned = completed steps, so un-completing IS the reversal. Line-mates keep their existing power to just tap a completed step back (that was already live since block 4, broader than Q107's minimum — kept).
+- **"Running long" lane:** any step In Progress 4+ hours with no completion shows in the cockpit with who started it and when. Zero crew taps; changes no math; feeds no alarms.
+- **One-tap Switch line:** new /api/clock/switch — atomic clock-out ("Switched lines", clock_out_early) + clock-in on the target line, one audited move, claimed_at from the tap (Q103-1). The clock-in lands 1 second after the out so the time engine's event replay is deterministic. Retry-safe: a switch that dies between its two writes is finished (not doubled) by the retry. Floor UI: "Switch line" next to Clock out on the cab screen → tap the line you're walking to.
+
+**Injection integrity:** 11-patch set proven locally before touching the editor (reversing the patches reproduced v17's exact hash 101150/367550921); editor verified byte-exact v18 (111373 units / hash 1063458919) before commit; node --check clean.
+
+**Verified live so far:** deploy ACTIVE and content-verified — POST /api/clock/switch answered with its own v18 guard ("You're not on the clock…", 400) from a not-clocked-in session. **Still owed (Q99 next-verify list):** UI E2E of switch/un-complete/lanes plus the block-16 force-out and deactivation-close paths — all blocked this session by a Supabase dashboard outage (SQL editor unresponsive ~15 min; app itself unaffected, health green throughout). The Zz seed script is written and ready; run the E2E suite first thing next SQL access.
+
 ## 2026-07-29 — decision session: Q107 locked (no code shipped)
 
 **Shared-task check-off hardening + one-tap line switch — decided, not yet built.** Owner-rep walked a real two-person-crew scenario in a Sonnet planning thread (two techs on a firewall, one's own door task sitting open); Sonnet wrote it up and escalated per the file-36 lanes; Fable assessed; owner-rep locked. Full detail: file 10, Q107. The package for the future **"task check-off hardening"** block (Fable lane — touches earned-value netting):
