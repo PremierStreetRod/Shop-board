@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v17, 2026-07-28: file 11 complete — two-step check-off, per-task notes/photos, finish gate w/ photos, manager inspection, reason-coded rework + re-inspection; full Stage-2 time engine + Stage-3 screens live. See BUILD_LOG.md for the block-by-block history.)
+// SHOP BOARD — server.js (v18, 2026-07-29: Q107 task check-off hardening — who-started/finished shown on every step, manager un-complete + long-runner flags in the cockpit, one-tap Switch line. See BUILD_LOG.md for the block-by-block history.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -371,11 +371,16 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}) => {
   const inRework = build.state === "rework";
   // Per-task documentation (file 11): count what's attached to each step.
   const notesOf = {}; for (const n of notes) (notesOf[n.task_id] = notesOf[n.task_id] || []).push(n);
   const photosOf = {}; for (const p of tphotos) (photosOf[p.task_id] = photosOf[p.task_id] || []).push(p);
+  // Q107: who's-on-it line under a step. Times shown in Phoenix (Q82, UTC-7 fixed).
+  const phx = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(11, 16) : "";
+  const whoLine = (t) =>
+    t.state === "in_progress" && t.started_by ? `Started by ${people[t.started_by] || "?"} · ${phx(t.started_at)}` :
+    t.state === "complete" && t.completed_by ? `Done by ${people[t.completed_by] || "?"} · ${phx(t.completed_at)}` : "";
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -429,7 +434,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
-        <a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
+        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
             ? `📎 ${(notesOf[t.id] || []).length + (photosOf[t.id] || []).length} attached — view / add`
             : "＋ note / photo"}</a>
@@ -461,13 +466,35 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = []) => {
       onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
   <div class="msg err" id="err"></div>
+  <!-- SWITCH LINE (Q107): going to help another line "for a bit" used to
+       mean clock out + clock in — enough taps that nobody bothered, so the
+       helper's hours kept feeding the WRONG line's pace math. One tap now:
+       pick the line you're walking to and your clock moves with you. -->
+  ${otherLines.length ? `
+  <div id="swpick" hidden style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0">
+    <div style="opacity:.7;margin-bottom:8px">Helping another line? Your hours follow you:</div>
+    ${otherLines.map((l) => `<button class="name" style="margin:4px 6px 4px 0" onclick="switchLine(${l.id},this)">${l.name}</button>`).join("")}
+  </div>` : ""}
   <p style="text-align:center;margin:22px 0">
     <button class="back" id="clockout">Clock out</button> ·
+    ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
     <a href="/board" style="color:#8e8e93">TV board</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
 <script>${netJs}
+  // Q107 one-tap line switch: the server does the clock-out + clock-in as
+  // one audited move, stamped at the tap (Q103-1 — retries keep true time).
+  async function switchLine(lineId, btn) {
+    btn.disabled = true; btn.textContent = "Switching…";
+    const err = document.getElementById("err");
+    const out = await sbPost("/api/clock/switch",
+      { line_id: lineId, claimed_at: new Date().toISOString() },
+      (m) => { err.textContent = m; });
+    if (out.ok) return location.href = "/home";
+    err.textContent = out.error || "Something went wrong";
+    btn.disabled = false; btn.textContent = "Try again";
+  }
   // Two-step check-off (Q45): not_started -> in_progress -> complete.
   // Tapping a completed task backs it up one step (undo, Q90).
   const next = { not_started: "in_progress", in_progress: "complete", complete: "in_progress" };
@@ -663,7 +690,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = []) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -694,6 +721,25 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = []) =>
     ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
+  </div>` : ""}
+  ${longRunners.length ? `
+  <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
+       alarm — a glance. Usually it's "went to help elsewhere" or a parts
+       run; the who + since makes it self-explanatory. -->
+  <div class="lane" style="border-color:#7a5900"><h3>Running long</h3>
+    ${longRunners.map((t) => `<div class="qrow">ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+      <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
+  </div>` : ""}
+  ${recentDone.length ? `
+  <!-- RECENTLY CHECKED OFF (Q107): the shared undo. A step completed out
+       from under a partner comes back here — audited, and the engine's
+       earned-value math nets it out automatically (earned = completed
+       steps, so un-completing IS the reversal; no side math to fix). -->
+  <div class="lane"><h3>Recently checked off</h3>
+    ${recentDone.map((t) => `<div class="qrow">ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+      <span style="opacity:.6">— by ${t.who} at ${t.hhmm}</span>
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
@@ -749,6 +795,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = []) =>
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false;
+  }
+  // Q107 manager un-complete: backs a wrongly-finished step to In Progress.
+  // Goes through the same /api/task/state engine as the floor (audited as
+  // task.undo with the manager's id); managers don't need to be clocked in.
+  async function undoTask(id, btn) {
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/api/task/state", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: id, to: "in_progress", claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Un-complete";
   }
   // Forgotten-clock-out correction: manager taps the person out (audited).
   async function forceOut(id, btn) {
@@ -1004,11 +1065,20 @@ http.createServer(async (req, res) => {
         // A cab in REWORK still owns its line and its screen (files 11/18).
         const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours&line_id=eq.${last.line_id}&state=in.(active,rework)&order=started_at&limit=1`);
         if (build) {
-          const tasks = await db(`task?select=id,display_no,name,day_no,man_hours,is_background,state&build_id=eq.${build.id}&order=day_no,sort_order`);
+          // Q107: started_by/completed_by ride along so the screen can show
+          // WHO is on a step — two techs sharing a cab see each other's work.
+          const tasks = await db(`task?select=id,display_no,name,day_no,man_hours,is_background,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build.id}&order=day_no,sort_order`);
           // Per-task documentation (file 11) rides along with the task list.
           const notes = await db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`);
           const tphotos = await db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`);
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos));
+          // First names for the attribution lines (includes retired accounts
+          // so history never shows a blank), and the OTHER lines for the
+          // one-tap Switch line control (Q107 — helping another line moves
+          // your labor truth with you).
+          const folks = await db(`employee?select=id,first_name`);
+          const people = {}; for (const p of folks) people[p.id] = p.first_name;
+          const otherLines = allLines.filter((l) => l.id !== last.line_id);
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -1024,12 +1094,20 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/task/state" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
-      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-      if (!lastCk || lastCk.kind !== "clock_in")
-        return json(403, { ok: false, error: "Clock in first — task changes need you on the clock" });
       const { task_id, to, claimed_at } = await body(req);
       const [t] = await db(`task?select=id,state,build_id,display_no&id=eq.${task_id}`);
       if (!t) return json(404, { ok: false, error: "Task not found" });
+      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in") {
+        // Q107: the ONE exception to "on the clock" — a manager/admin backing
+        // a wrongly-completed step out from the cockpit. It's a correction,
+        // not floor work; still audited below like every state change.
+        const [me] = await db(`employee?select=role&id=eq.${empId}`);
+        const managerUndo = me && (me.role === "manager" || me.role === "admin")
+          && t.state === "complete" && to === "in_progress";
+        if (!managerUndo)
+          return json(403, { ok: false, error: "Clock in first — task changes need you on the clock" });
+      }
       const legal = { not_started: ["in_progress"], in_progress: ["complete"], complete: ["in_progress"] };
       if (!(legal[t.state] || []).includes(to))
         return json(400, { ok: false, error: `Can't go ${t.state} → ${to}` });
@@ -1075,6 +1153,45 @@ http.createServer(async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, kind, reason: reason || null, claimed_at: claimed_at || new Date().toISOString() }) });
       logEvent("clock.out", empId, { reason, kind });
+      return json(200, { ok: true });
+    }
+
+    // SWITCH LINE (Q107): one tap = clock out of the current line + clock in
+    // on the line you're walking over to help, as a single audited move.
+    // Why it exists: cab color runs off clocked labor vs earned value
+    // (C15/Q103), so helping ANOTHER line while clocked into your own quietly
+    // feeds your hours to the wrong cab's pace math. Making the honest path
+    // one tap is the fix — the friction was the problem.
+    if (url.pathname === "/api/clock/switch" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { line_id, claimed_at } = await body(req);
+      if (!line_id) return json(400, { ok: false, error: "Pick a line" });
+      const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      // Retry safety: if a switch died BETWEEN its two writes (out landed,
+      // in didn't), the retry finds a fresh "Switched lines" out — finish
+      // the job by writing just the clock-in instead of refusing.
+      const halfSwitched = last && last.kind === "clock_out_early"
+        && last.reason === "Switched lines"
+        && Date.now() - new Date(last.claimed_at).getTime() < 5 * 60000;
+      if (!last || (last.kind !== "clock_in" && !halfSwitched))
+        return json(400, { ok: false, error: "You're not on the clock — just clock in on that line instead" });
+      if (last.kind === "clock_in" && last.line_id === line_id)
+        return json(400, { ok: false, error: "You're already on that line" });
+      const when = new Date(claimed_at || Date.now());
+      // The clock-in lands 1 second AFTER the clock-out on purpose: the time
+      // engine replays events in claimed_at order, and two rows sharing one
+      // timestamp could replay in either order (the out could close the NEW
+      // interval). One second of payroll time buys deterministic replay.
+      if (!halfSwitched)
+        await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id: empId, line_id: last.line_id, kind: "clock_out_early",
+          reason: "Switched lines", claimed_at: when.toISOString() }) });
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: empId, line_id, kind: "clock_in",
+        claimed_at: new Date((halfSwitched ? new Date(last.claimed_at).getTime() : when.getTime()) + 1000).toISOString() }) });
+      logEvent("clock.switch", empId, { from_line: last.line_id, to_line: line_id });
       return json(200, { ok: true });
     }
 
@@ -1254,7 +1371,30 @@ http.createServer(async (req, res) => {
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming") }));
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock));
+      // Q107: two quiet watchdogs over the working cabs' tasks.
+      //   LONG-RUNNERS — a step In Progress 4+ hrs with no completion. Zero
+      //   crew taps required; the manager glances, sees who started it and
+      //   when, and the mystery usually explains itself (helping elsewhere,
+      //   parts run, forgot the tap). Also keeps stale spans from quietly
+      //   feeding the future Q96 calibration.
+      //   RECENTLY CHECKED OFF — the shared, audited undo. If a step got
+      //   completed out from under a partner still working it, this is where
+      //   it comes back (line-mates can also just tap the step itself).
+      const workIds = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
+      const orderOf = {}; for (const b of builds) orderOf[b.id] = b.order_number;
+      const allNames = await db("employee?select=id,first_name");
+      const nameOf = {}; for (const p of allNames) nameOf[p.id] = p.first_name;
+      const phx = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(11, 16) : "";
+      let longRunners = [], recentDone = [];
+      if (workIds.length) {
+        const doing = await db(`task?select=id,name,display_no,build_id,started_by,started_at&build_id=in.(${workIds.join(",")})&state=eq.in_progress&order=started_at.asc`);
+        longRunners = doing.filter((t) => t.started_at && Date.now() - new Date(t.started_at).getTime() > 4 * 3600000)
+          .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.started_by] || "?", hhmm: phx(t.started_at) }));
+        const dones = await db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`);
+        recentDone = dones.filter((t) => t.completed_at)
+          .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.completed_by] || "?", hhmm: phx(t.completed_at) }));
+      }
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
