@@ -1,6 +1,21 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — decision session: Q109 locked — WAREHOUSE joins the launch (no code shipped)
+
+**Owner-rep expanded the launch scope: the warehouse role ships in Phase 1**, centered on the handoff INTO production. Full detail in register Q109; the shape for the next build block (21):
+
+- **Warehouse board:** all upcoming orders + per-line on-deck (first real consumer of the Coyote queue; manual orders until his posts land).
+- **Three-state kit verify** per order: unverified → VERIFIED-COMPLETE → SHORT (flag only — part-level detail stays in Coyote this launch; optional note). **Hard gate: no pull, no delivery, no clock start without green.**
+- **Warehouse reorders the upcoming queue** (per-line next-up) — never active/awaiting cabs; C9 rules; audited. A short order gets slid past, visibly, with zero line idle.
+- **Two-step pull task** ("Pull started" → armed "Delivered"), attributed + timestamped; pull duration is a tracked metric (~1 h expected).
+- **DELIVERED = the production clock start** — replaces the manager's manual "Start next build" as the normal path (task freeze Q97 + promised date Q103-6 anchor to delivery; manager override kept). Engine edge owned by the build: coverage attribution if the previous cab returns to rework after the next one starts on the same line.
+- **Trigger: the awaiting-inspection event** is the firm "go pull" signal; the shelved line-frees-soon toggle (Q65) becomes the forecast heads-up when the notification layer ships — all Q106-sandboxed until cutover. V1 signal renders on the auto-refreshing warehouse board.
+- **"Warehouse" becomes a clockable work area** — morning/lunch/evening clock habit for the accounting future; warehouse hours excluded from line-pace math.
+- **Staffing from the existing roster by department**; warehouse sign-ins land on the warehouse board instead of the "your board is coming" page.
+
+Future crating/shipping duties extend the same state machine later (file 08) — nothing in this block is throwaway.
+
 ## 2026-07-29 — build block 20: MIKE'S READ-BACK LOCKED IN (migration 0010)
 
 **The gating input landed: Mike's signed read-back sheets for all six cab families (dated 7/29), applied the same day** — plus the owner-rep step combines decided in the same conversation. Migration 0010, proven by simulation before it ran (mapping completeness, clean 1..N numbering, hour conservation), then run and verified live.
