@@ -1,6 +1,22 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-29 — build block 19: REPORTS v1 live (file 12 first slice)
+
+**server.js v19 — the reporting suite's first real page, owner-picked as the block.** `/reports` (+ `/reports.csv`), manager/admin only, linked from the cockpit nav and the admin sticky bar. Five lanes, all computed from data the app already captures — zero new data entry (file 12's core promise):
+
+- **Actual vs standard by product** — "the money report" (suite 2). Actual = clocked man-hours on the cab's line from start to sign-off (C15/Q103: clock truth, never task timers). This is the table that trues Mike's standards up over time and later feeds Q96 auto-tune.
+- **Signed-off cabs detail** — per-cab std/actual/variance with sign-off timestamps (Phoenix).
+- **Open cabs aging** (suite 1) — days open, done/std man-hours, promised date, state.
+- **Labor per person** (suite 3 basics) — clocked hours + days present for the period; page carries the file-12 privacy note (coaching view, never the floor).
+- **Rework in period** (suite 5 basics) — count + reasons from the audit trail.
+
+Period buttons Week/Month/Quarter/Year; **CSV export** on products/cabs/labor (file 12 universal controls) with proper quoting + attachment headers. New shared helpers: `workIntervals()` (clock stream → closed work intervals) and `overlapHrs()` — one clipping rule for every report.
+
+**Verified live:** role gate proven (retired-production session → 403 before wake), all five lanes rendering real test data (3 signed-off PSR-6772 cabs · aging list with done/std · Zz 75.4 h/6 days · rework "Panel fit / gaps — 1"), CSVs byte-checked against the page numbers. Injection proven (5-pair set reversed to v18.2's exact hash first); v19 = 125818 units / 3673713268 on main; node --check clean. Zz cycle: woken manager → viewed → retired full (inactive/production/no PIN), 17 active.
+
+**Deliberately deferred to later report blocks:** on-time % (needs promised-date history), downtime split by reason, auto-tune suggestions, forecasting, email digests (waits on the Q106-sandboxed notification layer), drill-down links.
+
 ## 2026-07-29 — build block 18 CLOSE: full E2E suite PASSED + two hardening patches (v18.1, v18.2)
 
 Supabase's dashboard recovered (the outage was a local screen-saver/automation hiccup on the driving machine, not Supabase — noted for the ops record) and the whole owed suite ran:
