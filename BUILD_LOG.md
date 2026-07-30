@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-30 — build block 22: CAB NUMBERS LIVE (server.js v21)
+
+**Q110 built, deployed and E2E-proven the same morning it was locked.** The wall's cab # now shows everywhere an order is looked at — and nowhere else (the TV stays clean, per the owner-rep call).
+
+- **Shipped:** cab # on the manager cockpit (active / awaiting / rework / queue rows) · warehouse board (working-now line + upcoming queue rows) · reports (signed-off detail + open-cabs aging get a Cab # column; cabs CSV gains cab_number) · the cab screen has shown it since v1 (build.cab_number existed from migration 0001 — zero DB work this block).
+- **New admin panel "Cab numbers":** every open cab (upcoming through rework) with an editable field — until cutover the WALL owns the counter and admins type what the board says — plus a per-family "next up" readout (highest number seen per letter + 1, computed across ALL cabs ever; the counter never rewinds) to compare against the whiteboard at a glance.
+- **New endpoint /api/admin/cab-number:** admin-gated · format checked (digits + 1-2 letters, like 244T; lower-case input is uppercased) · duplicates REFUSED (numbers are never shared or reused) · blank clears · every set audited as build.cab_number_set with old and new values.
+- **E2E live (Zz cycle):** woke Zz as admin → PIN set → admin panel rendered with the empty-state note → bad format "abc" refused with the plain-language error → set 9901t on TEST-23708 (stored 9901T) → duplicate on TEST-23707 refused → next-up readout showed 9902T → cockpit shows "ORDER TEST-23708 · Cab #9901T" → reports page + CSV header carry the column (CSV rows correctly empty — the signed-off test cabs have no numbers) → flipped Zz to Warehouse dept: warehouse board shows "Working now: ORDER TEST-23708 · Cab #9901T (active)" → audit row confirmed (to=9901T, actor=Zz, n=1) → Zz retired FULL (inactive / production / Production / no PIN), 17 active. The 9901T stays on TEST-23708 as a visible demo; it purges with the TEST data at cutover (Q87).
+- **Pipeline:** 21 edit pairs, PROVEN BY REVERSAL locally (v21 with new→old reproduces v20's exact 141,415 / 3471363342) before injection; editor verified at exactly v21 = **146,087 units / 3689149976** pre-commit; node --check clean; deploy watched to ACTIVE on Railway.
+- **Still ahead for cab numbers (rides the Coyote mapping block):** auto-assign at order arrival + the wall-photo backfill with the signed read-back sheet. Both wait on the developer's first push (his word: Monday/Tuesday).
+
 ## 2026-07-30 — decision: Q110 CAB NUMBERS join the app (record only, no code yet)
 
 **The whiteboard's internal Cab # (244T, 144B, 305A…) is app-owned going forward — locked with owner-rep from a photo of the wall board.**
