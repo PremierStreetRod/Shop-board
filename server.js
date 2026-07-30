@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v22, 2026-07-30: Q94 refined — the sign-in chip now reads POSITION first with the granted ROLE in parentheses ("Production (Manager)"), because manager/admin are GRANTS an admin can flip any day, never positions. Owner + Marketing join the department list so positions read true. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v23, 2026-07-30: NOTIFICATIONS v1 under the Q106 SANDBOX — a single notify() chokepoint, zero-dependency WEB PUSH (RFC 8292 VAPID + RFC 8291 aes128gcm), device opt-in on the watcher page, and the first three wired events: heading-to-inspection → warehouse, line-clear → warehouse, rework → the line's techs. While NOTIFY_LIVE is unset, EVERY message reroutes to the owner-rep and nobody else — his standing order until go-live. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -21,6 +21,13 @@
 //   SESSION_SECRET        random string that signs login cookies
 //   COYOTE_INTAKE_KEY     secret the Coyote/FileMaker POST must present
 //                         in its X-Shopboard-Key header (file 28 §5, opt 1)
+//   VAPID_PUBLIC_KEY      web-push keypair (block 23); the public half is
+//   VAPID_PRIVATE_KEY     also handed to the browser at subscribe time
+//   SANDBOX_EMPLOYEE_ID   Q106: while building, EVERY notification is
+//                         rerouted to this one person (the owner-rep)
+//   NOTIFY_LIVE           unset = SANDBOX ON (the safe default). Set to
+//                         exactly "yes" at cutover — a NAMED checklist
+//                         step, deliberately not an admin-console switch.
 // ============================================================
 const http = require("http");
 const crypto = require("crypto");
@@ -29,6 +36,11 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-only-secret";
 const DB_READY = Boolean(SUPABASE_URL && SUPABASE_KEY);
+// Block 23 (Q106): notification plumbing. Sandbox is the DEFAULT state.
+const VAPID_PUB = process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIV = process.env.VAPID_PRIVATE_KEY || "";
+const SANDBOX_EMPLOYEE_ID = process.env.SANDBOX_EMPLOYEE_ID || "";
+const NOTIFY_LIVE = process.env.NOTIFY_LIVE === "yes";
 
 // ---------- tiny helpers ----------
 // Ask Supabase for rows. `path` is the REST query string.
@@ -696,8 +708,49 @@ const watcherPage = (emp) => `<!doctype html>
     <a href="/admin" style="color:#8e8e93">Admin console</a> ·
     <a href="/manager" style="color:#8e8e93">Manager cockpit</a>
   </p>` : ""}
+  <!-- Block 23: web-push opt-in — one tap on each device that should get
+       pinged. While the Q106 sandbox is on, only the owner-rep RECEIVES
+       anything, no matter who subscribes here. -->
+  <p style="text-align:center;margin-top:18px">
+    <button id="nbtn" style="background:#3a3a3c;border:none;border-radius:10px;color:#fff;padding:12px 20px;font-size:.95rem;cursor:pointer">🔔 Notifications on this device</button>
+    ${emp.role === "admin" ? `<button id="ntest" style="background:#1d5a2d;border:none;border-radius:10px;color:#fff;padding:12px 20px;font-size:.95rem;cursor:pointer;margin-left:10px">Send a test push</button>` : ""}
+  </p>
+  <p style="text-align:center;opacity:.6;font-size:.85rem" id="nmsg"></p>
   <p style="text-align:center"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
-</div></body></html>`;
+</div>
+<script>
+  // Plain English: ask the browser's permission, install the tiny
+  // service worker, get this device's push address, hand it to the server.
+  const NPUB = "${VAPID_PUB}";
+  const nmsg = (t) => { document.getElementById("nmsg").textContent = t; };
+  function nkey(s){ const pad = "=".repeat((4 - s.length % 4) % 4);
+    const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); }
+  document.getElementById("nbtn").onclick = async () => {
+    try {
+      if (!NPUB) return nmsg("Push keys aren't configured on the server yet.");
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return nmsg("This browser can't do notifications.");
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return nmsg("Notifications are blocked for this site — allow them in browser settings, then tap again.");
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: nkey(NPUB) });
+      const j = sub.toJSON();
+      const r = await fetch("/api/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }) });
+      const out = await r.json();
+      nmsg(out.ok ? "This device is on the list. ✓" : (out.error || "Something went wrong"));
+    } catch (e) { nmsg("Couldn't finish: " + e.message); }
+  };
+  const ntestBtn = document.getElementById("ntest");
+  if (ntestBtn) ntestBtn.onclick = async () => {
+    ntestBtn.disabled = true;
+    try { const r = await fetch("/api/push/test", { method: "POST" });
+      const out = await r.json();
+      nmsg(out.ok ? "Test sent — it should pop on your subscribed device in a few seconds." : (out.error || "Something went wrong"));
+    } catch (e) { nmsg("Network hiccup — try again"); }
+    ntestBtn.disabled = false;
+  };
+</script></body></html>`;
 
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
@@ -1280,6 +1333,101 @@ async function freezeAndStart(b, empId, startedAt) {
   logEvent("build.start", empId, { build_id: b.id, order_number: b.order_number, tasks_frozen: steps.length });
 }
 
+// ============================================================
+// NOTIFICATIONS v1 (block 23, file 16) — the engine + WEB PUSH, zero deps.
+//
+// THE Q106 SANDBOX, in the owner-rep's words: "the ONLY test of push,
+// text, email or ANY notifications ONLY goes to me. daniel park. NOTHING
+// goes out to staff." — reaffirmed 2026-07-30: "no emails, no NOTHING
+// until we are ready to go live." Enforced STRUCTURALLY: every message
+// funnels through notify() below, and unless the Railway variable
+// NOTIFY_LIVE is exactly "yes" (a named cutover step, deliberately NOT an
+// admin-console switch so it can't be flipped by accident), delivery is
+// REWRITTEN to SANDBOX_EMPLOYEE_ID with a stamp naming who it WOULD have
+// reached. notification_log records true intent either way, so at cutover
+// we can show exactly what the matrix would have done all along.
+//
+// Channel status (owner-rep choice 2026-07-30): WEB PUSH ships now, pure
+// Node — VAPID JWT per RFC 8292, payload sealed per RFC 8291 (aes128gcm),
+// both proven by local sign/verify and encrypt/decrypt round-trips before
+// commit. Email + SMS stay unbuilt until a provider is connected.
+const b64u = (b) => Buffer.from(b).toString("base64url");
+const fromB64u = (s) => Buffer.from(s, "base64url");
+const hmac256 = (k, d) => crypto.createHmac("sha256", k).update(d).digest();
+
+// VAPID JWT (RFC 8292): proves to the browser's push service that we own
+// the keypair this device subscribed against.
+function vapidJwt(aud) {
+  const pub = fromB64u(VAPID_PUB);
+  const key = crypto.createPrivateKey({ format: "jwk", key: { kty: "EC", crv: "P-256",
+    d: VAPID_PRIV, x: b64u(pub.subarray(1, 33)), y: b64u(pub.subarray(33, 65)) } });
+  const part = (o) => b64u(Buffer.from(JSON.stringify(o)));
+  const unsigned = `${part({ typ: "JWT", alg: "ES256" })}.${part({ aud,
+    exp: Math.floor(Date.now() / 1000) + 43200, sub: "mailto:marketing@premierstreetrod.com" })}`;
+  return `${unsigned}.${b64u(crypto.sign("sha256", Buffer.from(unsigned), { key, dsaEncoding: "ieee-p1363" }))}`;
+}
+
+// RFC 8291 payload sealing — a push service only accepts messages
+// encrypted to that one device's own keys (not even the service can read
+// them). Single record, 0x02 delimiter, no padding.
+function encryptPush(payload, uaPub, authSecret) {
+  const ecdh = crypto.createECDH("prime256v1");
+  const asPub = ecdh.generateKeys();
+  const shared = ecdh.computeSecret(uaPub);
+  const salt = crypto.randomBytes(16);
+  const ikm = hmac256(hmac256(authSecret, shared),
+    Buffer.concat([Buffer.from("WebPush: info\x00"), uaPub, asPub, Buffer.from([1])]));
+  const prk = hmac256(salt, ikm);
+  const cek = hmac256(prk, Buffer.concat([Buffer.from("Content-Encoding: aes128gcm\x00"), Buffer.from([1])])).subarray(0, 16);
+  const nonce = hmac256(prk, Buffer.concat([Buffer.from("Content-Encoding: nonce\x00"), Buffer.from([1])])).subarray(0, 12);
+  const cipher = crypto.createCipheriv("aes-128-gcm", cek, nonce);
+  const ct = Buffer.concat([cipher.update(Buffer.concat([Buffer.from(payload), Buffer.from([2])])),
+    cipher.final(), cipher.getAuthTag()]);
+  return Buffer.concat([salt, Buffer.from([0, 0, 16, 0]), Buffer.from([asPub.length]), asPub, ct]);
+}
+
+// One sealed message to one subscribed device. 404/410 means the device
+// unsubscribed or expired — retire the row quietly, never error the floor.
+async function sendPush(sub, payloadObj) {
+  const box = encryptPush(JSON.stringify(payloadObj), fromB64u(sub.p256dh), fromB64u(sub.auth));
+  const r = await fetch(sub.endpoint, { method: "POST", body: box, headers: {
+    "Authorization": `vapid t=${vapidJwt(new URL(sub.endpoint).origin)}, k=${VAPID_PUB}`,
+    "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream",
+    "TTL": "3600", "Urgency": "normal" } });
+  if (r.status === 404 || r.status === 410)
+    await db(`push_subscription?id=eq.${sub.id}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
+  return r.status;
+}
+
+// THE chokepoint — every notification the system ever sends passes here.
+// intendedIds = who SHOULD get it; the sandbox decides who DOES. Never
+// throws: a notification problem must never break a floor tap.
+async function notify(eventType, intendedIds, title, bodyText, link) {
+  try {
+    const intended = (Array.isArray(intendedIds) ? intendedIds : [intendedIds]).filter(Boolean);
+    if (!intended.length) return;
+    const sandbox = !NOTIFY_LIVE;
+    const ppl = await db(`employee?select=first_name,last_name&id=in.(${intended.join(",")})`);
+    const names = ppl.map((p) => `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`).join(", ");
+    const targets = sandbox ? (SANDBOX_EMPLOYEE_ID ? [SANDBOX_EMPLOYEE_ID] : []) : intended;
+    let status = "sandbox_no_target", sent = 0;
+    if (targets.length && VAPID_PUB && VAPID_PRIV) {
+      const subs = await db(`push_subscription?select=id,endpoint,p256dh,auth&active=is.true&employee_id=in.(${targets.join(",")})`);
+      const payload = { title: sandbox ? `[TEST] ${title}` : title,
+        body: sandbox ? `${bodyText}\n(Build test — would have gone to: ${names})` : bodyText,
+        url: link || "/home" };
+      for (const s of subs) { try { const st = await sendPush(s, payload); if (st < 300) sent++; } catch (e) {} }
+      status = sent ? "sent" : (subs.length ? "failed" : "no_subscription");
+    }
+    await db("notification_log", { method: "POST", body: JSON.stringify(intended.map((id) => ({
+      event_type: eventType, intended_employee_id: id, channel: "push", title, body: bodyText,
+      sandboxed: sandbox, status }))) });
+  } catch (e) { /* never break the floor over a notification */ }
+}
+// The warehouse crew, resolved fresh each event (roster changes stick).
+const warehouseIds = async () =>
+  (await db("employee?select=id&department=eq.Warehouse&active=is.true")).map((e) => e.id);
+
 // ---------- the server ----------
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -1764,7 +1912,7 @@ http.createServer(async (req, res) => {
       if (!lastCk || lastCk.kind !== "clock_in")
         return json(403, { ok: false, error: "Clock in first" });
       const { build_id, note, claimed_at } = await body(req);
-      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
       // Accepts ACTIVE (first finish) and REWORK (resubmit after fixes, file 18).
       if (!b || (b.state !== "active" && b.state !== "rework"))
         return json(400, { ok: false, error: "Cab is not in a finishable state" });
@@ -1773,6 +1921,13 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
       logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at });
+      // Q109-7: heading-to-inspection IS warehouse's firm "go pull the next
+      // kit" signal — the first real event on the notification matrix.
+      // Q106: sandboxed to the owner-rep until cutover, like everything.
+      const [lnF] = await db(`line?select=name&id=eq.${b.line_id}`);
+      notify("build.awaiting_inspection", await warehouseIds(),
+        `${lnF ? lnF.name : "Line"} — pull the next kit`,
+        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection. The line frees soon.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -1801,8 +1956,8 @@ http.createServer(async (req, res) => {
     // with a note and a TIME FRAME in hours. A fix task (day_no 0, source
     // 'rework', 0 standard hours — rework hours live in their OWN bucket,
     // Q85, so pace/earned never gains from fix work) lands on the cab's
-    // screen. The admin notification rides with the notification block
-    // (Q106 sandbox ships with the first notification code — logged for now).
+    // screen, and (block 23) the line's techs get a push the moment it's
+    // assigned — Q106-sandboxed to the owner-rep until cutover.
     if (url.pathname === "/api/build/rework" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -1811,7 +1966,7 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, reason, note, hours, claimed_at } = await body(req);
       if (!reason) return json(400, { ok: false, error: "Pick a reason" });
-      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
       if (!b || b.state !== "awaiting_inspection")
         return json(400, { ok: false, error: "Only a cab awaiting inspection can be sent back" });
       const when = claimed_at || new Date().toISOString();
@@ -1826,6 +1981,12 @@ http.createServer(async (req, res) => {
         source: "rework", state: "not_started", sort_order: 1000 + priors.length }) });
       logEvent("build.rework_assigned", empId, { build_id, order_number: b.order_number,
         reason, note: note || "", hours: Number(hours) || null, at: when });
+      // File 16: the line's usual techs hear it the moment it's assigned —
+      // no walking to the board to discover the cab came back. Q106 sandbox.
+      const techsR = await db(`employee?select=id&active=is.true&lines=cs.{${b.line_id}}`);
+      notify("build.rework_assigned", techsR.map((t) => t.id),
+        `Order ${b.order_number} sent back — ${reason}`,
+        `${note ? note + " — " : ""}${Number(hours) || "?"} hrs given. The fix step is on the cab screen.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -1839,11 +2000,17 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, claimed_at } = await body(req);
-      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
       if (!b || (b.state !== "active" && b.state !== "awaiting_inspection"))
         return json(400, { ok: false, error: "Cab is not active or awaiting inspection" });
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
       logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at });
+      // Q109: sign-off frees the line — warehouse can deliver the next
+      // verified kit the moment this fires. Q106 sandbox applies.
+      const [lnC] = await db(`line?select=name&id=eq.${b.line_id}`);
+      notify("build.line_clear", await warehouseIds(),
+        `${lnC ? lnC.name : "Line"} is CLEAR`,
+        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} signed off — deliver the next kit when it's ready.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -1944,6 +2111,48 @@ http.createServer(async (req, res) => {
       await freezeAndStart(b, whoId, when);
       const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
       logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
+      return json(200, { ok: true });
+    }
+
+    // ---------- NOTIFICATIONS (block 23) ----------
+    // The tiny service worker every subscribed device runs: show what
+    // arrives, open the board when tapped. Served from root scope.
+    if (url.pathname === "/sw.js")
+      return send(200, "application/javascript; charset=utf-8",
+`self.addEventListener("push", (e) => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (err) {}
+  e.waitUntil(self.registration.showNotification(d.title || "Shop Board", {
+    body: d.body || "", data: { url: d.url || "/home" } }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(clients.openWindow((e.notification.data && e.notification.data.url) || "/home"));
+});`);
+
+    // A signed-in person registers THIS device for pushes. Re-subscribing
+    // the same device just refreshes its row (endpoint is unique).
+    if (url.pathname === "/api/push/subscribe" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const { endpoint, p256dh, auth } = await body(req);
+      if (!endpoint || !p256dh || !auth) return json(400, { ok: false, error: "Incomplete subscription" });
+      await db(`push_subscription?endpoint=eq.${encodeURIComponent(endpoint)}`, { method: "DELETE" });
+      await db("push_subscription", { method: "POST", body: JSON.stringify({
+        employee_id: empId, endpoint, p256dh, auth, user_agent: req.headers["user-agent"] || "" }) });
+      logEvent("push.subscribed", empId, { endpoint_host: new URL(endpoint).host });
+      return json(200, { ok: true });
+    }
+
+    // Admin test: one real message through the WHOLE pipe — chokepoint,
+    // sandbox rewrite, sealing, delivery. What the E2E and the owner-rep's
+    // phone both use to prove the plumbing.
+    if (url.pathname === "/api/push/test" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      await notify("test.push", [empId], "Shop Board test",
+        "If you can read this, the push pipe works end to end.", "/home");
       return json(200, { ok: true });
     }
 
@@ -2221,4 +2430,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v17 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"})`));
+}).listen(PORT, () => console.log(`Shop Board v23 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"}, notifications ${NOTIFY_LIVE ? "LIVE" : "SANDBOXED (Q106)"})`));
