@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v23, 2026-07-30: NOTIFICATIONS v1 under the Q106 SANDBOX — a single notify() chokepoint, zero-dependency WEB PUSH (RFC 8292 VAPID + RFC 8291 aes128gcm), device opt-in on the watcher page, and the first three wired events: heading-to-inspection → warehouse, line-clear → warehouse, rework → the line's techs. While NOTIFY_LIVE is unset, EVERY message reroutes to the owner-rep and nobody else — his standing order until go-live. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v24, 2026-07-30: Q111 part 1, the PAYROLL package — "SHOP TIME" clockable work area (line 10, warehouse pattern: paid from the first tap, never charged to any cab — meetings, cleanup, in-house fabrication = the visible NON-BILLABLE bucket), switch-to-line from the clock screen, the TIMECARDS report lane + CSV for accounting, "Sick" joins the clock-out reasons (migration 0013), and the v23.1 subscribe fix (await the service worker before subscribing). See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -41,6 +41,12 @@ const VAPID_PUB = process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIV = process.env.VAPID_PRIVATE_KEY || "";
 const SANDBOX_EMPLOYEE_ID = process.env.SANDBOX_EMPLOYEE_ID || "";
 const NOTIFY_LIVE = process.env.NOTIFY_LIVE === "yes";
+// Q111: "Shop time" — the clockable NON-PRODUCTION work area (line 10,
+// same pattern as Warehouse's line 9). Monday meetings, cleanup, and
+// in-house fabrication (rolling bases, show fixtures) happen ON the clock
+// here: paid from the first tap, invisible to the TV board, and never
+// charged to any cab's pace math — no cab ever lives on this line.
+const SHOP_LINE_ID = 10;
 
 // ---------- tiny helpers ----------
 // Ask Supabase for rows. `path` is the REST query string.
@@ -340,6 +346,11 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
     <div class="grid">
       ${usualLines.map((l) => `<button class="name" data-line="${l.id}">${l.name}<small>your usual line — one tap</small></button>`).join("")}
     </div>
+    <!-- Q111: not going straight to a line? Clock in HERE — paid from this
+         tap, and the time never lands on any cab's numbers. -->
+    <div class="grid" style="margin-top:10px">
+      <button class="name" data-line="10">Shop time<small>meeting · cleanup · in-house work — paid, not on a cab</small></button>
+    </div>
     ${otherLines.length ? `<p class="msg" style="margin-top:18px">Other lines</p>
     <div class="grid">
       ${otherLines.map((l) => `<button class="name" style="opacity:.75" data-line="${l.id}">${l.name}</button>`).join("")}
@@ -351,6 +362,13 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
     <p class="msg">Clocking out — what kind?</p>
     <div class="grid">
       ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
+    </div>
+    <!-- Q111: meeting over, or shop work done? One tap moves you — the
+         server does the out+in as a single audited second (Q107). -->
+    <p class="msg" style="margin-top:18px">…or switch straight to</p>
+    <div class="grid">
+      ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" style="opacity:.8" data-switch="${l.id}">${l.name}</button>`).join("")}
+      ${state.lineId === 10 ? "" : `<button class="name" style="opacity:.8" data-switch="10">Shop time</button>`}
     </div>
   </div>
 
@@ -375,6 +393,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
   });
   document.getElementById("out").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-reason]"); if(b) act("/api/clock/out",{reason:b.dataset.reason});
+    const s=e.target.closest("[data-switch]"); if(s) act("/api/clock/switch",{line_id:Number(s.dataset.switch)});
   });
 </script></body></html>`;
 
@@ -733,6 +752,7 @@ const watcherPage = (emp) => `<!doctype html>
       const perm = await Notification.requestPermission();
       if (perm !== "granted") return nmsg("Notifications are blocked for this site — allow them in browser settings, then tap again.");
       const reg = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready; // v23.1: don't subscribe until the worker is ACTIVE (first-tap race fix)
       const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: nkey(NPUB) });
       const j = sub.toJSON();
       const r = await fetch("/api/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1181,7 +1201,7 @@ async function reportData(days) {
   const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
   // Same windowing caveat as the board engine: fine for years at this shop's
   // event volume; revisit alongside the engine if history ever outgrows it.
-  const events = await db(`clock_event?select=employee_id,line_id,kind,claimed_at&order=claimed_at.asc&limit=10000`);
+  const events = await db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at&order=claimed_at.asc&limit=10000`);
   const ivs = workIntervals(events, nowMs);
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
@@ -1234,7 +1254,39 @@ async function reportData(days) {
   const rw = rwEv.filter((e) => new Date(e.at).getTime() >= sinceMs);
   const rwReasons = {};
   for (const e of rw) { const r = (e.payload && e.payload.reason) || "(no reason)"; rwReasons[r] = (rwReasons[r] || 0) + 1; }
-  return { days, cabs, products, openCabs, labor, rework: { n: rw.length, reasons: rwReasons } };
+  // TIMECARDS (Q111): payroll's view — one row per person per Phoenix day.
+  // Paid = the sum of on-the-clock intervals (C15 clock truth; lunch drops
+  // out because they clocked out for it, and downtime waiting on a kit stays
+  // IN because they didn't). Shop time (line 10) is broken out so the
+  // non-billable bucket — meetings, cleanup, in-house fabrication — is its
+  // own visible column. Any clock_out_auto that day gets flagged: the
+  // day-end sweeper closed a punch somebody forgot, worth a manager glance.
+  // (v1 note: an interval is dayed by its start; overnight spans are already
+  // prevented in practice by that same sweeper.)
+  const tcMap = {};
+  for (const iv of ivs) {
+    if (iv.end <= sinceMs || iv.start >= nowMs) continue;
+    const p = emps.find((e) => e.id === iv.emp); if (!p) continue;
+    const day = phxDate(Math.max(iv.start, sinceMs));
+    const k = iv.emp + "|" + day;
+    const row = tcMap[k] || (tcMap[k] = { name: `${p.first_name} ${p.last_name}`, date: day,
+      firstIn: iv.start, lastOut: iv.end, paid: 0, shop: 0, flags: new Set() });
+    row.firstIn = Math.min(row.firstIn, iv.start); row.lastOut = Math.max(row.lastOut, iv.end);
+    const hrs = overlapHrs(iv, sinceMs, nowMs);
+    row.paid += hrs;
+    if (iv.line === SHOP_LINE_ID) row.shop += hrs;
+  }
+  for (const ev of events) {
+    if (ev.kind === "clock_in") continue;
+    const t = new Date(ev.claimed_at).getTime();
+    if (t < sinceMs || t > nowMs) continue;
+    const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
+    if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
+    if (ev.reason && !["End of shift", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
+  }
+  const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
+  return { days, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons } };
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
@@ -1298,6 +1350,14 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
   <div class="lane">
+    <a class="csv" href="/reports.csv?which=timecards&days=${d.days}">⬇ CSV</a>
+    <h3>Timecards — payroll (Q111)</h3>
+    ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th>Notes</th></tr>
+      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Paid = time on the clock (lunch is already out; waiting on a kit stays in). Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
+    : `<div style="opacity:.6">No punches in this period.</div>`}
+  </div>
+  <div class="lane">
     <h3>Rework (${d.rework.n} in period)</h3>
     ${d.rework.n ? Object.entries(d.rework.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.85">${r} — ${n}</div>`).join("")
     : `<div style="opacity:.6">No rework assigned in this period. Good.</div>`}
@@ -1315,6 +1375,10 @@ function reportCsv(which, d) {
   if (which === "labor")
     return row(["employee", "hours", "days_present"]) +
       d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
+  if (which === "timecards")
+    return row(["employee", "date", "first_in", "last_out", "paid_hours", "shop_hours", "notes"]) +
+      d.timecards.map((t) => row([t.name, t.date, phxHM(new Date(t.firstIn).toISOString()),
+        phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), t.flags])).join("");
   return row(["order", "cab_number", "product", "line", "standard_hours", "actual_hours", "variance_pct", "started", "signed_off"]) +
     d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
 }
@@ -1530,7 +1594,10 @@ http.createServer(async (req, res) => {
       const [last] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const clockedIn = last && last.kind === "clock_in";
-      const lineName = clockedIn ? (allLines.find((l) => l.id === last.line_id) || {}).name || "" : "";
+      // Q111: Shop time (line 10) is disabled so it never appears in
+      // allLines — name it by hand for the on-the-clock header.
+      const lineName = clockedIn ? (last.line_id === SHOP_LINE_ID ? "Shop time"
+        : (allLines.find((l) => l.id === last.line_id) || {}).name || "") : "";
       const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
       // ?clockout=1 = the task screen's Clock-out button — show the reason picker.
       if (clockedIn && url.searchParams.get("clockout") !== "1") {
@@ -1550,7 +1617,10 @@ http.createServer(async (req, res) => {
           // your labor truth with you).
           const folks = await db(`employee?select=id,first_name`);
           const people = {}; for (const p of folks) people[p.id] = p.first_name;
-          const otherLines = allLines.filter((l) => l.id !== last.line_id);
+          // Q111: Shop time joins the switch picker — a tech can step off
+          // the cab to a meeting or in-house work with one honest tap.
+          const otherLines = allLines.filter((l) => l.id !== last.line_id)
+            .concat([{ id: SHOP_LINE_ID, name: "Shop time" }]);
           return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people));
         }
         // No active cab on this line -> fall through to the clock screen.
@@ -1558,7 +1628,7 @@ http.createServer(async (req, res) => {
       const usual = allLines.filter((l) => (emp.lines || []).includes(l.id));
       const other = allLines.filter((l) => !(emp.lines || []).includes(l.id));
       return send(200, "text/html; charset=utf-8",
-        homePage(emp, { clockedIn, lineName }, usual, other, reasons));
+        homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
@@ -1893,7 +1963,7 @@ http.createServer(async (req, res) => {
         ? Number(url.searchParams.get("days")) : 30;
       const data = await reportData(days);
       if (url.pathname === "/reports.csv") {
-        const which = ["products", "labor", "cabs"].includes(url.searchParams.get("which"))
+        const which = ["products", "labor", "cabs", "timecards"].includes(url.searchParams.get("which"))
           ? url.searchParams.get("which") : "cabs";
         res.writeHead(200, { "content-type": "text/csv; charset=utf-8",
           "content-disposition": `attachment; filename="shopboard-${which}-${days}d.csv"` });
