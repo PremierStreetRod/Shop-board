@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-30 — Q94 refined: roles are GRANTS, not positions (server.js v22)
+
+**Owner-rep pushback that turned out to be the design working as intended — plus the one cosmetic fix it deserved.** He proposed that manager shouldn't be a position; admin should ELECT people into management tools. The live roster already works exactly that way (Q94: department = position, role = granted tools — Mike is Production/manager today; electing Jason in Body Shop someday is one dropdown flip in the People panel, audited, revocable).
+
+- **The leak:** the sign-in grid showed Mike's chip as "Manager" — presenting a grant as a position. Fixed to his exact spec: **chip = name, then POSITION with ROLE in parentheses** — "Michael Hull / Production (Manager)", "Ross Logsdon / Owner (Admin)"; plain production roles just show the department.
+- **Departments Owner + Marketing added** to the list, and live positions corrected: Ross / Rob / Kerry → Owner, Daniel → Marketing (all keep the Admin role — access rides the role dial, so nothing about what anyone can do changed).
+- **Watcher greeting** now keys on role=admin too, so a Marketing-dept admin reads as a watcher instead of "your board is coming."
+- **Pipeline:** 4 pairs proven by reversal to v21's exact 146,087 / 3689149976; v22 = **146,292 units / 4129630201**; node --check clean; main verified byte-exact after commit.
+- **Deploy note:** Railway queued the v22 deploy behind an upstream GitHub incident ("Deployment queued due to upstream GitHub issues"). The DB position changes were verified live through v21 code (grid already read Ross=Owner, Daniel=Marketing). The parenthesized chips need one look once the queue clears — carry to next session if unconfirmed.
+
 ## 2026-07-30 — build block 22: CAB NUMBERS LIVE (server.js v21)
 
 **Q110 built, deployed and E2E-proven the same morning it was locked.** The wall's cab # now shows everywhere an order is looked at — and nowhere else (the TV stays clean, per the owner-rep call).
