@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v21, 2026-07-30: Q110 CAB NUMBERS — the wall board's internal cab # (244T, 305A…) now lives everywhere an order is looked at: cab screen (had it since v1), cockpit, warehouse queue, reports + CSVs, plus an admin editor with a per-family "next up" readout. The WALL owns the counter until cutover — admins type what the board says; every set is audited. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v22, 2026-07-30: Q94 refined — the sign-in chip now reads POSITION first with the granted ROLE in parentheses ("Production (Manager)"), because manager/admin are GRANTS an admin can flip any day, never positions. Owner + Marketing join the department list so positions read true. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -685,7 +685,7 @@ const watcherPage = (emp) => `<!doctype html>
   <h2>Welcome, ${emp.first_name}.</h2>
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
-    ${emp.department === "Owner" || emp.department === "Admin"
+    ${emp.department === "Owner" || emp.department === "Admin" || emp.role === "admin"
       ? "Watch the floor in real time below."
       : `The ${emp.department} board is coming in a later phase — your login is ready for it.`}
   </p>
@@ -933,7 +933,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
 // hours, day, reorder, retire, add — template edits NEVER touch a started
 // cab, its task list froze at start) · FEATURES (the Q65 plain-language
 // switches; data keeps computing while OFF, flips are audit-logged).
-const DEPTS = ["Production", "Admin", "Warehouse", "Build", "Body Shop", "Accounting"];
+const DEPTS = ["Production", "Admin", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "Marketing"];
 const ROLES = ["production", "manager", "admin"];
 // Plain-language names for every toggle key (file 22: no jargon on screens).
 const TOGGLE_INFO = {
@@ -1305,9 +1305,14 @@ http.createServer(async (req, res) => {
     // they can DO after sign-in is gated at /home, not hidden here.
     if (url.pathname === "/login") {
       const emps = await db("employee?select=id,first_name,last_name,role,department,pin_hash&active=is.true&order=first_name");
+      // Chip wording (owner-rep 2026-07-30, Q94 refined): POSITION first,
+      // granted role in parentheses — "Michael Hull / Production (Manager)".
+      // Manager and admin are grants an admin can give or take in the People
+      // panel any day; they are never the person's position.
       const view = emps.map((e) => ({ ...e, has_pin: Boolean(e.pin_hash),
-        dept_label: e.department || (e.role === "manager" ? "Manager" : e.role === "admin" ? "Admin" : "Production"),
-      })).map((e) => ({ ...e, dept_label: e.role === "manager" ? "Manager" : e.dept_label }));
+        dept_label: (e.department || "Production") +
+          (e.role === "manager" ? " (Manager)" : e.role === "admin" ? " (Admin)" : ""),
+      }));
       return send(200, "text/html; charset=utf-8", loginPage(view));
     }
 
