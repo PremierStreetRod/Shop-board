@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-30 — decision: Q110 CAB NUMBERS join the app (record only, no code yet)
+
+**The whiteboard's internal Cab # (244T, 144B, 305A…) is app-owned going forward — locked with owner-rep from a photo of the wall board.**
+
+- **Letter key:** T = 55-59 (Taskforce) · A = 47-53 (Advance Design) · C = 67-72 C10 · F = 67-72 Ford · B = 69-72 Blazer · D = 64-66 (the letter means nothing — staff's pick). BT = Blazer Top — outsourced, its own sequence, NOT in the app; top-only orders in a Coyote push are ignored entirely.
+- **Per-family counters**, proven by the wall itself (T at 239–245 · A 303–308 · B 143–148 · C 162–167 · D 15–16 · F 7–10 · BT its own 63–68 run). Demo cabs consume numbers too (12D · 7F · 148B) — the counter counts cabs BUILT.
+- **Rules (structured Q&A, all recommended options):** numbers BURN on cancellation, never reused · assigned THE MOMENT an order arrives (at Coyote mapping — matches wall practice) · the WALL owns the counter until cutover (audited admin field mirrors it; the app takes over at the verified high-water marks — one master at a time).
+- **Display (easy to find, NOT the TV — owner-rep call):** cab screen under the order number ("PSR-23708 · Cab #246T") · cockpit rows + sign-off detail · warehouse queue rows · reports cab detail + CSVs · admin editable audited field + a per-family "next up" readout.
+- **Storage:** build.cab_number has existed since migration 0001 — zero migration needed. The build block = counter logic + display + backfill.
+- **Backfill:** the first push (existing 2026 orders to current) arrives WITHOUT cab numbers — transcribe the wall photo (archived in the working folder as Whiteboard_CabNumbers_2026-07-30.png), then a signed read-back sheet confirming every order#↔cab# pair before any DB write.
+
 ## 2026-07-29 — build block 21: WAREHOUSE IS LIVE (server.js v20 + migration 0011)
 
 **Q109 built and E2E-proven the same day it was locked.** The warehouse board is real: sign in with a Warehouse-department account and /home is the whole job on one screen.
