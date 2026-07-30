@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v20, 2026-07-29: Q109 WAREHOUSE role — kit verify gate (unverified/verified/SHORT), upcoming-queue reorder, two-step pull task, and the Delivered tap is now what STARTS a cab's clock. Warehouse is a clockable work area, excluded from line-pace math. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v21, 2026-07-30: Q110 CAB NUMBERS — the wall board's internal cab # (244T, 305A…) now lives everywhere an order is looked at: cab screen (had it since v1), cockpit, warehouse queue, reports + CSVs, plus an admin editor with a per-family "next up" readout. The WALL owns the counter until cutover — admins type what the board says; every set is audited. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -627,12 +627,12 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   ${rows.map((r) => `
   <div class="lane">
     <h3>${r.line.name}</h3>
-    ${r.active ? `<div style="opacity:.8">Working now: <b>ORDER ${r.active.order_number}</b> (${r.active.state.replace(/_/g, " ")})</div>` : ""}
+    ${r.active ? `<div style="opacity:.8">Working now: <b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} (${r.active.state.replace(/_/g, " ")})</div>` : ""}
     ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
     ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
     ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
     ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
-      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b> · ${q.part_number || ""}
+      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}
         ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
         ${q.kit_note ? `<span style="opacity:.6;font-size:.85rem"> · ${q.kit_note}</span>` : ""}
         <span style="float:right">
@@ -828,7 +828,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <h3>${r.line.name}</h3>
       ${(r.awaiting || []).map((w) => `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
-          <b>ORDER ${w.order_number}</b> · AWAITING INSPECTION
+          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
           ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
             `<a href="/photo/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
@@ -848,16 +848,16 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         </div>`).join("")}
       ${(r.rework || []).map((w) => `
         <div style="border:1px dashed #ff9f0a;border-radius:10px;padding:10px;margin-bottom:8px">
-          <b>ORDER ${w.order_number}</b> · IN REWORK — ${w.rework_reason || ""} (${Number(w.rework_hours) || "—"} hrs given)
+          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · IN REWORK — ${w.rework_reason || ""} (${Number(w.rework_hours) || "—"} hrs given)
           <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
         </div>`).join("")}
       ${r.active ? `
-        <div><b>ORDER ${r.active.order_number}</b> · ${r.active.part_number} · active</div>
+        <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active</div>
         <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
       : `<div style="opacity:.6">No active cab</div>
         ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
-        ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number} · ${q.part_number}
+        ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number}${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number}
           ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
     </div>`).join("")}
   <div class="msg err" id="err"></div>
@@ -950,7 +950,7 @@ const TOGGLE_INFO = {
   // is running the floor. This switch lets an admin share the page if wanted.
   manager_reports: ["Managers can see Reports", "Let the manager role open the Reports page. OFF = admins only."],
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -980,6 +980,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
     <a href="#people" style="color:#fff;font-weight:700;margin-right:16px">People</a>
     <a href="#steps" style="color:#fff;font-weight:700;margin-right:16px">Build steps</a>
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
+    <a href="#cabnums" style="color:#fff;font-weight:700;margin-right:16px">Cab #s</a>
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
@@ -1034,6 +1035,22 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
   <p style="opacity:.5;font-size:.85rem">Everything keeps tracking underneath while a feature is OFF — turning it back ON reveals full history. Every flip is logged.</p>
   </div>
 
+  <!-- CAB NUMBERS (Q110): the wall board's internal cab # (244T, 305A…).
+       Until cutover THE WALL OWNS THE COUNTER — type here exactly what the
+       whiteboard says. Every set is audited. At cutover the app takes the
+       counter over from the verified high-water marks and assigns the next
+       number itself when an order arrives from Coyote. -->
+  <div class="panel" id="cabnums"><h3>Cab numbers</h3>
+  ${nextUp ? `<p style="opacity:.7">Next up by family (from what's entered so far): <b>${nextUp}</b> — check this against the whiteboard.</p>` : `<p style="opacity:.5">No cab numbers entered yet — the "next up" readout appears once some are in.</p>`}
+  ${cabs.length ? `<table><tr><th>Order</th><th>Product</th><th>State</th><th>Cab #</th><th></th></tr>
+  ${cabs.map((b) => `<tr>
+    <td><b>${b.order_number}</b></td><td>${b.part_number || ""}</td><td>${String(b.state).replace(/_/g, " ")}</td>
+    <td><input class="ln" id="cn-${b.id}" value="${b.cab_number || ""}" placeholder="244T"></td>
+    <td><button class="b" onclick="saveCab('${b.id}',this)">Save</button></td>
+  </tr>`).join("")}</table>` : `<div style="opacity:.6">No open or upcoming cabs.</div>`}
+  <p style="opacity:.5;font-size:.85rem">Number + family letter, exactly as the wall shows it (T=55-59 · A=47-53 · C=67-72 C10 · F=67-72 Ford · B=Blazer · D=64-66). Numbers are never reused — a cancelled cab's number stays burned.</p>
+  </div>
+
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
   <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
@@ -1065,6 +1082,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles) => `<!doctype html>
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
+  function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
 </script></body></html>`;
 
 // REPORTS v1 (file 12 / Q26, block 19) — the first slice of the reporting
@@ -1104,7 +1122,7 @@ async function reportData(days) {
   const sinceMs = nowMs - days * 86400000;
   const lines = await db(`line?select=id,name&order=id`);
   const emps = await db(`employee?select=id,first_name,last_name,active`);
-  const builds = await db(`build?select=id,order_number,part_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
+  const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
   // Sign-off + rework moments live in the append-only event log (spec §3).
   const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
   const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
@@ -1132,7 +1150,7 @@ async function reportData(days) {
     const s = new Date(b.started_at).getTime(); const e = doneAt[b.id];
     const actual = ivs.filter((iv) => iv.line === b.line_id).reduce((sum, iv) => sum + overlapHrs(iv, s, e), 0);
     const std = stdOf[b.id] || 0;
-    return { order: b.order_number, part: b.part_number || "?", line: lineName[b.line_id] || "?",
+    return { order: b.order_number, cab: b.cab_number || "", part: b.part_number || "?", line: lineName[b.line_id] || "?",
       std, actual, varPct: std ? Math.round(((actual - std) / std) * 100) : null,
       started: phxHM(b.started_at), completed: phxHM(new Date(e).toISOString()) };
   });
@@ -1147,7 +1165,7 @@ async function reportData(days) {
     varPct: p.std ? Math.round(((p.actual - p.std) / p.std) * 100) : null }));
   // Open cabs aging (suite 1) — plain calendar days; the board's color math
   // stays the single source of pace truth, this is just "how long open."
-  const openCabs = live.map((b) => ({ order: b.order_number, part: b.part_number || "?",
+  const openCabs = live.map((b) => ({ order: b.order_number, cab: b.cab_number || "", part: b.part_number || "?",
     line: lineName[b.line_id] || "?", state: b.state.replace(/_/g, " "),
     daysOpen: b.started_at ? Math.round((nowMs - new Date(b.started_at).getTime()) / 86400000 * 10) / 10 : null,
     doneMh: Math.round((doneMhOf[b.id] || 0) * 10) / 10, stdMh: Math.round((stdOf[b.id] || 0) * 10) / 10,
@@ -1206,15 +1224,15 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=cabs&days=${d.days}">⬇ CSV</a>
     <h3>Signed-off cabs — the detail</h3>
-    ${d.cabs.length ? `<table><tr><th>Order</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th></tr>
-      ${d.cabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.part}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td>
+    ${d.cabs.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th></tr>
+      ${d.cabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td>
         <td class="num ${c.varPct === null ? "" : c.varPct > 25 ? "way" : c.varPct > 0 ? "over" : "under"}">${c.varPct === null ? "—" : (c.varPct > 0 ? "+" : "") + c.varPct + "%"}</td><td style="opacity:.7">${c.completed}</td></tr>`).join("")}</table>`
     : `<div style="opacity:.6">Nothing in this period.</div>`}
   </div>
   <div class="lane">
     <h3>Open cabs — aging</h3>
-    ${d.openCabs.length ? `<table><tr><th>Order</th><th>Product</th><th>Line</th><th>State</th><th class="num">Days open</th><th class="num">Done / std</th><th>Promised</th></tr>
-      ${d.openCabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.part}</td><td>${c.line}</td><td>${c.state}</td>
+    ${d.openCabs.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th>State</th><th class="num">Days open</th><th class="num">Done / std</th><th>Promised</th></tr>
+      ${d.openCabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td>${c.state}</td>
         <td class="num">${c.daysOpen === null ? "—" : c.daysOpen}</td><td class="num">${c.doneMh} / ${c.stdMh} h</td><td style="opacity:.7">${c.promised}</td></tr>`).join("")}</table>`
     : `<div style="opacity:.6">No open cabs.</div>`}
   </div>
@@ -1244,8 +1262,8 @@ function reportCsv(which, d) {
   if (which === "labor")
     return row(["employee", "hours", "days_present"]) +
       d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
-  return row(["order", "product", "line", "standard_hours", "actual_hours", "variance_pct", "started", "signed_off"]) +
-    d.cabs.map((c) => row([c.order, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
+  return row(["order", "cab_number", "product", "line", "standard_hours", "actual_hours", "variance_pct", "started", "signed_off"]) +
+    d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
 }
 
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
@@ -1344,7 +1362,7 @@ http.createServer(async (req, res) => {
         const [lastW] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
         const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
         const linesW = await db(`line?select=id,name&enabled=is.true&order=id`);
-        const buildsW = await db(`build?select=id,order_number,part_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
+        const buildsW = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
           awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
@@ -1648,7 +1666,7 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
       const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=200");
@@ -1944,7 +1962,19 @@ http.createServer(async (req, res) => {
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = tplId ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
       const toggles = await db("feature_toggle?select=key,enabled&order=key");
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles));
+      // Q110: the cab-number editor works the OPEN cabs (upcoming through
+      // rework) — signed-off history is corrected by support, not this page.
+      const cabRows = await db("build?select=id,order_number,part_number,cab_number,state&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at");
+      // "Next up" per family = highest number seen per letter + 1, computed
+      // across ALL cabs ever (finished ones count — the counter never rewinds).
+      const allNums = await db("build?select=cab_number&cab_number=not.is.null");
+      const hi = {};
+      for (const r of allNums) {
+        const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/);
+        if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1]));
+      }
+      const nextUp = ["T", "A", "C", "F", "B", "D"].filter((f) => hi[f]).map((f) => `${hi[f] + 1}${f}`).join(" · ");
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -1975,6 +2005,28 @@ http.createServer(async (req, res) => {
         }
       }
       logEvent("employee.updated", adminId, { employee_id: id, changes: patch });
+      return json(200, { ok: true });
+    }
+
+    // CAB NUMBER (Q110): set/correct a cab's wall number. Admin only. The
+    // format is checked (digits + 1-2 letters), duplicates are refused
+    // (numbers are never shared or reused), and every set is audited with
+    // the old and new value. Blank = clear (rare; audited the same way).
+    if (url.pathname === "/api/admin/cab-number" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { build_id, cab_number } = await body(req);
+      if (!build_id) return json(400, { ok: false, error: "Missing cab" });
+      const clean = String(cab_number || "").trim().toUpperCase();
+      if (clean && !/^\d{1,5}[A-Z]{1,2}$/.test(clean))
+        return json(400, { ok: false, error: "Format is number + letter, like 244T" });
+      const [b] = await db(`build?select=id,order_number,cab_number&id=eq.${build_id}`);
+      if (!b) return json(404, { ok: false, error: "Cab not found" });
+      if (clean) {
+        const dupes = await db(`build?select=id&cab_number=eq.${encodeURIComponent(clean)}&id=neq.${build_id}`);
+        if (dupes.length) return json(400, { ok: false, error: `Cab #${clean} is already taken — numbers are never shared` });
+      }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ cab_number: clean || null }) });
+      logEvent("build.cab_number_set", adminId, { build_id, order_number: b.order_number, from: b.cab_number || null, to: clean || null });
       return json(200, { ok: true });
     }
 
