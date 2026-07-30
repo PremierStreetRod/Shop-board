@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-30 — build block 24: Q111 part 1 — SHOP TIME + TIMECARDS live (server.js v24 + migration 0013)
+
+**The Monday-morning-meeting problem is solved and payroll has its first report — E2E-proven through the real flow the same day the decision was locked.**
+
+- **Shipped:** "Shop time" work area (line 10, warehouse pattern — paid from the first tap, invisible to the TV, structurally unable to charge any cab; covers meetings, cleanup, and the owner-rep's expansion: in-house fabrication as a visible NON-BILLABLE bucket) · Shop time button on the clock-in screen with plain-language subtitle · one-tap SWITCH straight from the clock screen (meeting ends → tap your line; the clock screen finally has the switch control the cab screen already had) · Shop time joins the cab screen's switch picker · TIMECARDS lane on /reports + CSV (per person per Phoenix day: first in, last out, paid hrs, Shop-time column, notes with auto-closed flags + non-routine reasons) · "Sick" clock-out reason (migration 0013) · v23.1 fix: await serviceWorker.ready before subscribing (the first-tap race from block 23's E2E).
+- **E2E live, the real floor flow:** Zz woken as Production/lines{1} → clocked in via Shop time → header read "ON THE CLOCK · Shop time", Sick button present, switch section offered Line 1 and correctly did NOT offer Shop time → one-tap switch to Line 1 → cab screen (TEST-23701) with Shop time in the picker → switch back to Shop time → clocked out Sick → Timecards lane rendered the day's row ("10:17 in · 10:18 out · Sick") AND reconstructed the whole test week with auto-closed flags from history; CSV matched → Zz retired through the app's own audited admin API (PIN reset + role/dept/active in one patch — cleaner than SQL), 17 on the grid.
+- **Field note:** automation outran the time engine once — a clock-out fired inside the switch's deliberate 1-second replay gap, leaving the switch's clock-in as the latest event. No human can tap that fast; a second clock-out cleared it. Not a bug: the deterministic-replay design behaving exactly as specified under superhuman input.
+- **Pipeline:** v24 = 165,111 units / 4018712652 · 14 pairs EXTRACTED FROM THE LIVE FILE (no retyping — the v23 lesson applied) and proven by reversal to v23's exact hash · byte-exact in the editor on the first pass · node --check clean · deploy rode out the tail of the Railway/GitHub incident.
+- **Q111 part 2 still owed, its own block:** the missed-punch correction tool (manager, audited) — it touches time-engine replay everywhere, so it gets a single-purpose pass. Required before the physical punch clock retires.
+
 ## 2026-07-30 — build block 23: NOTIFICATIONS v1 LIVE under the Q106 SANDBOX (server.js v23 + migration 0012)
 
 **The sandbox is now structural, and a real push landed on the owner-rep's desktop the same afternoon.** His reaffirmed order — "no emails, no NOTHING until we are ready to go live" — is enforced in code, not policy: every message funnels through one notify() chokepoint, and unless the Railway variable NOTIFY_LIVE is exactly "yes" (a NAMED cutover step, deliberately not an admin switch), delivery is rewritten to him alone with a stamp naming who it WOULD have reached. notification_log records true intent either way.
