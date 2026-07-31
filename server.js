@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v32, 2026-07-31: Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v33, 2026-07-31: Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -221,6 +221,16 @@ async function sweepForgottenClockOuts() {
         logEvent("afterhours.auto_end", null, { session_id: ahSweep.id, employee_id: ev.employee_id });
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
+    }
+    // Q83: "Down for today" holds auto-clear when the calendar day rolls —
+    // a hold set yesterday must not silence today's genuinely-empty line.
+    // (PHX is UTC-7 fixed, Q82; same midnight formula dayEndOf uses.)
+    const phxMidToday = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+    const staleDown = await db(`line?select=id&down_today=is.true&down_at=lt.${new Date(phxMidToday).toISOString()}`);
+    for (const ln of staleDown) {
+      await db(`line?id=eq.${ln.id}`, { method: "PATCH", body: JSON.stringify({
+        down_today: false, down_reason: null, down_by: null, down_at: null }) });
+      logEvent("line.down_cleared", null, { line_id: ln.id, cause: "day_roll" });
     }
   } catch (e) { console.error("sweeper failed (will retry):", e.message); }
 }
@@ -960,6 +970,7 @@ const boardPage = `<!doctype html>
       document.getElementById("board").innerHTML = s.lines.map(l => \`
         <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" \${l.cab && l.cab.badge ? 'style="border-style:dashed;border-color:#ff9f0a;border-left-width:8px"' : ""}>
           \${l.closed ? \`<span style="float:right;background:#3a3a3c;color:#ddd;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">CLOSED</span>\` : ""}
+          \${l.down && !l.closed ? \`<span style="float:right;background:#37485a;color:#cfe3f2;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">DOWN TODAY</span>\` : ""}
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
@@ -968,7 +979,7 @@ const boardPage = `<!doctype html>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
-          : \`<div>\${l.closed ? "Line closed" : "Idle line"}</div>\`}
+          : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today — " + l.down.reason : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
             ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\`
             : "ON DECK: — nothing queued"}</div>
@@ -1064,7 +1075,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -1159,8 +1170,18 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
-      <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}
+      <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
+      <!-- Q83: "Down for today" quick-hold — expected-idle only (no active cab,
+           not hard-closed). Down = calm slate on the TV + quiet alerts. -->
+      ${r.line.down_today
+        ? `<div style="margin:-4px 0 8px;font-size:.85rem;color:#9db4c8">Down for today — ${r.line.down_reason}
+             <button class="btn gray" style="padding:4px 10px;margin-left:8px" onclick="lineDown(${r.line.id},false,null)">Back up</button></div>`
+        : (!r.active && !r.line.manually_closed
+          ? `<div style="margin:-4px 0 8px;font-size:.85rem">
+               <select id="dr-${r.line.id}" style="padding:4px">${downReasons.map((d) => `<option>${d}</option>`).join("")}</select>
+               <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Down for today</button></div>`
+          : "")}
       ${(r.awaiting || []).map((w) => `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
@@ -1262,6 +1283,17 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       const r = await fetch("/api/line/closed", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ line_id: lineId, closed: to === true || to === "true" }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
+  // Q83: mark a line "down for today" / bring it back up.
+  async function lineDown(lineId, to, reason) {
+    try {
+      const r = await fetch("/api/line/down", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line_id: lineId, down: to === true || to === "true", reason }) });
       const out = await r.json();
       if (out.ok) return location.reload();
       document.getElementById("err").textContent = out.error || "Something went wrong";
@@ -2158,10 +2190,18 @@ http.createServer(async (req, res) => {
       // The named approver + the admins get the claim-then-confirm push
       // (Q106-sandboxed until cutover); unconfirmed sessions stay flagged
       // on the cockpit and the timecards until someone owns the claim.
-      // Q113: a manually-closed line takes no clock-ins.
-      const [lnGate] = await db(`line?select=manually_closed&id=eq.${line_id}`);
+      // Q113: a manually-closed line takes no clock-ins. Q83: also read the
+      // "down for today" hold so clocking in can RESUME the line.
+      const [lnGate] = await db(`line?select=manually_closed,down_today&id=eq.${line_id}`);
       if (lnGate && lnGate.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
+      // Q83/Q84: clocking into a line held "down for today" resumes it —
+      // working-while-held is impossible, so the hold releases itself.
+      if (lnGate && lnGate.down_today) {
+        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
+          down_today: false, down_reason: null, down_by: null, down_at: null }) });
+        logEvent("line.down_resumed", empId, { line_id, cause: "clock_in" });
+      }
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
       const hrsIn = await shopHours();
       if (isAfterHours(inAtMs, hrsIn)) {
@@ -2299,7 +2339,7 @@ http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/board-state") {
-      const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
+      const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
@@ -2375,13 +2415,13 @@ http.createServer(async (req, res) => {
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
-          return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], ondeck: deck,
+          return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
             cab: { order: w.order_number, family: familyOf[w.part_number] || "",
               done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
               day: 0, total_days: 0 } };
         }
-        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], cab: null, ondeck: deck };
+        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], cab: null, ondeck: deck };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
         // Clip this line's coverage to the cab's life (Q103-2).
@@ -2422,7 +2462,7 @@ http.createServer(async (req, res) => {
           rcolor = !frame ? "amber" : rwHrs > frame ? "red" : rwHrs > frame * 0.75 ? "amber" : "green";
           rstatus = `In extra time — ${b.rework_reason || "fixes"} · ${rwHrs.toFixed(1)} of ${frame || "—"} hrs used`;
         }
-        return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], ondeck: deck,
+        return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "",
             done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
             pct: a.total ? Math.round(100 * a.done / a.total) : 0,
@@ -2442,7 +2482,7 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
-      const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
+      const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
@@ -2505,6 +2545,8 @@ http.createServer(async (req, res) => {
       // Q113: line open/close — admins always, managers behind the switch.
       const [togLine] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
       const canCloseLines = me.role === "admin" || Boolean(togLine && togLine.enabled);
+      // Q83: the "down for today" reason list (admin-editable pick list).
+      const downReasons = (await db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false&order=sort_order`)).map((r) => r.label);
       // Q111 pt 2: the time-corrections lane — a person + a Phoenix day.
       const tcEmpSel = url.searchParams.get("tc_emp");
       const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
@@ -2521,7 +2563,7 @@ http.createServer(async (req, res) => {
       }
       const tc = { emps: tcEmps, lines: [...lines.map((l) => ({ id: l.id, name: l.name })), { id: 10, name: "Shop time" }],
         selEmp: tcEmpSel, date: tcDate, punches: tcPunches };
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -2769,6 +2811,35 @@ http.createServer(async (req, res) => {
       await freezeAndStart(b, whoId, when);
       const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
       logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
+      return json(200, { ok: true });
+    }
+
+    // Q83: "Down for today" — mark a line EXPECTED-idle (staff out / equipment
+    // / no work) so its tile goes calm-slate and alerts stay quiet. Manager +
+    // admin (the everyday quiet tool — no toggle gate like the hard Q113
+    // close). Auto-clears at day roll; auto-resumes on clock-in. Audited.
+    if (url.pathname === "/api/line/down" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { line_id, down, reason } = await body(req);
+      if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "Pick a valid line" });
+      const [lnD] = await db(`line?select=id,name&id=eq.${line_id}`);
+      if (!lnD) return json(404, { ok: false, error: "Line not found" });
+      if (down) {
+        const okReasons = await db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false`);
+        if (!reason || !okReasons.some((r) => r.label === reason))
+          return json(400, { ok: false, error: "Pick a reason" });
+        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
+          down_today: true, down_reason: reason, down_by: empId, down_at: new Date().toISOString() }) });
+        logEvent("line.down", empId, { line_id, name: lnD.name, reason });
+      } else {
+        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
+          down_today: false, down_reason: null, down_by: null, down_at: null }) });
+        logEvent("line.down_cleared", empId, { line_id, name: lnD.name, cause: "manual" });
+      }
       return json(200, { ok: true });
     }
 
