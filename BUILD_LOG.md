@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 25: BOARD & CONSOLE POLISH — the owner-rep's nine notes, live (server.js v25 + v25.1)
+
+**The board finally reads the way the owner-rep sees the shop.** All nine of his notes shipped and were E2E-proven the same morning:
+
+- **TV board:** color LEGEND (green / amber / red / idle / rework, spelled out) + the missing SIGN OUT · ON DECK on EVERY line, with an honest "— nothing queued" empty state (it had only appeared where a queue existed) · tile titles now show the cab family actually ON the line ("Line 1 — 64-66" while a 64-66 is on it; idle lines keep the capability list, his pick) · "Nobody on the clock" instead of silence · every order number is a LINK.
+- **NEW: the order detail page (/order/<number>)** — PUBLIC by owner-rep call: cab #, family, line, status, kit state with the short-note, promised/started dates, customer (see v25.1), destination, invoice note, and the full frozen step list day-by-day with ✓/⏳ marks and a progress bar. Upcoming cabs get a plain-language explainer of when their task list will exist. Unknown orders get a friendly 404.
+- **v25.1 same hour:** the first render showed "Customer: true" — customer_display turned out to be a per-cab PRIVACY FLAG, not a name. Page now shows customer_name and HONORS the flag (a false hides the name on this public page). One pair, reversal-proven.
+- **Console:** the everyday role now displays as **"Team Member"** everywhere (option value stays 'production' — the fix that doesn't break anything) · **add-a-step RENUMBERS**: adding as #7 shifts numeric 7,8,9… down and takes that spot in the running order; **retire pulls them back up** (the symmetry that stops gaps); non-numeric numbers (rework R1…) never touched; Q97 future-cabs-only untouched.
+- **E2E:** board screenshot-verified (all four tiles: titles, ON DECK states, nobody-on-clock, legend, sign-out) · /order pages for the active cab (24 post-read-back steps by day), the SHORT-kit upcoming cab ("brake brace box" note rendered), and a 404 · **the renumber round-trip proven by MD5**: 64-66 template snapshotted (24 steps), probe added at #7 → clean 1..25 with old 7 now 8 → probe retired → **template hash byte-identical to the snapshot**. Mike's numbering cannot be corrupted by this tool. Zz woken/retired clean, 17 active.
+- **Pipeline:** v25 = 173,564 / 921307737 then v25.1 = 173,552 / 92837640 · 11+1 pairs extracted from the live file, both proven by reversal · byte-exact in the editor on the first pass, twice · deploys clean (the platform incident is over).
+
 ## 2026-07-31 — decisions: Q112 AFTER-HOURS SESSIONS + Q113 SHOP-HOURS CONTROL (record only, no code yet)
 
 **The after-hours brainstorm, verified against the engine before designing.** The time machinery already handles evenings and weekends — any-hour clock-ins pay correctly, evening labor lands on the cab's actuals, and the sweeper has given after-day-end sessions their own +8h window since the risk sweep. So the owner-rep's Option B locked: an approved after-hours session IS the normal clock — same line buttons, same cab screen, same tasks.
