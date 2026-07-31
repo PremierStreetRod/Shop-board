@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v29, 2026-07-31: Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v30, 2026-07-31: Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -99,6 +99,12 @@ async function assignTempPin(empId) {
   logEvent("pin.temp_assigned", null, { employee_id: empId }); // the code itself never hits the event log
   return code;
 }
+
+// Q115 (block-30 break-pass): a shape check for ids that flow into DB
+// queries. A malformed id used to reach Postgres and throw a 500; now the
+// endpoint rejects it cleanly first. The UI never sends bad ids — this is
+// defense-in-depth for hand-crafted requests.
+const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
 
 // Signed session cookie: "employeeId.expiresMs.signature".
 // The signature (HMAC) means a phone can't forge someone else's login.
@@ -2698,6 +2704,9 @@ http.createServer(async (req, res) => {
           return json(403, { ok: false, error: "Line control is admin-only right now. An admin can share it — Features, 'Managers can open/close lines'." });
       }
       const { line_id, closed } = await body(req);
+      // Q115: a non-integer line_id used to throw a 500 in the DB query.
+      if (!Number.isInteger(Number(line_id)))
+        return json(400, { ok: false, error: "Pick a valid line" });
       const [lnC2] = await db(`line?select=id,name&id=eq.${line_id}`);
       if (!lnC2) return json(404, { ok: false, error: "Line not found" });
       await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({ manually_closed: Boolean(closed) }) });
@@ -2718,6 +2727,14 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note } = await body(req);
       if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
+      // Q115: reject malformed ids before they reach Postgres (a non-uuid id
+      // used to throw a 500). The UI only ever sends real ids.
+      if ((action === "move" || action === "void") && !isUuid(punch_id))
+        return json(400, { ok: false, error: "That punch reference isn't valid" });
+      if (action === "add" && !isUuid(employee_id))
+        return json(400, { ok: false, error: "That person reference isn't valid" });
+      if (action === "add" && !Number.isInteger(Number(line_id)))
+        return json(400, { ok: false, error: "Pick a valid line" });
       const nowP = Date.now();
       const tooOld = (ms) => meP.role !== "admin" && ms < nowP - 14 * 86400000;
       // Simulate the person's Phoenix day around `ms` with a change applied,
@@ -2933,6 +2950,9 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/admin/shop-hours" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const { open, close } = await body(req);
+      // Q115: only real numbers — {open:[7]} used to coerce through Number() and pass.
+      if (typeof open !== "number" || typeof close !== "number")
+        return json(400, { ok: false, error: "Hours need to be 24-hour numbers with open before close — like 7 and 16" });
       const o = Number(open), c = Number(close);
       if (!Number.isInteger(o) || !Number.isInteger(c) || o < 0 || o > 23 || c < 1 || c > 23 || o >= c)
         return json(400, { ok: false, error: "Hours need to be 24-hour numbers with open before close — like 7 and 16" });
