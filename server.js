@@ -1,5 +1,5 @@
-// ============================================================
-// SHOP BOARD — server.js (v28, 2026-07-31: Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+—// ============================================================
+// SHOP BOARD — server.js (v29, 2026-07-31: Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -186,7 +186,7 @@ function isAfterHours(ms, hrs = SHOP_HOURS) {
 async function sweepForgottenClockOuts() {
   if (!DB_READY) return;
   try {
-    const recent = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=400");
+    const recent = await db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=400");
     const latest = {};
     for (const ev of recent) if (!latest[ev.employee_id]) latest[ev.employee_id] = ev;
     const now = Date.now();
@@ -1051,7 +1051,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -1112,6 +1112,37 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       ${s.wrap ? `<span style="opacity:.6"> · done: "${s.wrap}"</span>` : ` <span style="color:#ffd60a">(still on the clock)</span>`}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming records that the named approval was real. Unconfirmed sessions stay flagged here and on the timecards.</div>
+  </div>` : ""}
+  ${tc ? `
+  <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
+       clock can retire. Pick a person and a Phoenix day; MOVE a punch that
+       has the wrong time, VOID one that shouldn't exist, ADD a forgotten
+       pair. Every change needs a note, is audited, and stamps the timecard. -->
+  <div class="lane" id="timecorrections"><h3>Time corrections</h3>
+    <p>
+      <select id="tc-emp">${tc.emps.map((e) => `<option value="${e.id}" ${tc.selEmp === e.id ? "selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}</select>
+      <input type="date" id="tc-date" value="${tc.date}">
+      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="tcLoad()">Load day</button>
+    </p>
+    ${tc.selEmp ? `
+      ${tc.punches.length ? `<table style="width:100%;border-collapse:collapse;font-size:.95rem">
+        <tr><th style="text-align:left;opacity:.55">Time</th><th style="text-align:left;opacity:.55">Punch</th><th style="text-align:left;opacity:.55">Line</th><th style="text-align:left;opacity:.55">Correction</th><th></th><th></th></tr>
+        ${tc.punches.map((p) => `<tr style="${p.voided ? "text-decoration:line-through;opacity:.45" : ""}">
+          <td>${p.hhmm}</td>
+          <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}</td>
+          <td>${p.lineName}</td>
+          <td style="opacity:.7">${p.voided ? "VOIDED" : p.corrected ? "corrected" : p.added ? "added" : ""}${p.note ? `: ${p.note}` : ""}</td>
+          <td>${p.voided ? "" : `<input type="time" id="tcm-${p.id}" value="${p.hhmm}" step="60"> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcMove('${p.id}'))">Move</button>`}</td>
+          <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
+        </tr>`).join("")}</table>` : `<div style="opacity:.6">No punches that day.</div>`}
+      <p style="margin-top:12px">Add a missed punch pair:
+        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+        IN <input type="time" id="tca-in" step="60"> OUT <input type="time" id="tca-out" step="60">
+        <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
+        <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
+      <p>Why: <input id="tc-note" style="min-width:280px" placeholder="required — e.g. forgot to clock out"></p>
+      <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days; older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
+    ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
   </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
@@ -1223,6 +1254,31 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
   }
+  // Q111 pt 2: the corrector's helpers. Times typed here are PHOENIX wall
+  // clock; the -07:00 suffix pins them (Arizona never shifts).
+  function tcLoad(){ const e=document.getElementById("tc-emp").value, d=document.getElementById("tc-date").value;
+    if(e&&d) location.href="/manager?tc_emp="+e+"&tc_date="+d+"#timecorrections"; }
+  function tcIso(d,t){ return d+"T"+t+":00-07:00"; }
+  async function tcPost(payload){
+    const noteEl = document.getElementById("tc-note");
+    payload.note = noteEl ? noteEl.value : "";
+    try {
+      const r = await fetch("/api/punch/correct", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const out = await r.json();
+      if (out.ok) return tcLoad();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e2) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
+  function tcMove(id){ const d=document.getElementById("tc-date").value, t=document.getElementById("tcm-"+id).value;
+    if(!t) return; tcPost({ action:"move", punch_id:id, new_at: tcIso(d,t) }); }
+  function tcVoid(id){ tcPost({ action:"void", punch_id:id }); }
+  function tcAdd(){ const d=document.getElementById("tc-date").value;
+    const i=document.getElementById("tca-in").value, o=document.getElementById("tca-out").value;
+    if(!i){ document.getElementById("err").textContent="The IN time is needed"; return; }
+    tcPost({ action:"add", employee_id: document.getElementById("tc-emp").value,
+      line_id: Number(document.getElementById("tca-line").value),
+      in_at: tcIso(d,i), out_at: o ? tcIso(d,o) : null }); }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
   async function sendBack(id, btn) {
     btn.disabled = true; btn.textContent = "Working…";
@@ -1478,6 +1534,21 @@ function workIntervals(events, nowMs) {
 // report below shares.
 const overlapHrs = (iv, a, b) => Math.max(0, (Math.min(iv.end, b) - Math.max(iv.start, a)) / 3600000);
 
+// Q111 pt 2: a correction must leave a day's punches SANE — sorted by time
+// they must alternate in/out. A span may carry IN from the previous evening
+// or run OUT past midnight, so a day may open with an out or close with an
+// in; what it may never do is show the same kind twice in a row.
+function punchesAlternate(evs) {
+  const sorted = [...evs].sort((a, b) => new Date(a.claimed_at) - new Date(b.claimed_at));
+  for (let i = 1; i < sorted.length; i++)
+    if ((sorted[i - 1].kind === "clock_in") === (sorted[i].kind === "clock_in")) return false;
+  return true;
+}
+// Phoenix midnight of a YYYY-MM-DD string, as real ms (AZ never shifts).
+const phxDayStart = (d) => Date.parse(d + "T00:00:00Z") + 7 * 3600000;
+// A punch's Phoenix wall-clock HH:MM — what the corrector's inputs speak.
+const phxHHMM = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); };
+
 async function reportData(days) {
   const nowMs = Date.now();
   const sinceMs = nowMs - days * 86400000;
@@ -1489,7 +1560,7 @@ async function reportData(days) {
   const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
   // Same windowing caveat as the board engine: fine for years at this shop's
   // event volume; revisit alongside the engine if history ever outgrows it.
-  const events = await db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at&order=claimed_at.asc&limit=10000`);
+  const events = await db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`);
   const ivs = workIntervals(events, nowMs);
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
@@ -1565,6 +1636,15 @@ async function reportData(days) {
     if (iv.line === SHOP_LINE_ID) row.shop += hrs;
   }
   for (const ev of events) {
+    // Q111 pt 2: corrected/added punches STAMP the day — no silent fixes.
+    const tAll = new Date(ev.claimed_at).getTime();
+    if (tAll >= sinceMs && tAll <= nowMs) {
+      const rowAll = tcMap[ev.employee_id + "|" + phxDate(tAll)];
+      if (rowAll) {
+        if (ev.corrected_by) rowAll.flags.add("CORRECTED" + (ev.correction_note ? ": " + ev.correction_note : ""));
+        if (ev.added_by) rowAll.flags.add("ADDED PUNCH" + (ev.correction_note ? ": " + ev.correction_note : ""));
+      }
+    }
     if (ev.kind === "clock_in") continue;
     const t = new Date(ev.claimed_at).getTime();
     if (t < sinceMs || t > nowMs) continue;
@@ -1885,7 +1965,7 @@ http.createServer(async (req, res) => {
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       if (emp.department === "Warehouse") {
         // Q109: warehouse gets its own board — the handoff INTO production.
-        const [lastW] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
         const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
         const linesW = await db(`line?select=id,name&enabled=is.true&order=id`);
         const buildsW = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
@@ -1900,7 +1980,7 @@ http.createServer(async (req, res) => {
       }
       if (emp.department !== "Production")
         return send(200, "text/html; charset=utf-8", watcherPage(emp));
-      const [last] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [last] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const clockedIn = last && last.kind === "clock_in";
       // Q111: Shop time (line 10) is disabled so it never appears in
@@ -1960,7 +2040,7 @@ http.createServer(async (req, res) => {
       const { task_id, to, claimed_at } = await body(req);
       const [t] = await db(`task?select=id,state,build_id,display_no&id=eq.${task_id}`);
       if (!t) return json(404, { ok: false, error: "Task not found" });
-      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") {
         // Q107: the ONE exception to "on the clock" — a manager/admin backing
         // a wrongly-completed step out from the cockpit. It's a correction,
@@ -1994,7 +2074,7 @@ http.createServer(async (req, res) => {
       // Double clock-in guard (risk sweep 2026-07-28): a second clock-in used
       // to silently orphan the first interval — real coverage lost. Refuse it
       // plainly instead; the reload shows the clock-out screen.
-      const [already] = await db(`clock_event?select=kind,line_id&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [already] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (already && already.kind === "clock_in") {
         const [l] = await db(`line?select=name&id=eq.${already.line_id}`);
         return json(400, { ok: false, error: `You're already on the clock${l ? " — " + l.name : ""}. Clock out first, then switch.` });
@@ -2074,7 +2154,7 @@ http.createServer(async (req, res) => {
       const [lnGateS] = await db(`line?select=manually_closed&id=eq.${line_id}`);
       if (lnGateS && lnGateS.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
-      const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       // Retry safety: if a switch died BETWEEN its two writes (out landed,
       // in didn't), the retry finds a fresh "Switched lines" out — finish
       // the job by writing just the clock-in instead of refusing.
@@ -2142,7 +2222,7 @@ http.createServer(async (req, res) => {
       const liveStarts = builds.filter((b) => b.state === "active" || b.state === "rework")
         .map((b) => new Date(b.started_at).getTime()).filter((n) => !isNaN(n));
       const windowStart = new Date((liveStarts.length ? Math.min(...liveStarts) : Date.now() - 7 * 86400000) - 86400000).toISOString();
-      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
+      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
@@ -2278,7 +2358,7 @@ http.createServer(async (req, res) => {
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
-      const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&order=claimed_at.desc&limit=200");
+      const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200");
       const latestCk = {};
       for (const ev of recentCk) if (!latestCk[ev.employee_id]) latestCk[ev.employee_id] = ev;
       const empNames = await db("employee?select=id,first_name,last_name&active=is.true");
@@ -2337,7 +2417,23 @@ http.createServer(async (req, res) => {
       // Q113: line open/close — admins always, managers behind the switch.
       const [togLine] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
       const canCloseLines = me.role === "admin" || Boolean(togLine && togLine.enabled);
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines));
+      // Q111 pt 2: the time-corrections lane — a person + a Phoenix day.
+      const tcEmpSel = url.searchParams.get("tc_emp");
+      const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
+      const tcEmps = await db(`employee?select=id,first_name,last_name&active=is.true&order=first_name`);
+      let tcPunches = [];
+      if (tcEmpSel) {
+        const d0 = phxDayStart(tcDate);
+        const rawP = await db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
+        const lnameP = {}; for (const l of lines) lnameP[l.id] = l.name;
+        tcPunches = rawP.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
+          lineName: p2.line_id === 10 ? "Shop time" : lnameP[p2.line_id] || "line " + p2.line_id,
+          reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
+          added: Boolean(p2.added_by), note: p2.correction_note || "" }));
+      }
+      const tc = { emps: tcEmps, lines: [...lines.map((l) => ({ id: l.id, name: l.name })), { id: 10, name: "Shop time" }],
+        selEmp: tcEmpSel, date: tcDate, punches: tcPunches };
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -2374,7 +2470,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/build/finish" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in")
         return json(403, { ok: false, error: "Clock in first" });
       const { build_id, note, claimed_at } = await body(req);
@@ -2407,7 +2503,7 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
       const { employee_id } = await body(req);
-      const [lastCk] = await db(`clock_event?select=kind,line_id&employee_id=eq.${employee_id}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${employee_id}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in")
         return json(400, { ok: false, error: "They're not on the clock" });
       await db("clock_event", { method: "POST", body: JSON.stringify({
@@ -2609,6 +2705,85 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Q111 pt 2 — MISSED-PUNCH CORRECTIONS. The physical punch clock can't
+    // retire until somebody can fix a forgotten punch. Managers + admins;
+    // a note is REQUIRED; every change is event-logged and stamps the
+    // timecard. Managers reach back 14 days, admins anytime. The tangle
+    // guard: a correction must leave the day's punches alternating in/out.
+    if (url.pathname === "/api/punch/correct" && req.method === "POST") {
+      const meId = readSession(req.headers.cookie);
+      if (!meId) return json(401, { ok: false, error: "Signed out" });
+      const [meP] = await db(`employee?select=role&id=eq.${meId}`);
+      if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note } = await body(req);
+      if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
+      const nowP = Date.now();
+      const tooOld = (ms) => meP.role !== "admin" && ms < nowP - 14 * 86400000;
+      // Simulate the person's Phoenix day around `ms` with a change applied,
+      // and ask: do the punches still alternate?
+      const daySane = async (empIdP, ms, mutate) => {
+        const d0 = phxDayStart(phxDate(ms));
+        const evsD = await db(`clock_event?select=id,kind,claimed_at&voided=is.false&employee_id=eq.${empIdP}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
+        return punchesAlternate(mutate(evsD));
+      };
+      if (action === "move") {
+        const [p] = await db(`clock_event?select=id,employee_id,kind,claimed_at,original_claimed_at&id=eq.${punch_id}&voided=is.false`);
+        if (!p) return json(404, { ok: false, error: "Punch not found" });
+        const toMs = new Date(new_at).getTime(), fromMs = new Date(p.claimed_at).getTime();
+        if (!Number.isFinite(toMs)) return json(400, { ok: false, error: "Bad time" });
+        if (toMs > nowP) return json(400, { ok: false, error: "Can't punch the future" });
+        if (tooOld(fromMs) || tooOld(toMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        const moved = { id: p.id, kind: p.kind, claimed_at: new Date(toMs).toISOString() };
+        let sane = await daySane(p.employee_id, toMs, (evs) => [...evs.filter((e) => e.id !== p.id), moved]);
+        if (sane && phxDate(toMs) !== phxDate(fromMs))
+          sane = await daySane(p.employee_id, fromMs, (evs) => evs.filter((e) => e.id !== p.id));
+        if (!sane) return json(400, { ok: false, error: "That would tangle the day's punches — check the times" });
+        await db(`clock_event?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({
+          claimed_at: new Date(toMs).toISOString(), original_claimed_at: p.original_claimed_at || p.claimed_at,
+          corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
+        logEvent("punch.moved", meId, { punch_id: p.id, employee_id: p.employee_id, from: p.claimed_at, to: new Date(toMs).toISOString(), note });
+        return json(200, { ok: true });
+      }
+      if (action === "void") {
+        const [p] = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=eq.${punch_id}&voided=is.false`);
+        if (!p) return json(404, { ok: false, error: "Punch not found" });
+        const atMs = new Date(p.claimed_at).getTime();
+        if (tooOld(atMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        const sane = await daySane(p.employee_id, atMs, (evs) => evs.filter((e) => e.id !== p.id));
+        if (!sane) return json(400, { ok: false, error: "Voiding that would tangle the day — fix its partner too" });
+        await db(`clock_event?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({
+          voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
+        logEvent("punch.voided", meId, { punch_id: p.id, employee_id: p.employee_id, at: p.claimed_at, note });
+        return json(200, { ok: true });
+      }
+      if (action === "add") {
+        if (!employee_id || !line_id || !in_at) return json(400, { ok: false, error: "Person, line, and the IN time are needed" });
+        const inMs = new Date(in_at).getTime(), outMs = out_at ? new Date(out_at).getTime() : null;
+        if (!Number.isFinite(inMs) || (out_at && !Number.isFinite(outMs))) return json(400, { ok: false, error: "Bad time" });
+        if (inMs > nowP || (outMs && outMs > nowP)) return json(400, { ok: false, error: "Can't punch the future" });
+        if (outMs && outMs <= inMs) return json(400, { ok: false, error: "OUT has to come after IN" });
+        if (tooOld(inMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        if (!outMs && phxDate(inMs) !== phxDate(nowP)) return json(400, { ok: false, error: "A past day needs BOTH times — an open punch only makes sense today" });
+        const fakeIn = { id: "new-in", kind: "clock_in", claimed_at: new Date(inMs).toISOString() };
+        const fakeOut = outMs ? { id: "new-out", kind: "clock_out", claimed_at: new Date(outMs).toISOString() } : null;
+        let sane = await daySane(employee_id, inMs, (evs) => [...evs, fakeIn, ...(fakeOut && phxDate(outMs) === phxDate(inMs) ? [fakeOut] : [])]);
+        if (sane && fakeOut && phxDate(outMs) !== phxDate(inMs))
+          sane = await daySane(employee_id, outMs, (evs) => [...evs, fakeOut]);
+        if (!sane) return json(400, { ok: false, error: "That would tangle the day's punches — check the times" });
+        await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id, line_id, kind: "clock_in", claimed_at: new Date(inMs).toISOString(),
+          added_by: meId, correction_note: note }) });
+        if (outMs) await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id, line_id, kind: "clock_out", reason: "Added by correction",
+          claimed_at: new Date(outMs).toISOString(), added_by: meId, correction_note: note }) });
+        logEvent("punch.added", meId, { employee_id, line_id, in_at: new Date(inMs).toISOString(),
+          out_at: outMs ? new Date(outMs).toISOString() : null, note });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+
     // Q112 claim-then-confirm: the named approver (or any manager/admin)
     // owns an after-hours claim with one tap. Until then the session wears
     // its UNCONFIRMED flag on the cockpit and the timecards.
@@ -2728,7 +2903,7 @@ self.addEventListener("notificationclick", (e) => {
       // Deactivating someone still ON the clock used to leave their interval
       // open forever (risk sweep) — close it at the moment of deactivation.
       if (active === false) {
-        const [lastCk] = await db(`clock_event?select=kind,line_id&employee_id=eq.${id}&order=claimed_at.desc&limit=1`);
+        const [lastCk] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${id}&order=claimed_at.desc&limit=1`);
         if (lastCk && lastCk.kind === "clock_in") {
           await db("clock_event", { method: "POST", body: JSON.stringify({
             employee_id: id, line_id: lastCk.line_id, kind: "clock_out_auto",
@@ -2879,7 +3054,7 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/photo/upload" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
       const build_id = url.searchParams.get("build_id");
       const ctype = String(req.headers["content-type"] || "");
@@ -2917,7 +3092,7 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/task/note" && req.method === "POST") {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [lastCk] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
       const { task_id, note, claimed_at } = await body(req);
       if (!task_id || !note || !String(note).trim()) return json(400, { ok: false, error: "Write the note first" });
