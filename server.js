@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v30, 2026-07-31: Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v31, 2026-07-31: Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -1335,6 +1335,9 @@ const TOGGLE_INFO = {
   // Q113 (owner-rep): line open/close is manual control worth having — admins
   // always; this switch decides whether the manager role gets it too.
   manager_line_control: ["Managers can open/close lines", "Let the manager role close a line for the day and reopen it. OFF = admins only."],
+  // Q116: the pace early-warning monitor. OFF pauses the whole patrol;
+  // delivery is ALSO gated by the Q106 sandbox until cutover regardless.
+  pace_warnings: ["Pace early-warning pushes", "Push the moment a cab crosses into red (needs help). Sandboxed to the owner-rep until cutover."],
 };
 const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1874,6 +1877,42 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
 // The warehouse crew, resolved fresh each event (roster changes stick).
 const warehouseIds = async () =>
   (await db("employee?select=id&department=eq.Warehouse&active=is.true")).map((e) => e.id);
+
+// Q116: PACE EARLY-WARNING. Turns the board's own red into a push so the
+// owner-rep hears about a cab that needs help without watching the TV.
+// EDGE-TRIGGERED: one push when a cab CROSSES into red, nothing while it
+// stays red, and it re-arms once the cab recovers (build.pace_alert_color
+// remembers the last colour seen, so it survives a redeploy). Reuses the
+// board engine's EXACT math via an internal read of /api/board-state — the
+// alert fires precisely when the TV would show red, zero duplicate math.
+// The Q106 sandbox still gates delivery: until cutover every push reroutes
+// to the owner-rep with the [TEST] stamp.
+async function pacePatrol() {
+  try {
+    if (!DB_READY) return;
+    const [tog] = await db(`feature_toggle?select=enabled&key=eq.pace_warnings`);
+    if (tog && tog.enabled === false) return;             // monitor paused by admin
+    const s = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
+    if (!s || !s.lines) return;
+    const active = await db(`build?select=id,order_number,pace_alert_color&state=in.(active,rework)`);
+    const idOf = {}, prevOf = {};
+    for (const b of active) { idOf[b.order_number] = b.id; prevOf[b.order_number] = b.pace_alert_color; }
+    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    for (const l of s.lines) {
+      const c = l.cab;
+      if (!c || !c.order || !(c.order in idOf)) continue;
+      const cur = c.color, prev = prevOf[c.order];
+      if (cur === "red" && prev !== "red") {              // crossed INTO red -> one push
+        await notify("pace.warn", recips, `${l.name}: ${c.order} needs help`,
+          `${c.status}${c.promised ? ` · promised ${c.promised}` : ""}.`, "/board");
+        logEvent("pace.warn", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, status: c.status });
+      }
+      if (cur !== prev)                                    // remember it either way
+        await db(`build?id=eq.${idOf[c.order]}`, { method: "PATCH", body: JSON.stringify({ pace_alert_color: cur }) });
+    }
+  } catch (e) { console.error("pace patrol failed (will retry):", e.message); }
+}
+setInterval(pacePatrol, 10 * 60 * 1000);   // Q116: steady patrol, same cadence as the day-end sweeper
 
 // ---------- the server ----------
 http.createServer(async (req, res) => {
@@ -2963,6 +3002,16 @@ self.addEventListener("notificationclick", (e) => {
       SHOP_HOURS.loadedAt = 0; // next read refreshes immediately
       logEvent("shop.hours_set", adminId, { open: o, close: c });
       return json(200, { ok: true });
+    }
+
+    // Q116: run the pace patrol on demand (admin) — powers a "check now"
+    // button and the block-31 E2E. Same edge-triggered logic as the timer.
+    if (url.pathname === "/api/admin/pace-run" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      await pacePatrol();
+      const reds = await db(`build?select=order_number&state=in.(active,rework)&pace_alert_color=eq.red`);
+      logEvent("pace.run", adminId, { reds: reds.length });
+      return json(200, { ok: true, red_now: reds.map((r) => r.order_number) });
     }
 
     // CAB NUMBER (Q110): set/correct a cab's wall number. Admin only. The
