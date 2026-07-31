@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v31, 2026-07-31: Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v32, 2026-07-31: Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -977,7 +977,14 @@ const boardPage = `<!doctype html>
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
     }catch(e){ /* board never crashes; next poll retries */ }
   }
-  refresh(); setInterval(refresh, 30000);
+  refresh();
+  // Q117: live updates over server-sent events — the server bumps this screen
+  // the instant an event lands, so the board re-renders within ~3s instead of
+  // on the old 30s timer. EventSource auto-reconnects (retry:3000); the slow
+  // poll below stays as a fallback and also catches pure time-drift in colours.
+  try { new EventSource("/api/board-stream").addEventListener("board", refresh); }
+  catch (e) { /* no EventSource -> the fallback poll still covers it */ }
+  setInterval(refresh, 30000);
   // TV hygiene (risk sweep 2026-07-28): browsers running one tab for weeks
   // leak — a full reload every 6 hours keeps the board fresh forever.
   setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
@@ -1914,6 +1921,27 @@ async function pacePatrol() {
 }
 setInterval(pacePatrol, 10 * 60 * 1000);   // Q116: steady patrol, same cadence as the day-end sweeper
 
+// Q117: LIVE BOARD via server-sent events. Screens hold an EventSource; this
+// tick watches ONE cheap signal — the newest event_log id — and bumps every
+// connected screen the instant it moves (every board-affecting mutation
+// writes an event_log row, so this catches them all). The client then
+// re-fetches board-state and re-renders. When nobody's watching (no clients)
+// it does zero work; pure time-drift in pace colours rides the 30s fallback.
+const sseClients = new Set();
+let lastEventId = null;
+async function boardTick() {
+  if (!DB_READY || sseClients.size === 0) return;
+  try {
+    const [ev] = await db(`event_log?select=id&order=id.desc&limit=1`);   // index read on the pk
+    const sig = ev ? ev.id : 0;
+    if (sig !== lastEventId) {
+      lastEventId = sig;
+      for (const res of sseClients) { try { res.write(`event: board\ndata: ${sig}\n\n`); } catch (e) {} }
+    }
+  } catch (e) { /* next tick retries */ }
+}
+setInterval(boardTick, 3000);
+
 // ---------- the server ----------
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -2255,6 +2283,21 @@ http.createServer(async (req, res) => {
     //     green < 1 · amber 1–4 · red > 4 (½ day). Ahead is just green.
     //   DAY COUNTER (Q57): clock-driven — ceil(covered WALL hours ÷ 8);
     //     day boundaries float per cab, a mid-day start wastes nothing.
+    // Q117: the live-board stream. Held open per screen; boardTick() writes a
+    // bump when a new event lands and the client re-fetches. A 25s keepalive
+    // comment survives idle-proxy timeouts; retry:3000 tells EventSource to
+    // auto-reconnect after a drop. Keys never leave the server.
+    if (url.pathname === "/api/board-stream") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+        "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+      res.write("retry: 3000\n\n");
+      res.write("event: board\ndata: hello\n\n");   // nudge an initial render
+      sseClients.add(res);
+      const ka = setInterval(() => { try { res.write(": ka\n\n"); } catch (e) {} }, 25000);
+      req.on("close", () => { clearInterval(ka); sseClients.delete(res); });
+      return;   // keep the connection OPEN — never res.end()
+    }
+
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
