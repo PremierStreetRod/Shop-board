@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v25, 2026-07-31: BOARD & CONSOLE POLISH, the owner-rep's nine notes — TV board gains a color legend + sign-out, ON DECK on every line (with an honest empty state), tile titles show the cab family actually on the line, "Nobody on the clock" instead of silence, and every order number links to a PUBLIC order-detail page (/order/<number>). Console: the everyday role displays as "Team Member" (stored value unchanged), and adding a step AS #7 now renumbers 7,8,9… down — with the retire side pulling them back up. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v26, 2026-07-31: Q112 AFTER-HOURS SESSIONS — outside shop hours (before 7, after 4, weekends) the clock-in screen collects its governance by itself: WHO approved (roster grid), WHY (pick list), and the one-line plan; the SERVER enforces all three. Claim-then-confirm: the named approver + admins get an instant push (Q106-sandboxed) and a cockpit lane holds unconfirmed sessions until someone owns them. Clock-out requires the wrap-up note. Timecard rows wear the AFTER HOURS flag with reason, approver, and confirmation state. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -141,6 +141,16 @@ const SWEEP_GRACE_MS = 4 * 60 * 60 * 1000; // only close 4+ hrs past day end —
 function dayEndOf(ms) {
   const phxMidnight = Math.floor((ms - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
   return phxMidnight + DAY_END_HOUR_PHX * 3600000;
+}
+// Q112: the shop day starts at 7 (Q113 turns both hours into admin
+// settings later). Before open, after close, or a weekend = AFTER HOURS:
+// the clock still works exactly like a normal day — it just has to carry
+// its governance (who approved it, why, and the plan).
+const DAY_START_HOUR_PHX = 7;
+function isAfterHours(ms) {
+  const phx = new Date(ms - PHX_OFFSET_MS);
+  const dow = phx.getUTCDay(), hr = phx.getUTCHours();
+  return dow === 0 || dow === 6 || hr < DAY_START_HOUR_PHX || hr >= DAY_END_HOUR_PHX;
 }
 // Close every interval still open long past its day end. Runs at boot (catches
 // anything that happened while the server was down) and every 10 minutes.
@@ -331,7 +341,7 @@ const loginPage = (employees) => `<!doctype html>
 // Q90: your USUAL lines are the big one-tap buttons; other lines sit below.
 // Clock-out asks WHY from the admin-managed reason list (Q77).
 // `state` = { clockedIn: bool, lineName } derived from the latest clock event.
-const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype html>
+const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
@@ -357,8 +367,27 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
     </div>` : ""}
   </div>
 
+  <!-- Q112: AFTER HOURS — same clock, plus its governance. This panel only
+       exists outside shop hours; a line tap opens it instead of clocking
+       straight in. Three quick things, then a completely normal session. -->
+  ${ah.now && !state.clockedIn ? `
+  <div id="ahp" style="display:none;background:var(--card);border:1px solid #7a5900;border-radius:14px;padding:16px;margin-top:14px">
+    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Three quick things:</p>
+    <p class="msg" style="margin-top:10px">Who approved it?</p>
+    <div class="grid">${ah.approvers.map((a) => `<button class="name ahap" data-appr="${a.id}" style="opacity:.75">${a.name}</button>`).join("")}</div>
+    <p class="msg" style="margin-top:10px">What's it for?</p>
+    <div class="grid">${ah.reasons.map((r) => `<button class="name ahre" data-ahreason="${r}" style="opacity:.75">${r}</button>`).join("")}</div>
+    <input id="ahplan" placeholder="What are you here to get done?" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">
+    <p style="text-align:center;margin-top:12px">
+      <button class="name" id="ahgo" style="display:inline-block;background:#1d5a2d">Clock in — after hours</button>
+      <button class="back" id="ahback" style="margin-left:12px">cancel</button>
+    </p>
+  </div>` : ""}
+
   <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
+    ${ah.open ? `<p class="msg" style="color:#ffd60a">AFTER-HOURS wrap-up — one line on what got done (required):</p>
+    <input id="wrapnote" placeholder="What did you get done?" style="width:100%;margin:6px 0 12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">` : ""}
     <p class="msg">Clocking out — what kind?</p>
     <div class="grid">
       ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
@@ -388,11 +417,31 @@ const homePage = (emp, state, usualLines, otherLines, reasons) => `<!doctype htm
       (m) => { err.textContent = m; });
     if(out.ok) location.reload(); else err.textContent = out.error||"Something went wrong";
   }
+  // Q112: outside shop hours a line tap opens the governance panel first.
+  const AH = ${ah.now && !state.clockedIn ? "true" : "false"};
+  let ahLine = 0, ahAppr = "", ahReason = "";
   document.getElementById("in").addEventListener("click",(e)=>{
-    const b=e.target.closest("[data-line]"); if(b) act("/api/clock/in",{line_id:Number(b.dataset.line)});
+    const b=e.target.closest("[data-line]"); if(!b) return;
+    if (AH) { ahLine = Number(b.dataset.line);
+      document.getElementById("ahline").textContent = ahLine === 10 ? "Shop time" : "clocking into a line";
+      document.getElementById("in").style.display = "none";
+      document.getElementById("ahp").style.display = "block"; return; }
+    act("/api/clock/in",{line_id:Number(b.dataset.line)});
+  });
+  const ahp = document.getElementById("ahp");
+  if (ahp) ahp.addEventListener("click",(e)=>{
+    const a=e.target.closest(".ahap"); if(a){ ahAppr=a.dataset.appr;
+      ahp.querySelectorAll(".ahap").forEach(x=>{x.style.opacity=".75";x.style.outline="none";});
+      a.style.opacity="1"; a.style.outline="2px solid #30d158"; }
+    const r=e.target.closest(".ahre"); if(r){ ahReason=r.dataset.ahreason;
+      ahp.querySelectorAll(".ahre").forEach(x=>{x.style.opacity=".75";x.style.outline="none";});
+      r.style.opacity="1"; r.style.outline="2px solid #30d158"; }
+    if (e.target.id==="ahback"){ ahp.style.display="none"; document.getElementById("in").style.display="block"; }
+    if (e.target.id==="ahgo") act("/api/clock/in",{line_id:ahLine, approved_by:ahAppr, ah_reason:ahReason, ah_plan:document.getElementById("ahplan").value});
   });
   document.getElementById("out").addEventListener("click",(e)=>{
-    const b=e.target.closest("[data-reason]"); if(b) act("/api/clock/out",{reason:b.dataset.reason});
+    const b=e.target.closest("[data-reason]"); if(b){ const w=document.getElementById("wrapnote");
+      act("/api/clock/out",{reason:b.dataset.reason, wrap_note: w ? w.value : undefined}); }
     const s=e.target.closest("[data-switch]"); if(s) act("/api/clock/switch",{line_id:Number(s.dataset.switch)});
   });
 </script></body></html>`;
@@ -914,7 +963,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -965,6 +1014,16 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${recentDone.map((t) => `<div class="qrow">ORDER ${t.order_number} · step ${t.display_no} ${t.name}
       <span style="opacity:.6">— by ${t.who} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
+  </div>` : ""}
+  ${afterHours.length ? `
+  <!-- Q112: after-hours sessions awaiting a confirm — the other half of
+       claim-then-confirm. One tap says "yes, I really approved that." -->
+  <div class="lane" style="border-color:#7a5900"><h3>After hours — needs a confirm</h3>
+    ${afterHours.map((s) => `<div class="qrow">${s.who} · ${s.lineName} · ${s.when}
+      <span style="opacity:.7">— ${s.reason} · says ${s.appr} approved · "${s.plan}"</span>
+      ${s.wrap ? `<span style="opacity:.6"> · done: "${s.wrap}"</span>` : ` <span style="color:#ffd60a">(still on the clock)</span>`}
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm</button></div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">Confirming records that the named approval was real. Unconfirmed sessions stay flagged here and on the timecards.</div>
   </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
@@ -1049,6 +1108,19 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Clock out";
+  }
+  // Q112: one tap owns an after-hours approval claim.
+  async function confirmAh(id, btn) {
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/api/afterhours/confirm", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: id }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Confirm";
   }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
   async function sendBack(id, btn) {
@@ -1358,6 +1430,15 @@ async function reportData(days) {
     const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
     if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
     if (ev.reason && !["End of shift", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
+  }
+  // Q112: after-hours sessions stamp their timecard rows — the reason, the
+  // claimed approver, and whether anyone has CONFIRMED the claim yet.
+  const ahSess = await db(`after_hours_session?select=employee_id,reason,approved_by,confirmed_by,started_at&started_at=gte.${new Date(sinceMs).toISOString()}`);
+  for (const sA of ahSess) {
+    const row = tcMap[sA.employee_id + "|" + phxDate(new Date(sA.started_at).getTime())];
+    if (!row) continue;
+    const apA = emps.find((e) => e.id === sA.approved_by);
+    row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"}${sA.confirmed_by ? " ✓" : " (UNCONFIRMED)"}`);
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
@@ -1702,8 +1783,19 @@ http.createServer(async (req, res) => {
       }
       const usual = allLines.filter((l) => (emp.lines || []).includes(l.id));
       const other = allLines.filter((l) => !(emp.lines || []).includes(l.id));
+      // Q112: outside shop hours the clock-in screen collects governance,
+      // and an open after-hours session makes the wrap-up note required.
+      const ahNow = isAfterHours(Date.now());
+      const ahApprovers = ahNow && !clockedIn
+        ? (await db(`employee?select=id,first_name,last_name&active=is.true&role=in.(manager,admin)&order=first_name`))
+            .map((a) => ({ id: a.id, name: `${a.first_name} ${a.last_name}` })) : [];
+      const ahReasonRows = ahNow && !clockedIn
+        ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
+      const [openAh] = clockedIn
+        ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
       return send(200, "text/html; charset=utf-8",
-        homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons));
+        homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
+          { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) }));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
@@ -1744,7 +1836,7 @@ http.createServer(async (req, res) => {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { line_id, claimed_at } = await body(req);
+      const { line_id, claimed_at, approved_by, ah_reason, ah_plan } = await body(req);
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
       // Double clock-in guard (risk sweep 2026-07-28): a second clock-in used
       // to silently orphan the first interval — real coverage lost. Refuse it
@@ -1753,6 +1845,30 @@ http.createServer(async (req, res) => {
       if (already && already.kind === "clock_in") {
         const [l] = await db(`line?select=name&id=eq.${already.line_id}`);
         return json(400, { ok: false, error: `You're already on the clock${l ? " — " + l.name : ""}. Clock out first, then switch.` });
+      }
+      // Q112: an after-hours clock-in must carry its governance — who
+      // approved it, the reason, and the one-line plan. The screen collects
+      // it and the SERVER enforces it, so the record can never be skipped.
+      // The named approver + the admins get the claim-then-confirm push
+      // (Q106-sandboxed until cutover); unconfirmed sessions stay flagged
+      // on the cockpit and the timecards until someone owns the claim.
+      const inAtMs = new Date(claimed_at || Date.now()).getTime();
+      if (isAfterHours(inAtMs)) {
+        if (!approved_by || !ah_reason || !String(ah_plan || "").trim())
+          return json(400, { ok: false, error: "After hours needs three things: who approved it, what it's for, and what you're here to do" });
+        const [appr] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
+        if (!appr || (appr.role !== "manager" && appr.role !== "admin"))
+          return json(400, { ok: false, error: "The approver has to be a manager, admin or owner" });
+        const [me2] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
+        const [lnA] = await db(`line?select=name&id=eq.${line_id}`);
+        await db("after_hours_session", { method: "POST", body: JSON.stringify({
+          employee_id: empId, line_id, approved_by, reason: String(ah_reason),
+          plan: String(ah_plan).trim(), started_at: new Date(inAtMs).toISOString() }) });
+        logEvent("afterhours.start", empId, { line_id, approved_by, reason: ah_reason, plan: String(ah_plan).trim() });
+        const adminsA = await db(`employee?select=id&active=is.true&role=eq.admin`);
+        notify("afterhours.claimed", [...new Set([approved_by, ...adminsA.map((a) => a.id)])],
+          `After hours: ${me2 ? me2.first_name + " " + ((me2.last_name || "")[0] || "") + "." : "someone"} clocked in`,
+          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved. Plan: ${String(ah_plan).trim()}. Confirm from the cockpit.`, "/manager");
       }
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
@@ -1765,7 +1881,17 @@ http.createServer(async (req, res) => {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { reason, claimed_at } = await body(req);
+      const { reason, claimed_at, wrap_note } = await body(req);
+      // Q112: an open after-hours session can't close without its wrap-up —
+      // one line on what got done (photos ride the normal task-photo flow).
+      const [openAhOut] = await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
+      if (openAhOut) {
+        if (!String(wrap_note || "").trim())
+          return json(400, { ok: false, error: "After-hours wrap-up: one line on what got done, then clock out" });
+        await db(`after_hours_session?id=eq.${openAhOut.id}`, { method: "PATCH", body: JSON.stringify({
+          ended_at: claimed_at || new Date().toISOString(), wrap_note: String(wrap_note).trim() }) });
+        logEvent("afterhours.end", empId, { session_id: openAhOut.id, wrap_note: String(wrap_note).trim() });
+      }
       const kind = reason === "Lunch" ? "clock_out_lunch"
         : reason === "End of shift" ? "clock_out_shift" : "clock_out_early";
       await db("clock_event", { method: "POST", body: JSON.stringify({
@@ -2028,7 +2154,14 @@ http.createServer(async (req, res) => {
       // Reports link only if the admin has shared the page (Q65 toggle,
       // owner-rep 2026-07-29: reports are admin work by default).
       const [repTog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled)));
+      // Q112: unconfirmed after-hours sessions surface until someone owns them.
+      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at&confirmed_by=is.null&order=started_at.desc&limit=12`);
+      const phxDT = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
+      const afterHours = ahRows.map((s) => ({ id: s.id,
+        who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "?",
+        lineName: (lines.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
+        when: phxDT(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note }));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -2268,6 +2401,25 @@ http.createServer(async (req, res) => {
       await freezeAndStart(b, whoId, when);
       const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
       logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
+      return json(200, { ok: true });
+    }
+
+    // Q112 claim-then-confirm: the named approver (or any manager/admin)
+    // owns an after-hours claim with one tap. Until then the session wears
+    // its UNCONFIRMED flag on the cockpit and the timecards.
+    if (url.pathname === "/api/afterhours/confirm" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { session_id } = await body(req);
+      const [sAh] = await db(`after_hours_session?select=id,confirmed_by&id=eq.${session_id}`);
+      if (!sAh) return json(404, { ok: false, error: "Session not found" });
+      if (sAh.confirmed_by) return json(400, { ok: false, error: "Already confirmed" });
+      await db(`after_hours_session?id=eq.${session_id}`, { method: "PATCH", body: JSON.stringify({
+        confirmed_by: empId, confirmed_at: new Date().toISOString() }) });
+      logEvent("afterhours.confirmed", empId, { session_id });
       return json(200, { ok: true });
     }
 
