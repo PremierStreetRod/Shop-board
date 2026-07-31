@@ -1,6 +1,46 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 28: Q114 TEMPORARY PASSCODES live — the open-onboarding hole is CLOSED (server.js v28 + migration 0016)
+
+- THE HOLE (owner-rep's catch, mid-block-27): the Q68 "first tap chooses the PIN"
+onboarding meant anyone who found shopboard.premierstreetrod.com could tap a
+never-signed-in name, pick a PIN, and be inside. Fifteen of seventeen active names
+were still open. As of this block the hole is closed IN PRODUCTION.
+- WHAT SHIPPED: /api/pin/set is GONE (404) and the sign-in pad only ever ASKS for a
+PIN. The server assigns unique 4-digit TEMP codes (scrypt-hashed for login + kept
+plain in employee.temp_pin ONLY until replaced, so the launch-day printed sheet and
+texts can be produced on the owner-rep's command — Q106 sandbox; codes never touch
+the event log). A temp-code login is parked at /change-pin (home/manager/admin all
+redirect there) until the person picks their own PIN — which may not equal the temp
+code; on success temp_pin is wiped and must_change_pin clears. Admin "Reset PIN" now
+issues a fresh temp code (shown on the button) instead of nulling the hash; a
+one-tap backfill button covers every active name without a PIN; roster shows
+outstanding codes to admins. Events: pin.temp_assigned / pin.temp_backfill /
+pin.changed / pin.reset.
+- BACKFILL RUN FOR REAL: 15 unique temp codes assigned to the 15 active no-PIN
+names, verified unique on the roster. The two who already own PINs kept them.
+- E2E (live, as Zz): /api/pin/set → 404 · login page carries no set-a-PIN path or
+"choose a 4-digit PIN" copy · reset → temp code returned · OLD pin refused · temp
+login ok + change_required:true · /home 302→/change-pin · re-using the temp code as
+the new PIN refused with the plain-English message · real change ok · temp code
+DEAD afterward (login refused), new PIN works, roster shows Zz's temp wiped ·
+the actual /change-pin pad exercised BY TAPPING (4-2-4-2 twice → landed on /home).
+- FILES: server.js v28 (203,391 chars / 1247703677, node --check clean; 17 pairs
+extracted from the live files, forward AND reversal proven — reconstruction of v27
+matched its exact hash 3841021750 before injection), 0016_temp_pins.sql (temp_pin +
+must_change_pin columns; run with in-script verification: both columns present,
+15 active names without a PIN at run time).
+- PROTOCOL NOTE (file-36 relevant): the Zz test cycle can no longer use
+/api/pin/set. New wake recipe: compute the scrypt hash LOCALLY (same algorithm:
+salt + scryptSync(pin,salt,32), stored "salt:hash") and set pin_hash directly in
+the wake SQL. Used this block; works.
+- DEFERRED TO CUTOVER (on the owner-rep's explicit command only): text each person
+their temp code (needs an SMS provider decision — the app is web-push-only today)
+and generate the printable PDF of outstanding codes. Both read from temp_pin.
+- NEXT: Q111 part 2 (missed-punch correction) unless the Coyote push lands first
+(his word: Monday/Tuesday).
+
 ## 2026-07-31 — build block 27: Q113 SHOP HOURS & LINE CONTROL live (server.js v27 + migration 0015)
 
 - WHAT SHIPPED: the 7-to-4 day stops being hardcoded — shop open/close hours are now
