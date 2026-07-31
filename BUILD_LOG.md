@@ -1,6 +1,44 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 33: Q83 "DOWN FOR TODAY" QUICK-HOLD (server.js v33 + migration 0019)
+
+- NAMING CORRECTION (honest): this was queued loosely as a "day-switch / midnight-span
+  time-engine edge case." Reading the register, Q83 is actually the decided-but-unbuilt
+  "Down for today" quick-hold. Built THAT (it IS Q83). No midnight-span change was needed —
+  the interval/timecard "dayed by its start" behaviour is already sweeper-guarded (block 26).
+- WHAT SHIPPED: one tap in the cockpit marks a line as EXPECTED idle (Staff out /
+  Equipment down / No work scheduled). Effect: the TV tile goes calm-slate ("Down for
+  today — <reason>" + a slate DOWN TODAY badge) instead of a bare "Idle line", so an
+  intentionally-empty line stops reading as a problem. AUTO-CLEARS when the calendar day
+  rolls (the day-end sweeper), and AUTO-RESUMES the instant someone clocks into the line
+  (Q84: working-while-held is impossible — the hold releases itself, logged). Manager +
+  admin (the everyday quiet tool — NO toggle gate, unlike the hard Q113 close). Reason
+  from an admin-editable pick list (Q77). Every transition audited (line.down /
+  line.down_cleared / line.down_resumed).
+- DISTINCT FROM Q113 line-close: close is HARD (refuses clock-ins/switches/starts, manual
+  reopen, "CLOSED" badge); down is SOFT (expected idle, auto-resume on clock-in, auto-clear
+  at day roll, reason-coded slate). They coexist cleanly; the cockpit only offers "Down for
+  today" on a line with no active cab that isn't hard-closed.
+- PACE MONITOR (block 31): no change needed — a down line has no active cab, so the pace
+  patrol already skips it. (Future "uncovered line" alerts should also honour down_today.)
+- FILES: server.js v33 = 233,036 / 425995571 (13 pairs, 16 occurrences, forward + reversal
+  proven; committed via find-ref dialog clicks — no stray char this time). migration 0019
+  (line.down_today/down_reason/down_by/down_at + line_down_reason pick list) run + verified
+  (4 cols, 3 reasons).
+- E2E (live, Zz admin): /api/line/down 401 signed-out (deployed + gated) · bad reason →
+  400 "Pick a reason" · marked Line 4 down (Equipment down) → 200, board-state carries
+  down:{reason}, cockpit shows the DOWN marker, line.down logged · clocked into Line 4 →
+  the hold RELEASED (board down back to null), line.down_resumed logged · day-roll
+  auto-clear proven by predicate: a hold backdated 2 days is caught by the sweeper's exact
+  stale-down query (true), while a today hold correctly persists. HONEST NOTE: the visible
+  slate TILE wasn't shown on the TV because all four test lines currently hold a cab (no
+  idle line to render the idle-branch); the board-state DATA proof + the tile being the
+  same render path as the block-27-proven CLOSED badge cover it — exercise the visible
+  slate when an idle line exists.
+- Zz retired clean; 17 names, 0 down lines, 0 closed lines. Q83 BUILT.
+- NEXT: Coyote push preempts (Mon/Tue); else more notification events / reports depth.
+
 ## 2026-07-31 — build block 32: Q117 LIVE BOARD via server-sent events (server.js v32, no migration)
 
 - WHAT SHIPPED: the TV board updates within ~2-3s of any change instead of on the
