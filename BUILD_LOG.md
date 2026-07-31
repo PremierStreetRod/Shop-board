@@ -1,6 +1,53 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 29: Q111 pt 2 MISSED-PUNCH CORRECTIONS live (server.js v29/.1/.2 + migration 0017)
+
+- WHY: the physical punch clock can't retire until a forgotten punch can be fixed.
+This was the flagged "own careful time-engine block." Owner-rep defaults used (he
+waved off the questions — stated for review): managers + admins can correct;
+corrections VISIBLE on the timecard row; managers reach back 14 days, admins anytime.
+- WHAT SHIPPED: cockpit "Time corrections" lane — pick a person + Phoenix day, see
+every punch (voided ones struck-through), MOVE a punch (time input + armed button),
+VOID one, or ADD a forgotten IN/OUT pair (OUT may be blank only for today). A note is
+REQUIRED on every change; events punch.moved / punch.voided / punch.added; the
+timecard row wears CORRECTED/ADDED PUNCH stamps with the note — nothing silent.
+- THE TANGLE GUARD: any correction must leave the day's punches alternating IN/OUT
+when sorted by time (a day may open with an OUT or close with an IN — overnight
+spans carry across midnight — but never the same kind twice adjacent). Server
+simulates the day before writing; refusals are plain English.
+- VOIDED = GONE EVERYWHERE: all 14 clock_event reads (timecards, sweeper, board
+coverage engine, on-clock checks, home state, cockpit) now filter voided=is.false.
+Moves keep original_claimed_at + corrected_by/at/note; nothing is ever deleted.
+- FILES: 0017 (six correction columns on clock_event) run + verified (6 cols);
+server.js v29 = 218,339 / 339148895 (17 pairs incl. two REPLACE-ALL pairs with
+exact-count prechecks — the harness grew a count field this block; forward AND
+reversal proven, v28 reconstruction matched exactly).
+- TWO HONEST STUMBLES, BOTH CAUGHT BY THE PROCESS: (1) a stray em-dash landed at
+position 0 of the v29 commit (keystrokes aimed at the commit dialog hit the editor
+— raw-verify caught it; v29.1 removed it; Railway never served the bad build).
+(2) the ADD action's closing punch used kind "clock_out" — the DB's check
+constraint (0001: out-kinds are _shift/_lunch/_early/_auto) refused it mid-E2E,
+leaving an orphan IN; v29.2 uses clock_out_shift; the orphan was voided through
+the corrector itself and the pair re-added cleanly.
+- E2E (live, as Zz admin): real punch pair made via the floor endpoints · corrector
+lane rendered both · note-required refusal verbatim · VOID ok (audited) · ADD pair
+refused while the orphan tangled the day (the guard fired on REAL bad data), then
+passed after the orphan was voided · MOVE 08:00→07:30 ok · MOVE past its OUT →
+tangle refusal · MOVE to 23:59 → "Can't punch the future" · timecard row read
+07:30/09:00/1.5 hrs with the full correction story in flags · cleanup voids passed
+in alternation-safe order · timecard row disappeared once all punches were voided ·
+board-state healthy throughout · corrector still shows all voided rows struck.
+- NOT EXERCISED (honest): the manager 14-day look-back refusal (needs a manager
+role; the Supabase SQL editor went blank — screen-saver quirk — so no role flip).
+It is a one-line role comparison beside proven code. Exercise it in a future block.
+- ZZ RETIRE DEVIATION: retired via the app's audited admin API (dept/role/active
+one patch, off the grid, 17 names, login refused via the active filter) — but the
+SQL editor outage means Zz's pin_hash/temp fields still hold values on the INACTIVE
+row. NEXT SESSION: run the standard null-out SQL (pin_hash, temp_pin, must_change_pin).
+- NEXT: Coyote mapping job when his push lands (Mon/Tue, preempts all); menu
+otherwise (notification events, Realtime, Q83 day switch, Stage-5 break pass).
+
 ## 2026-07-31 — build block 28: Q114 TEMPORARY PASSCODES live — the open-onboarding hole is CLOSED (server.js v28 + migration 0016)
 
 - THE HOLE (owner-rep's catch, mid-block-27): the Q68 "first tap chooses the PIN"
