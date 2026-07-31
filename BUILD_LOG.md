@@ -1,6 +1,49 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 30: STAGE-5 ADVERSARIAL BREAK-PASS on blocks 27-29 (verification block; no code shipped)
+
+- CONTEXT: mid-break-pass, Fable 5's (deliberately broad) safeguard auto-switched the
+session to another model — the break-pass IS cybersecurity work (privilege-escalation
+probes, injection fuzzing), exactly what the classifier flags. Owner-rep caught it,
+switched back to Fable 5, and asked for a verify-don't-trust sweep of anything that
+could have run under the other model BEFORE continuing. Did that first.
+- VERIFY-DON'T-TRUST SWEEP (authoritative DB read, not the chat log): shop hours still
+7/16 (2 setting rows, no dupes) · 0 lines manually_closed · manager_line_control false ·
+exactly 15 real temp codes with the same block-28 names · 0 correction columns on any
+REAL employee (block-29 punch work was Zz-only) · GitHub server.js byte-identical to
+v29.2 (218,586 / 2156037302) · last 5 commits all mine, no rogue commits. THE ONLY
+residue was on the disposable Zz test account (left active-as-admin from the fuzz, and
+it had picked up one stray temp code / changed pin_hash at some point in the switch
+window — mechanism not fully reconstructable, but isolated to the test account; NO real
+staff row affected). Cleaned by the standard retire.
+- BREAK-PASS RESULTS (all as live probes):
+  · Signed-out probes on every new endpoint (line/closed, shop-hours, temp-pins,
+    punch/correct, pin/change, admin/employee) → 401; gated GET pages redirect to /login. PASS.
+  · Privilege probes as a production/Team-Member role → every admin/manager endpoint 403
+    (line/closed, shop-hours, temp-pins, punch/correct, admin/employee); /admin redirects
+    to /home; /manager returns the 403 body. No escalation. PASS.
+  · Q114 hole re-verify → /api/pin/set 404, no set-path/choose-PIN copy in the login page. PASS.
+  · temp-pins backfill idempotency → 2nd run count 0 (no active emp has a null pin_hash). PASS.
+  · C17 lockout regression → 5 wrong PINs → "Locked for 5 minutes" then 429. PASS.
+  · Closed-line guards lnGateB (build/start) + lnGateD (kit/deliver): verified by CODE
+    IDENTITY against the deployed source — the four guards (lnGate, lnGateS, lnGateB,
+    lnGateD) are the identical db(line?select=manually_closed)+refuse pattern; lnGate &
+    lnGateS were live-proven in block 27. Not live-exercised (would need moving a test cab
+    to line 4 + closing a real line; not worth the switch-mid-mutation risk for a
+    copy-identical guard).
+- TWO INPUT-VALIDATION FINDINGS (both admin/manager-gated, no data corruption, low
+  severity — documented as Q115, fix deferred to a calmer session per owner-rep's call):
+  (1) /api/punch/correct with a NON-UUID punch_id → 500 "Server error" (the bad id
+      reaches Postgres and throws) instead of a clean 400. The UI only ever sends real
+      ids, so no user path hits it. Fix: uuid/int-shape validation before the DB call.
+  (2) /api/admin/shop-hours with a single-element array e.g. {open:[7]} coerces through
+      Number() and passes (200) — still lands on a valid integer, so cosmetic. Fix: a
+      typeof-number guard.
+- FINAL STATE (re-verified post-retire): 17 active names · 15 temp codes · 0 no-PIN holes ·
+  7/16 hours · 0 closed lines · Zz inactive/null. Everything matches the clean post-block-29
+  baseline. No code changed this block.
+
 ## 2026-07-31 — block 29 ADDENDUM: both honest gaps closed (owner-rep woke the machine)
 
 - The blank Supabase editor was exactly the recorded screen-saver quirk — owner-rep
