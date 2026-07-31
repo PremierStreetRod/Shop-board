@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v24, 2026-07-30: Q111 part 1, the PAYROLL package — "SHOP TIME" clockable work area (line 10, warehouse pattern: paid from the first tap, never charged to any cab — meetings, cleanup, in-house fabrication = the visible NON-BILLABLE bucket), switch-to-line from the clock screen, the TIMECARDS report lane + CSV for accounting, "Sick" joins the clock-out reasons (migration 0013), and the v23.1 subscribe fix (await the service worker before subscribing). See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v25, 2026-07-31: BOARD & CONSOLE POLISH, the owner-rep's nine notes — TV board gains a color legend + sign-out, ON DECK on every line (with an honest empty state), tile titles show the cab family actually on the line, "Nobody on the clock" instead of silence, and every order number links to a PUBLIC order-detail page (/order/<number>). Console: the everyday role displays as "Team Member" (stored value unchanged), and adding a step AS #7 now renumbers 7,8,9… down — with the retire side pulling them back up. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -797,6 +797,16 @@ const boardPage = `<!doctype html>
 <body>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
   <div class="board" id="board"></div>
+  <!-- Block 25 (owner-rep): the legend — every color the board can show,
+       spelled out — plus the sign-out that was missing. -->
+  <div style="position:fixed;bottom:12px;left:18px;font-size:.9rem;opacity:.75">
+    <span style="color:#30d158">■</span> on pace &nbsp;
+    <span style="color:#ffd60a">■</span> running behind &nbsp;
+    <span style="color:#ff453a">■</span> needs help &nbsp;
+    <span style="color:#8e8e93">■</span> idle line &nbsp;
+    <span style="color:#ff9f0a">▧</span> rework &nbsp;·&nbsp;
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </div>
   <div class="stamp" id="stamp"></div>
 <script>
   // Plain fetch-poll every 30 s — Realtime push replaces this in Stage 3.
@@ -808,15 +818,17 @@ const boardPage = `<!doctype html>
         <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" \${l.cab && l.cab.badge ? 'style="border-style:dashed;border-color:#ff9f0a;border-left-width:8px"' : ""}>
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
-          <h3>\${l.name}</h3>
-          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${l.cab.order} <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
+          <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
+          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER <a href="/order/\${encodeURIComponent(l.cab.order)}" style="color:inherit">\${l.cab.order}</a> <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>Idle line</div>\`}
-          \${l.ondeck ? \`<div style="opacity:.6;margin-top:8px">ON DECK: ORDER \${l.ondeck.order} · \${l.ondeck.family}</div>\` : ""}
-          <div class="techs">\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : ""}</div>
+          <div style="opacity:.6;margin-top:8px">\${l.ondeck
+            ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\`
+            : "ON DECK: — nothing queued"}</div>
+          <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
         </div>\`).join("");
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
     }catch(e){ /* board never crashes; next poll retries */ }
@@ -826,6 +838,51 @@ const boardPage = `<!doctype html>
   // leak — a full reload every 6 hours keeps the board fresh forever.
   setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
 </script></body></html>`;
+
+// ORDER DETAIL (block 25, owner-rep's board notes): tap any order number on
+// the board and see what the order IS — cab #, family, customer, promised
+// date, and the full step list with progress. PUBLIC by owner-rep call
+// (2026-07-31): whoever can see the board can look an order up. (The Q65
+// customer-names toggle governs the TV tiles, not this deliberate look-up.)
+const escH = (s) => String(s == null ? "" : s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+const orderPage = (b, family, lineName, tasks) => {
+  const real = tasks.filter((t) => !t.is_background);
+  const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
+  const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
+  const pct = totalMh ? Math.round((doneMh / totalMh) * 100) : 0;
+  const byDay = {};
+  for (const t of tasks) (byDay[t.day_no] = byDay[t.day_no] || []).push(t);
+  const mark = (st) => st === "complete" ? "✓" : st === "in_progress" ? "⏳" : "·";
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Order ${escH(b.order_number)}</title>${style}
+<style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em}</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
+  <div class="lane">
+    <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
+    <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
+    <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
+    ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
+    ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
+    ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
+    ${b.customer_display || b.customer_name ? `<div class="kv"><b>Customer</b>${escH(b.customer_display || b.customer_name)}</div>` : ""}
+    ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
+    ${b.invoice_note ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
+  </div>
+  ${tasks.length ? `<div class="lane">
+    <div style="font-weight:700;margin-bottom:6px">${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%</div>
+    <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-bottom:12px"><div style="background:#30d158;height:10px;border-radius:6px;width:${pct}%"></div></div>
+    ${Object.keys(byDay).sort((a, b2) => Number(a) - Number(b2)).map((d) => `
+      <div style="opacity:.55;font-weight:700;margin-top:10px">${Number(d) === 0 ? "REWORK / FIX" : `DAY ${escH(d)}`}</div>
+      ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)</span></div>`).join("")}`).join("")}
+  </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
+  <p style="text-align:center"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
+</div></body></html>`;
+};
 
 const shellPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1008,6 +1065,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
 // switches; data keeps computing while OFF, flips are audit-logged).
 const DEPTS = ["Production", "Admin", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "Marketing"];
 const ROLES = ["production", "manager", "admin"];
+// Block 25 (owner-rep): "production" read wrong as a ROLE next to real
+// departments ("Body Shop / production"?). The everyday role now DISPLAYS
+// as "Team Member" everywhere — the stored value stays 'production' so
+// nothing downstream breaks.
+const ROLE_LABEL = { production: "Team Member", manager: "Manager", admin: "Admin" };
 // Plain-language names for every toggle key (file 22: no jargon on screens).
 const TOGGLE_INFO = {
   tv_board: ["The TV board", "The big board on the shop TV."],
@@ -1067,7 +1129,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") =
   ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
     <td><b>${e.first_name} ${e.last_name}</b></td>
     <td><select id="d-${e.id}">${DEPTS.map((d) => `<option ${e.department === d ? "selected" : ""}>${d}</option>`).join("")}</select></td>
-    <td><select id="r-${e.id}">${ROLES.map((r) => `<option ${e.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
+    <td><select id="r-${e.id}">${ROLES.map((r) => `<option value="${r}" ${e.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
     <td><input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2"></td>
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
     <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
@@ -1741,6 +1803,18 @@ http.createServer(async (req, res) => {
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
 
+    // ORDER DETAIL (block 25) — public look-up from the board's order links.
+    if (url.pathname.startsWith("/order/")) {
+      const ord = decodeURIComponent(url.pathname.slice(7));
+      const [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
+      if (!bO) return send(404, "text/html; charset=utf-8",
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/board" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
+      const [prodO] = bO.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
+      const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
+      const tasksO = await db(`task?select=display_no,name,day_no,man_hours,state,is_background&build_id=eq.${bO.id}&order=day_no,sort_order`);
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO));
+    }
+
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
     // Board data: active cab + PACE COLOR per line, from first principles:
     //   COVERAGE (Q103-2): the cab's pace clock only runs while somebody is
@@ -2339,18 +2413,47 @@ self.addEventListener("notificationclick", (e) => {
         return json(200, { ok: true });
       }
       if (p.action === "retire") {
+        // Block 25 symmetry: retiring numeric step 7 pulls 8, 9… back UP by
+        // one, so the list stays a clean 1..N instead of growing gaps.
+        const [gone] = await db(`step_template?select=id,template_id,display_no&id=eq.${p.id}`);
         await db(`step_template?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: true }) });
+        if (gone && /^\d+$/.test(String(gone.display_no))) {
+          const gN = Number(gone.display_no);
+          const restR = await db(`step_template?select=id,display_no&template_id=eq.${gone.template_id}&retired=is.false`);
+          for (const s of restR)
+            if (/^\d+$/.test(String(s.display_no)) && Number(s.display_no) > gN)
+              await db(`step_template?id=eq.${s.id}`, { method: "PATCH", body: JSON.stringify({ display_no: String(Number(s.display_no) - 1) }) });
+        }
         logEvent("template.step_retired", adminId, { step_id: p.id });
         return json(200, { ok: true });
       }
       if (p.action === "add") {
         if (!p.name) return json(400, { ok: false, error: "A step needs a name" });
-        const [last] = await db(`step_template?select=sort_order&template_id=eq.${p.template_id}&order=sort_order.desc&limit=1`);
+        // Block 25 (owner-rep): adding a step AS #7 used to just append a
+        // second 7. Now a numeric display number INSERTS: every numeric step
+        // at or after it shifts down by one (7→8, 8→9…) and the new step
+        // takes that spot in the running order. Non-numeric numbers (rework
+        // R1…) are never touched. Q97 still applies — future cabs only.
+        const stepsA = await db(`step_template?select=id,display_no,sort_order&template_id=eq.${p.template_id}&retired=is.false&order=sort_order`);
+        const wantNo = String(p.display_no || "").trim();
+        const nA = /^\d+$/.test(wantNo) ? Number(wantNo) : null;
+        const bumped = nA === null ? null
+          : stepsA.find((s) => /^\d+$/.test(String(s.display_no)) && Number(s.display_no) >= nA);
+        let newSort = ((stepsA[stepsA.length - 1] || {}).sort_order || 0) + 1;
+        if (bumped) {
+          newSort = bumped.sort_order;
+          for (const s of stepsA) {
+            const patch = {};
+            if (s.sort_order >= newSort) patch.sort_order = s.sort_order + 1;
+            if (/^\d+$/.test(String(s.display_no)) && Number(s.display_no) >= nA) patch.display_no = String(Number(s.display_no) + 1);
+            if (Object.keys(patch).length) await db(`step_template?id=eq.${s.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+          }
+        }
         const [row] = await db("step_template", { method: "POST", body: JSON.stringify({
-          template_id: p.template_id, display_no: String(p.display_no || ""), name: String(p.name),
+          template_id: p.template_id, display_no: wantNo, name: String(p.name),
           day_no: Number(p.day_no) || 1, man_hours: Number(p.man_hours) || 0,
-          is_background: false, sort_order: ((last || {}).sort_order || 0) + 1 }) });
-        logEvent("template.step_added", adminId, { step_id: row ? row.id : null, template_id: p.template_id, name: p.name });
+          is_background: false, sort_order: newSort }) });
+        logEvent("template.step_added", adminId, { step_id: row ? row.id : null, template_id: p.template_id, name: p.name, display_no: wantNo, renumbered: Boolean(bumped) });
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown action" });
@@ -2500,4 +2603,4 @@ self.addEventListener("notificationclick", (e) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
-}).listen(PORT, () => console.log(`Shop Board v23 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"}, notifications ${NOTIFY_LIVE ? "LIVE" : "SANDBOXED (Q106)"})`));
+}).listen(PORT, () => console.log(`Shop Board v25 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"}, notifications ${NOTIFY_LIVE ? "LIVE" : "SANDBOXED (Q106)"})`));
