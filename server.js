@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v27, 2026-07-31: Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v28, 2026-07-31: Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -83,6 +83,21 @@ function checkPin(pin, stored) {
   const [salt, h] = String(stored).split(":");
   const candidate = crypto.scryptSync(String(pin), salt, 32).toString("hex");
   return crypto.timingSafeEqual(Buffer.from(h, "hex"), Buffer.from(candidate, "hex"));
+}
+
+// Q114: temporary passcodes. The server owns the hash, so the server
+// assigns the codes: unique 4 digits, stored BOTH hashed (so login just
+// works) and plain in temp_pin — the plain copy exists ONLY so the
+// launch-day printed sheet and texts can be produced when the owner-rep
+// commands it, and it is wiped the moment the person picks their own PIN.
+async function assignTempPin(empId) {
+  const taken = (await db(`employee?select=temp_pin&temp_pin=not.is.null`)).map((r) => r.temp_pin);
+  let code;
+  do { code = String(crypto.randomInt(0, 10000)).padStart(4, "0"); } while (taken.includes(code));
+  await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({
+    temp_pin: code, pin_hash: hashPin(code), must_change_pin: true }) });
+  logEvent("pin.temp_assigned", null, { employee_id: empId }); // the code itself never hits the event log
+  return code;
 }
 
 // Signed session cookie: "employeeId.expiresMs.signature".
@@ -300,8 +315,8 @@ const loginPage = (employees) => `<!doctype html>
     </div>
   </div>
 
-  <!-- SCREEN 2: the PIN pad. First-timers set a PIN (Q68); everyone
-       else enters theirs. 5 wrong tries = 5-minute lock (C17). -->
+  <!-- SCREEN 2: the PIN pad. Q114: everyone ENTERS a PIN (temp codes
+       replaced the Q68 choose-your-own). 5 wrong tries = 5-min lock (C17). -->
   <div id="pin" style="display:none">
     <button class="back" id="backBtn">&larr; not you? go back</button>
     <h2 id="pinTitle"></h2>
@@ -318,16 +333,15 @@ const loginPage = (employees) => `<!doctype html>
 <script>
   // Plain-English note: this is deliberately simple phone/kiosk JS —
   // pick a name, tap digits, submit. No framework until Stage 3.
-  let who=null, firstTime=false, entered="", stage="enter", firstPin="";
+  let who=null, entered="";
   const q=(s)=>document.querySelector(s);
   q("#who").addEventListener("click",(ev)=>{
     const b=ev.target.closest(".name"); if(!b) return;
-    who=b.dataset.id; firstTime=b.dataset.haspin!=="true";
-    stage = firstTime ? "set1" : "enter"; entered=""; firstPin="";
+    // Q114: choose-your-own onboarding is gone — every name has a PIN
+    // (real or temporary), so the pad only ever ASKS for one.
+    who=b.dataset.id; entered="";
     q("#who").style.display="none"; q("#pin").style.display="block";
-    q("#pinTitle").textContent = firstTime
-      ? "Hi "+b.dataset.name+" — choose a 4-digit PIN"
-      : "Hi "+b.dataset.name+" — enter your PIN";
+    q("#pinTitle").textContent = "Hi "+b.dataset.name+" — enter your PIN";
     paint("");
   });
   q("#backBtn").onclick=()=>{ q("#pin").style.display="none"; q("#who").style.display="block"; };
@@ -339,14 +353,6 @@ const loginPage = (employees) => `<!doctype html>
     if(v==="back"){ entered=entered.slice(0,-1); return paint(""); }
     if(v==="go"){
       if(entered.length!==4) return paint("PIN is 4 digits",true);
-      if(stage==="set1"){ firstPin=entered; entered=""; stage="set2";
-        q("#pinTitle").textContent="Type it once more to confirm"; return paint(""); }
-      if(stage==="set2"){
-        if(entered!==firstPin){ stage="set1"; entered=""; firstPin="";
-          q("#pinTitle").textContent="They didn't match — choose a 4-digit PIN";
-          return paint("Try again",true); }
-        return send("/api/pin/set",{id:who,pin:entered});
-      }
       return send("/api/login",{id:who,pin:entered});
     }
     if(entered.length<4){ entered+=v; paint(""); }
@@ -356,9 +362,57 @@ const loginPage = (employees) => `<!doctype html>
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload)});
     const out=await r.json();
-    if(out.ok){ location.href="/home"; }
+    if(out.ok){ location.href = out.change_required ? "/change-pin" : "/home"; }
     else { entered=""; paint(out.error||"Something went wrong",true); }
   }
+</script></body></html>`;
+
+// Q114: the forced first-login stop — you arrived on a temporary code,
+// you leave owning your PIN. Same pad as sign-in; two-stage confirm; the
+// server refuses the temp code itself as the new PIN.
+const changePinPage = (first) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>New PIN — Shop Board</title>${style}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2 id="pinTitle">Hi ${first} — that code was temporary. Choose YOUR 4-digit PIN</h2>
+  <div class="dots" id="dots"></div>
+  <div class="msg" id="msg"></div>
+  <div class="pinpad">
+    ${[1,2,3,4,5,6,7,8,9].map((n)=>`<button class="key" data-k="${n}">${n}</button>`).join("")}
+    <button class="key" data-k="back">&#9003;</button>
+    <button class="key" data-k="0">0</button>
+    <button class="key" data-k="go">&#10003;</button>
+  </div>
+</div>
+<script>
+  let entered="", stage="set1", firstPin="";
+  const q=(s)=>document.querySelector(s);
+  function paint(msg,isErr){ q("#dots").textContent="•".repeat(entered.length);
+    const m=q("#msg"); m.textContent=msg||""; m.className="msg"+(isErr?" err":""); }
+  q(".pinpad").addEventListener("click",async(ev)=>{
+    const k=ev.target.closest(".key"); if(!k) return;
+    const v=k.dataset.k;
+    if(v==="back"){ entered=entered.slice(0,-1); return paint(""); }
+    if(v==="go"){
+      if(entered.length!==4) return paint("PIN is 4 digits",true);
+      if(stage==="set1"){ firstPin=entered; entered=""; stage="set2";
+        q("#pinTitle").textContent="Type it once more to confirm"; return paint(""); }
+      if(entered!==firstPin){ stage="set1"; entered=""; firstPin="";
+        q("#pinTitle").textContent="They didn't match — choose YOUR 4-digit PIN";
+        return paint("Try again",true); }
+      paint("Saving…");
+      const r=await fetch("/api/pin/change",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({pin:entered})});
+      const out=await r.json();
+      if(out.ok){ location.href="/home"; }
+      else { stage="set1"; entered=""; firstPin="";
+        q("#pinTitle").textContent="Choose YOUR 4-digit PIN"; paint(out.error||"Something went wrong",true); }
+      return;
+    }
+    if(entered.length<4){ entered+=v; paint(""); }
+  });
 </script></body></html>`;
 
 // THE HOME SCREEN, v2 — clock-in / clock-out (the floor's first real tool).
@@ -1269,9 +1323,14 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <td><input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2"></td>
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
     <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
-    <td><button class="b" onclick="arm(this,()=>resetPin('${e.id}'))">${e.pin_hash ? "Reset PIN" : "No PIN yet"}</button></td>
+    <td><button class="b ${e.must_change_pin ? "grn" : ""}" onclick="arm(this,()=>resetPin('${e.id}',this))">${e.must_change_pin && e.temp_pin ? `Temp: ${e.temp_pin}` : (e.pin_hash ? "Reset PIN" : "No PIN yet")}</button></td>
   </tr>`).join("")}</table>
-  <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN lets that person choose a new one at their next sign-in.</p>
+  <!-- Q114: the one-tap backfill — every active name without a PIN gets a
+       unique temp code. Codes show on the buttons above (admins only see
+       this page); the launch-day texts + printed sheet wait for the
+       owner-rep's command per Q106. -->
+  <p><button class="b" onclick="arm(this,()=>tempPins(this))">Assign temp codes to everyone without a PIN</button></p>
+  <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN issues a fresh TEMPORARY code (it appears on the button) — they sign in with it once and are made to choose their own.</p>
   </div>
 
   <div class="panel" id="steps"><h3>Build steps</h3>
@@ -1355,7 +1414,27 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function saveEmp(id, btn){ post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
     lines: v("l-"+id).split(",").map(s=>Number(s.trim())).filter(n=>n>0) }, btn); }
   function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
-  function resetPin(id){ post("/api/admin/employee", { id, reset_pin: true }); }
+  // Q114: reset now ISSUES a temp code (the old reset opened the Q68 hole).
+  async function resetPin(id, btn){
+    try {
+      const r = await fetch("/api/admin/employee", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, reset_pin: true }) });
+      const out = await r.json();
+      if (out.ok) { btn.textContent = "Temp: " + out.temp_pin; btn.classList.add("grn"); }
+      else document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
+  async function tempPins(btn){
+    btn.disabled = true; btn.textContent = "Assigning…";
+    try {
+      const r = await fetch("/api/admin/temp-pins", { method: "POST" });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Assign temp codes to everyone without a PIN";
+  }
   function saveStep(id, btn){ post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
     name: v("sm-"+id), day_no: Number(v("sd-"+id)), man_hours: Number(v("sh-"+id)) }, btn); }
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
@@ -1746,21 +1825,30 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", loginPage(view));
     }
 
-    // FIRST-TIME PIN SET (Q68). Only allowed while the person has NO pin —
-    // after that, changing a PIN is a manager/admin reset flow (C18, later stage).
-    if (url.pathname === "/api/pin/set" && req.method === "POST") {
-      const { id, pin } = await body(req);
+    // Q114: /api/pin/set (the Q68 open onboarding) is GONE — it let anyone
+    // who found the site claim a never-signed-in name. Its replacement is the
+    // temp-code flow: /api/login accepts the temp code, parks the person at
+    // /change-pin, and this endpoint makes the PIN theirs.
+    if (url.pathname === "/change-pin") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [emp] = await db(`employee?select=first_name,must_change_pin&id=eq.${empId}&active=is.true`);
+      if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      if (!emp.must_change_pin) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      return send(200, "text/html; charset=utf-8", changePinPage(emp.first_name));
+    }
+    if (url.pathname === "/api/pin/change" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const { pin } = await body(req);
       if (!/^\d{4}$/.test(String(pin))) return json(400, { ok: false, error: "PIN must be 4 digits" });
-      // Q70 hardening (2026-07-29 soak-test find): the grid HIDES retired
-      // accounts but this endpoint used to accept any id — a deactivated
-      // account could still authenticate. Now the API enforces it too.
-      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}&active=is.true`);
+      const [emp] = await db(`employee?select=id,temp_pin&id=eq.${empId}&active=is.true`);
       if (!emp) return json(404, { ok: false, error: "Unknown employee" });
-      if (emp.pin_hash) return json(400, { ok: false, error: "PIN already set — enter it instead" });
-      await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ pin_hash: hashPin(pin) }) });
-      logEvent("pin.set", id, {});
-      logEvent("employee.login", id, { first_login: true });
-      res.setHeader("Set-Cookie", `sb_session=${makeSession(id)}; Path=/; HttpOnly; SameSite=Lax`);
+      if (emp.temp_pin && String(pin) === String(emp.temp_pin))
+        return json(400, { ok: false, error: "That's the temporary code — pick one that's yours" });
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({
+        pin_hash: hashPin(pin), temp_pin: null, must_change_pin: false }) });
+      logEvent("pin.changed", empId, {}); // Q114: temp code wiped with the change
       return json(200, { ok: true });
     }
 
@@ -1770,8 +1858,8 @@ http.createServer(async (req, res) => {
       if (locked(id)) return json(429, { ok: false, error: "Too many tries — locked for 5 minutes" });
       // Q70 hardening (2026-07-29 soak-test find): same active enforcement
       // as /api/pin/set above — a retired account can't sign in by id.
-      const [emp] = await db(`employee?select=id,pin_hash&id=eq.${id}&active=is.true`);
-      if (!emp || !emp.pin_hash) return json(404, { ok: false, error: "No PIN on file — go back and tap your name" });
+      const [emp] = await db(`employee?select=id,pin_hash,must_change_pin&id=eq.${id}&active=is.true`);
+      if (!emp || !emp.pin_hash) return json(404, { ok: false, error: "No PIN on file — see the manager" });
       if (!checkPin(pin, emp.pin_hash)) {
         const s = strike(id);
         logEvent("pin.fail", id, {});
@@ -1780,7 +1868,8 @@ http.createServer(async (req, res) => {
       pinStrikes.delete(id);
       logEvent("employee.login", id, {});
       res.setHeader("Set-Cookie", `sb_session=${makeSession(id)}; Path=/; HttpOnly; SameSite=Lax`);
-      return json(200, { ok: true });
+      // Q114: a temp-code login works — but goes straight to /change-pin.
+      return json(200, { ok: true, change_required: Boolean(emp.must_change_pin) });
     }
 
     // HOME — three shapes, gated by DEPARTMENT (Q94: role=can-do, dept=where):
@@ -1790,8 +1879,10 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=first_name,lines,department,role&id=eq.${empId}`);
+      const [emp] = await db(`employee?select=first_name,lines,department,role,must_change_pin&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      // Q114: a temporary code gets you exactly one place — the change-PIN screen.
+      if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       if (emp.department === "Warehouse") {
         // Q109: warehouse gets its own board — the handoff INTO production.
         const [lastW] = await db(`clock_event?select=kind&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
@@ -2179,9 +2270,10 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/manager") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
       const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
@@ -2591,9 +2683,10 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/admin") {
       const empId = readSession(req.headers.cookie);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
-      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash&order=active.desc,first_name");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
+      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin&order=active.desc,first_name");
       const tmpls = await db("build_template?select=id,family&order=family");
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = tplId ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
@@ -2620,9 +2713,11 @@ self.addEventListener("notificationclick", (e) => {
       const { id, department, role, lines, active, reset_pin } = await body(req);
       if (!id) return json(400, { ok: false, error: "Missing employee" });
       if (reset_pin) {
-        await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ pin_hash: null }) });
-        logEvent("pin.reset", adminId, { employee_id: id }); // next login = Q68 choose-your-PIN
-        return json(200, { ok: true });
+        // Q114: never null the PIN (that reopened the Q68 hole) — issue a
+        // fresh temp code instead; the person is forced to replace it.
+        const code = await assignTempPin(id);
+        logEvent("pin.reset", adminId, { employee_id: id });
+        return json(200, { ok: true, temp_pin: code });
       }
       const patch = {};
       if (department !== undefined) { if (!DEPTS.includes(department)) return json(400, { ok: false, error: "Unknown department" }); patch.department = department; }
@@ -2643,6 +2738,16 @@ self.addEventListener("notificationclick", (e) => {
       }
       logEvent("employee.updated", adminId, { employee_id: id, changes: patch });
       return json(200, { ok: true });
+    }
+
+    // Q114 backfill: one tap covers every active name without a PIN. The
+    // response only carries the count — codes are read off the roster.
+    if (url.pathname === "/api/admin/temp-pins" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const bare = await db(`employee?select=id&active=is.true&pin_hash=is.null`);
+      for (const e of bare) await assignTempPin(e.id);
+      logEvent("pin.temp_backfill", adminId, { count: bare.length });
+      return json(200, { ok: true, count: bare.length });
     }
 
     // SHOP HOURS (Q113): the two numbers everything derives from. Admin
