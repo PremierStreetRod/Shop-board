@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v26, 2026-07-31: Q112 AFTER-HOURS SESSIONS — outside shop hours (before 7, after 4, weekends) the clock-in screen collects its governance by itself: WHO approved (roster grid), WHY (pick list), and the one-line plan; the SERVER enforces all three. Claim-then-confirm: the named approver + admins get an instant push (Q106-sandboxed) and a cockpit lane holds unconfirmed sessions until someone owns them. Clock-out requires the wrap-up note. Timecard rows wear the AFTER HOURS flag with reason, approver, and confirmation state. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v27, 2026-07-31: Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -138,19 +138,33 @@ const PHX_OFFSET_MS = 7 * 60 * 60 * 1000;
 const DAY_END_HOUR_PHX = 16;   // 4:00 PM shop day end (Q82; admin-adjustable later)
 const SWEEP_GRACE_MS = 4 * 60 * 60 * 1000; // only close 4+ hrs past day end — never cuts real late work short
 // 4:00 PM Phoenix on the same Phoenix DAY as the given timestamp, in ms UTC.
-function dayEndOf(ms) {
+function dayEndOf(ms, closeHour = DAY_END_HOUR_PHX) {
   const phxMidnight = Math.floor((ms - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
-  return phxMidnight + DAY_END_HOUR_PHX * 3600000;
+  return phxMidnight + closeHour * 3600000;
 }
-// Q112: the shop day starts at 7 (Q113 turns both hours into admin
-// settings later). Before open, after close, or a weekend = AFTER HOURS:
-// the clock still works exactly like a normal day — it just has to carry
-// its governance (who approved it, why, and the plan).
+// Q113: the shop day is now an ADMIN SETTING (shop_setting table), read
+// through a 60-second cache so the sweeper and every request stay cheap.
+// Defaults match the shop's real day: 7:00 AM open, 4:00 PM close.
 const DAY_START_HOUR_PHX = 7;
-function isAfterHours(ms) {
+const SHOP_HOURS = { open: DAY_START_HOUR_PHX, close: DAY_END_HOUR_PHX, loadedAt: 0 };
+async function shopHours() {
+  if (Date.now() - SHOP_HOURS.loadedAt < 60000 || !DB_READY) return SHOP_HOURS;
+  try {
+    const rows = await db(`shop_setting?select=key,value&key=in.(shop_open_hour,shop_close_hour)`);
+    for (const r of rows) {
+      if (r.key === "shop_open_hour") SHOP_HOURS.open = Math.min(23, Math.max(0, Number(r.value) || DAY_START_HOUR_PHX));
+      if (r.key === "shop_close_hour") SHOP_HOURS.close = Math.min(23, Math.max(1, Number(r.value) || DAY_END_HOUR_PHX));
+    }
+    SHOP_HOURS.loadedAt = Date.now();
+  } catch (e) { /* settings table not there yet — defaults hold */ }
+  return SHOP_HOURS;
+}
+// Q112: before open, after close, or a weekend = AFTER HOURS — the clock
+// still works exactly like a normal day, it just carries its governance.
+function isAfterHours(ms, hrs = SHOP_HOURS) {
   const phx = new Date(ms - PHX_OFFSET_MS);
   const dow = phx.getUTCDay(), hr = phx.getUTCHours();
-  return dow === 0 || dow === 6 || hr < DAY_START_HOUR_PHX || hr >= DAY_END_HOUR_PHX;
+  return dow === 0 || dow === 6 || hr < hrs.open || hr >= hrs.close;
 }
 // Close every interval still open long past its day end. Runs at boot (catches
 // anything that happened while the server was down) and every 10 minutes.
@@ -161,10 +175,11 @@ async function sweepForgottenClockOuts() {
     const latest = {};
     for (const ev of recent) if (!latest[ev.employee_id]) latest[ev.employee_id] = ev;
     const now = Date.now();
+    const hrsS = await shopHours();   // Q113: the sweep follows the CONFIGURED day end
     for (const ev of Object.values(latest)) {
       if (ev.kind !== "clock_in") continue;
       const inMs = new Date(ev.claimed_at).getTime();
-      const end = dayEndOf(inMs);
+      const end = dayEndOf(inMs, hrsS.close);
       // Clock-in AFTER day end (opt-in Saturday / evening, Q82): give that
       // stint its own day-end at +8h so it can never run forever either.
       const closeAt = inMs >= end ? inMs + 8 * 3600000 : end;
@@ -175,6 +190,15 @@ async function sweepForgottenClockOuts() {
         claimed_at: new Date(closeAt).toISOString() }) });
       logEvent("clock.auto_out", null, { employee_id: ev.employee_id, line_id: ev.line_id,
         opened_at: ev.claimed_at, closed_at: new Date(closeAt).toISOString() });
+      // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
+      // SESSION open forever — close it honestly so the cockpit lane and the
+      // timecards tell the truth about forgetful nights.
+      const [ahSweep] = await db(`after_hours_session?select=id&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);
+      if (ahSweep) {
+        await db(`after_hours_session?id=eq.${ahSweep.id}`, { method: "PATCH", body: JSON.stringify({
+          ended_at: new Date(closeAt).toISOString(), wrap_note: "(auto-closed — no wrap-up left)" }) });
+        logEvent("afterhours.auto_end", null, { session_id: ahSweep.id, employee_id: ev.employee_id });
+      }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
     }
   } catch (e) { console.error("sweeper failed (will retry):", e.message); }
@@ -845,6 +869,8 @@ const boardPage = `<!doctype html>
 </style></head>
 <body>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
+  <!-- Q113: the master chip — is the shop working right now? -->
+  <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
   <div class="board" id="board"></div>
   <!-- Block 25 (owner-rep): the legend — every color the board can show,
        spelled out — plus the sign-out that was missing. -->
@@ -864,8 +890,16 @@ const boardPage = `<!doctype html>
     try{
       const r = await fetch("/api/board-state"); const s = await r.json();
       const bar = { green:"#30d158", amber:"#ffd60a", red:"#C8102E", none:"#5a5a5e" };
+      // Q113 master chip: SHOP OPEN (working hours) · AFTER HOURS (someone
+      // is on an approved session) · SHOP CLOSED (outside hours, nobody on).
+      const sc = document.getElementById("shopchip");
+      if (s.shop && sc) {
+        const m = { open: ["SHOP OPEN", "#30d158"], after_hours: ["AFTER HOURS", "#ffd60a"], closed: ["SHOP CLOSED", "#8e8e93"] }[s.shop.state] || ["", "#8e8e93"];
+        sc.innerHTML = '<span style="border:1px solid ' + m[1] + ';color:' + m[1] + ';border-radius:999px;padding:4px 16px;font-weight:700;font-size:.95rem">' + m[0] + (s.shop.detail ? " — " + s.shop.detail : "") + "</span>";
+      }
       document.getElementById("board").innerHTML = s.lines.map(l => \`
         <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" \${l.cab && l.cab.badge ? 'style="border-style:dashed;border-color:#ff9f0a;border-left-width:8px"' : ""}>
+          \${l.closed ? \`<span style="float:right;background:#3a3a3c;color:#ddd;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">CLOSED</span>\` : ""}
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
@@ -874,7 +908,7 @@ const boardPage = `<!doctype html>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
-          : \`<div>Idle line</div>\`}
+          : \`<div>\${l.closed ? "Line closed" : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
             ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\`
             : "ON DECK: — nothing queued"}</div>
@@ -963,7 +997,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = []) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -1027,7 +1061,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   </div>` : ""}
   ${rows.map((r) => `
     <div class="lane">
-      <h3>${r.line.name}</h3>
+      <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}
+        ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
       ${(r.awaiting || []).map((w) => `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
@@ -1122,6 +1157,18 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Confirm";
   }
+  // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
+  function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  async function lineClosed(lineId, to) {
+    try {
+      const r = await fetch("/api/line/closed", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line_id: lineId, closed: to === true || to === "true" }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
   async function sendBack(id, btn) {
     btn.disabled = true; btn.textContent = "Working…";
@@ -1169,8 +1216,11 @@ const TOGGLE_INFO = {
   // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
   // is running the floor. This switch lets an admin share the page if wanted.
   manager_reports: ["Managers can see Reports", "Let the manager role open the Reports page. OFF = admins only."],
+  // Q113 (owner-rep): line open/close is manual control worth having — admins
+  // always; this switch decides whether the manager role gets it too.
+  manager_line_control: ["Managers can open/close lines", "Let the manager role close a line for the day and reopen it. OFF = admins only."],
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -1201,6 +1251,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") =
     <a href="#steps" style="color:#fff;font-weight:700;margin-right:16px">Build steps</a>
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
     <a href="#cabnums" style="color:#fff;font-weight:700;margin-right:16px">Cab #s</a>
+    <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
@@ -1271,6 +1322,16 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") =
   <p style="opacity:.5;font-size:.85rem">Number + family letter, exactly as the wall shows it (T=55-59 · A=47-53 · C=67-72 C10 · F=67-72 Ford · B=Blazer · D=64-66). Numbers are never reused — a cancelled cab's number stays burned.</p>
   </div>
 
+  <!-- Q113: the shop day, as settings. Everything derives from these two
+       numbers — the day-end sweeper, after-hours detection, the board's
+       master chip. Phoenix time, 24-hour numbers. -->
+  <div class="panel" id="hours"><h3>Shop hours</h3>
+  <p>Open <input class="num" id="sh-open" value="${shopHrs.open}"> &nbsp; Close <input class="num" id="sh-close" value="${shopHrs.close}">
+    <button class="b" onclick="saveHours(this)">Save</button>
+    <span style="opacity:.55;margin-left:12px">24-hour numbers, Phoenix time — 7 and 16 mean 7:00 AM to 4:00 PM.</span></p>
+  <p style="opacity:.5;font-size:.85rem">Outside these hours (and on weekends) the clock-in screen asks for after-hours approval, the sweeper closes forgotten punches, and the TV board's chip flips. Changes take effect within a minute.</p>
+  </div>
+
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
   <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
@@ -1303,6 +1364,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "") =
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
+  function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
 </script></body></html>`;
 
 // REPORTS v1 (file 12 / Q26, block 19) — the first slice of the reporting
@@ -1852,8 +1914,13 @@ http.createServer(async (req, res) => {
       // The named approver + the admins get the claim-then-confirm push
       // (Q106-sandboxed until cutover); unconfirmed sessions stay flagged
       // on the cockpit and the timecards until someone owns the claim.
+      // Q113: a manually-closed line takes no clock-ins.
+      const [lnGate] = await db(`line?select=manually_closed&id=eq.${line_id}`);
+      if (lnGate && lnGate.manually_closed)
+        return json(400, { ok: false, error: "That line is closed right now — see the manager" });
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
-      if (isAfterHours(inAtMs)) {
+      const hrsIn = await shopHours();
+      if (isAfterHours(inAtMs, hrsIn)) {
         if (!approved_by || !ah_reason || !String(ah_plan || "").trim())
           return json(400, { ok: false, error: "After hours needs three things: who approved it, what it's for, and what you're here to do" });
         const [appr] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
@@ -1912,6 +1979,10 @@ http.createServer(async (req, res) => {
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { line_id, claimed_at } = await body(req);
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
+      // Q113: no switching ONTO a manually-closed line either.
+      const [lnGateS] = await db(`line?select=manually_closed&id=eq.${line_id}`);
+      if (lnGateS && lnGateS.manually_closed)
+        return json(400, { ok: false, error: "That line is closed right now — see the manager" });
       const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       // Retry safety: if a switch died BETWEEN its two writes (out landed,
       // in didn't), the retry finds a fresh "Switched lines" out — finish
@@ -1969,7 +2040,7 @@ http.createServer(async (req, res) => {
     //   DAY COUNTER (Q57): clock-driven — ceil(covered WALL hours ÷ 8);
     //     day boundaries float per cab, a mid-day start wastes nothing.
     if (url.pathname === "/api/board-state") {
-      const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
@@ -2029,19 +2100,29 @@ http.createServer(async (req, res) => {
         if (t.state === "complete") a.done += Number(t.man_hours);
       }
 
-      return json(200, { lines: lines.map((l) => {
+      // Q113: the master chip — open during shop hours; outside them,
+      // AFTER HOURS if anyone is on an approved session, else CLOSED.
+      const hrsB = await shopHours();
+      let shopState = { state: "open", detail: "" };
+      if (isAfterHours(now, hrsB)) {
+        const ahOpenB = await db(`after_hours_session?select=employee_id,line_id&ended_at=is.null`);
+        shopState = ahOpenB.length
+          ? { state: "after_hours", detail: ahOpenB.map((s2) => `${nameOf[s2.employee_id] || "?"} on ${(lines.find((l) => l.id === s2.line_id) || {}).name || (s2.line_id === 10 ? "Shop time" : "line " + s2.line_id)}`).join(" · ") }
+          : { state: "closed", detail: "" };
+      }
+      return json(200, { shop: shopState, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "" } : null;
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
-          return { id: l.id, name: l.name, techs: onLine[l.id] || [], ondeck: deck,
+          return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], ondeck: deck,
             cab: { order: w.order_number, family: familyOf[w.part_number] || "",
               done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
               day: 0, total_days: 0 } };
         }
-        if (!b) return { id: l.id, name: l.name, techs: onLine[l.id] || [], cab: null, ondeck: deck };
+        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], cab: null, ondeck: deck };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
         // Clip this line's coverage to the cab's life (Q103-2).
@@ -2082,7 +2163,7 @@ http.createServer(async (req, res) => {
           rcolor = !frame ? "amber" : rwHrs > frame ? "red" : rwHrs > frame * 0.75 ? "amber" : "green";
           rstatus = `In extra time — ${b.rework_reason || "fixes"} · ${rwHrs.toFixed(1)} of ${frame || "—"} hrs used`;
         }
-        return { id: l.id, name: l.name, techs: onLine[l.id] || [], ondeck: deck,
+        return { id: l.id, name: l.name, closed: l.manually_closed, techs: onLine[l.id] || [], ondeck: deck,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "",
             done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
             pct: a.total ? Math.round(100 * a.done / a.total) : 0,
@@ -2101,7 +2182,7 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return send(403, "text/plain", "Manager or admin only");
-      const lines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const lines = await db(`line?select=id,name,manually_closed&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
@@ -2161,7 +2242,10 @@ http.createServer(async (req, res) => {
         who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "?",
         lineName: (lines.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
         when: phxDT(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note }));
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours));
+      // Q113: line open/close — admins always, managers behind the switch.
+      const [togLine] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
+      const canCloseLines = me.role === "admin" || Boolean(togLine && togLine.enabled);
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -2329,6 +2413,10 @@ http.createServer(async (req, res) => {
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
       const clash = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
       if (clash.length) return json(400, { ok: false, error: "That line already has an active cab" }); // one-per-line
+      // Q113: a manually-closed line takes no new cabs (manager override = reopen first).
+      const [lnGateB] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
+      if (lnGateB && lnGateB.manually_closed)
+        return json(400, { ok: false, error: "That line is closed right now — reopen it first" });
       await freezeAndStart(b, empId, claimed_at || new Date().toISOString());
       return json(200, { ok: true });
     }
@@ -2395,12 +2483,37 @@ http.createServer(async (req, res) => {
       if (!b.kit_pull_started_at) return json(400, { ok: false, error: "Tap Pull started first" });
       const clashW = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
       if (clashW.length) return json(400, { ok: false, error: "That line still has an active cab" });
+      // Q113: a manually-closed line takes no new cabs.
+      const [lnGateD] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
+      if (lnGateD && lnGateD.manually_closed)
+        return json(400, { ok: false, error: "That line is closed right now — reopen it first" });
       const when = claimed_at || new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         kit_delivered_at: when, kit_delivered_by: whoId }) });
       await freezeAndStart(b, whoId, when);
       const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
       logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
+      return json(200, { ok: true });
+    }
+
+    // Q113: close a line for the day / reopen it. Admins always; managers
+    // only when the "Managers can open/close lines" switch is ON. Audited.
+    if (url.pathname === "/api/line/closed" && req.method === "POST") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      if (me.role === "manager") {
+        const [togL] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
+        if (!togL || !togL.enabled)
+          return json(403, { ok: false, error: "Line control is admin-only right now. An admin can share it — Features, 'Managers can open/close lines'." });
+      }
+      const { line_id, closed } = await body(req);
+      const [lnC2] = await db(`line?select=id,name&id=eq.${line_id}`);
+      if (!lnC2) return json(404, { ok: false, error: "Line not found" });
+      await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({ manually_closed: Boolean(closed) }) });
+      logEvent(closed ? "line.closed" : "line.reopened", empId, { line_id, name: lnC2.name });
       return json(200, { ok: true });
     }
 
@@ -2497,7 +2610,8 @@ self.addEventListener("notificationclick", (e) => {
         if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1]));
       }
       const nextUp = ["T", "A", "C", "F", "B", "D"].filter((f) => hi[f]).map((f) => `${hi[f] + 1}${f}`).join(" · ");
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp));
+      const hrsAdmin = await shopHours();
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -2528,6 +2642,23 @@ self.addEventListener("notificationclick", (e) => {
         }
       }
       logEvent("employee.updated", adminId, { employee_id: id, changes: patch });
+      return json(200, { ok: true });
+    }
+
+    // SHOP HOURS (Q113): the two numbers everything derives from. Admin
+    // only; sane-range checked; audited; the 60-second cache picks them up.
+    if (url.pathname === "/api/admin/shop-hours" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { open, close } = await body(req);
+      const o = Number(open), c = Number(close);
+      if (!Number.isInteger(o) || !Number.isInteger(c) || o < 0 || o > 23 || c < 1 || c > 23 || o >= c)
+        return json(400, { ok: false, error: "Hours need to be 24-hour numbers with open before close — like 7 and 16" });
+      for (const [k, val] of [["shop_open_hour", o], ["shop_close_hour", c]]) {
+        await db(`shop_setting?key=eq.${k}`, { method: "DELETE" });
+        await db("shop_setting", { method: "POST", body: JSON.stringify({ key: k, value: String(val) }) });
+      }
+      SHOP_HOURS.loadedAt = 0; // next read refreshes immediately
+      logEvent("shop.hours_set", adminId, { open: o, close: c });
       return json(200, { ok: true });
     }
 
