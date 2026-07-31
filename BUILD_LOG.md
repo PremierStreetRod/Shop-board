@@ -1,6 +1,10 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — block 25 amendment: UPGRADES & OPTIONS box + navigation polish (server.js v25.2)
+
+**Owner-rep's follow-up notes on the fresh order page, shipped within the hour.** (1) The order page gains a **prominent UPGRADES & OPTIONS box directly under the owner info** — "THIS is what the production department NEEDS to see so they know what they are building." It reads the cab's option-source tasks, so when the Coyote link goes live options populate automatically; until then it shows the honest "STOCK BUILD — no upgrade options on file" with a plain note about where options will come from. The Coyote mapping block inherits a hard requirement: options MUST land as option-source tasks so this box fills itself. (2) Step-by-day progress moved below the options box. (3) "← Back to the board" added at the TOP of the order page (bottom link kept). (4) The board dropped the now-redundant family text after the order number (the tile title carries it) and gained a **← Back** control in the footer beside Sign out. v25.2 = 174,713 units / 3645765236, 5 pairs reversal-proven to v25.1, byte-exact first pass, verified live by screenshot.
+
 ## 2026-07-31 — build block 25: BOARD & CONSOLE POLISH — the owner-rep's nine notes, live (server.js v25 + v25.1)
 
 **The board finally reads the way the owner-rep sees the shop.** All nine of his notes shipped and were E2E-proven the same morning:
