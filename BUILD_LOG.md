@@ -1,6 +1,46 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 31: Q116 PACE EARLY-WARNING PUSHES live (server.js v31 + migration 0018)
+
+- WHAT SHIPPED: the board's own RED now reaches OUT. A background patrol
+(pacePatrol, setInterval 10 min — same cadence as the day-end sweeper) reads the
+board's own /api/board-state internally (zero duplicate pace math — the alert fires
+exactly when the TV shows red) and, when an active/rework cab CROSSES into red,
+sends one Q106-sandboxed push to managers + admins ("Line X: ORDER needs help ·
+promised …"). EDGE-TRIGGERED: build.pace_alert_color remembers the last colour per
+cab, so one push per crossing, silence while it stays red, and it re-arms once the
+cab recovers. Survives a redeploy (state is in the DB, not memory).
+- CONTROLS: a "Pace early-warning pushes" admin toggle (feature_toggle pace_warnings,
+seeded ON) pauses the whole patrol; an admin-only /api/admin/pace-run runs it on
+demand (a "check now" button + the E2E hook) and reports which cabs are red.
+- Q106 SANDBOX HOLDS: every push reroutes to the owner-rep with the [TEST] stamp;
+notification_log records the true intended recipients (managers+admins) with
+sandboxed=true. Nothing reaches staff until cutover.
+- FILES: server.js v31 = 224,094 / 3363324359 (4 pairs, forward + reversal proven;
+no stray). migration 0018 (build.pace_alert_color + pace_warnings toggle) run +
+verified (col present, toggle true).
+- E2E (live, as Zz admin) — all six proofs:
+  1. CROSSING → PUSH: TEST-23701 (genuinely red, 6.4h behind) → one pace.warn event,
+     6 notification_log rows (the 6 managers+admins), ALL sandboxed=true, status
+     "sent" (the push actually delivered to the owner-rep's desktop).
+  2. EDGE-TRIGGER: a 2nd run while it stayed red added NO new event.
+  3. DELIBERATE CROSSING: reset TEST-23701 to null, ran → event count 1→2 (pushed again).
+  4. RECOVERY/RESET: armed a GREEN cab (TEST-23702) as 'red', ran → it reset to
+     'green', NO push (green isn't a red-crossing).
+  5. TOGGLE OFF: paused pace_warnings, re-armed TEST-23701 null, ran → red_now empty
+     (monitor returned early, cab left unprocessed); flipped back ON, ran → red_now
+     [TEST-23701] again (re-engaged).
+  6. GATES: /api/admin/pace-run 401 signed-out, admin-only; the toggle shows in the
+     admin Features panel.
+- The monitor's stored colours now mirror reality (TEST-23701 red, TEST-23702 green) —
+  left as-is (accurate). NOTE: E2E fired 3 real sandboxed pushes to the owner-rep's
+  desktop ("[TEST] Line 1: TEST-23701 needs help") — expected test artifacts.
+- Zz retired clean (deactivated via the app admin API when the Supabase editor briefly
+  blanked — the screen-saver quirk — then pin fields nulled via SQL once it recovered:
+  active=false / pin=null / temp=null). 17 names on the grid. Q116 BUILT.
+- NEXT: Coyote push preempts (Mon/Tue); else Supabase Realtime or Q83 day switch.
+
 ## 2026-07-31 — block 30 ADDENDUM: Q115 fixes SHIPPED (server.js v30) — owner-rep chose "fix both now"
 
 - v30 = 220,356 / 4041918570 (5 pairs, forward + reversal proven; no migration). Adds a
