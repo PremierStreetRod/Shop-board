@@ -2765,8 +2765,11 @@ http.createServer(async (req, res) => {
         if (outMs && outMs <= inMs) return json(400, { ok: false, error: "OUT has to come after IN" });
         if (tooOld(inMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
         if (!outMs && phxDate(inMs) !== phxDate(nowP)) return json(400, { ok: false, error: "A past day needs BOTH times — an open punch only makes sense today" });
+        // (kind must satisfy the DB's check: out-kinds are _shift/_lunch/_early/_auto —
+        // an added closing punch is a shift-out. Block-29 E2E caught the plain
+        // "clock_out" attempt as a 42501-style check violation.)
         const fakeIn = { id: "new-in", kind: "clock_in", claimed_at: new Date(inMs).toISOString() };
-        const fakeOut = outMs ? { id: "new-out", kind: "clock_out", claimed_at: new Date(outMs).toISOString() } : null;
+        const fakeOut = outMs ? { id: "new-out", kind: "clock_out_shift", claimed_at: new Date(outMs).toISOString() } : null;
         let sane = await daySane(employee_id, inMs, (evs) => [...evs, fakeIn, ...(fakeOut && phxDate(outMs) === phxDate(inMs) ? [fakeOut] : [])]);
         if (sane && fakeOut && phxDate(outMs) !== phxDate(inMs))
           sane = await daySane(employee_id, outMs, (evs) => [...evs, fakeOut]);
@@ -2775,7 +2778,7 @@ http.createServer(async (req, res) => {
           employee_id, line_id, kind: "clock_in", claimed_at: new Date(inMs).toISOString(),
           added_by: meId, correction_note: note }) });
         if (outMs) await db("clock_event", { method: "POST", body: JSON.stringify({
-          employee_id, line_id, kind: "clock_out", reason: "Added by correction",
+          employee_id, line_id, kind: "clock_out_shift", reason: "Added by correction",
           claimed_at: new Date(outMs).toISOString(), added_by: meId, correction_note: note }) });
         logEvent("punch.added", meId, { employee_id, line_id, in_at: new Date(inMs).toISOString(),
           out_at: outMs ? new Date(outMs).toISOString() : null, note });
