@@ -1,6 +1,20 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — block 30 ADDENDUM: Q115 fixes SHIPPED (server.js v30) — owner-rep chose "fix both now"
+
+- v30 = 220,356 / 4041918570 (5 pairs, forward + reversal proven; no migration). Adds a
+  shared isUuid() helper + three guards: /api/punch/correct rejects a non-UUID punch_id
+  (move/void) or employee_id (add) and a non-integer line_id with a clean 400; shop-hours
+  rejects non-number types (the {open:[7]} coercion); /api/line/closed rejects a
+  non-integer line_id. All the guards sit AFTER the existing auth/role checks.
+- LIVE-VERIFIED on the deployed build (Zz admin): non-uuid punch → 400 "That punch
+  reference isn't valid" (was 500) · {open:[7]} → 400 (was 200) · line_id "abc" → 400
+  "Pick a valid line" (was 500) · add with bad employee_id → 400. Regressions clean:
+  valid 7/16 hours → 200, close+reopen line 2 → 200/200 (no over-blocking).
+- Zz retired clean; final state 17 names · 15 temp codes · 0 no-PIN holes · 0 closed
+  lines · 7/16 hours. Q115 CLOSED. Blocks 27-30 all shipped, verified, and hardened.
+
 ## 2026-07-31 — build block 30: STAGE-5 ADVERSARIAL BREAK-PASS on blocks 27-29 (verification block; no code shipped)
 
 - CONTEXT: mid-break-pass, Fable 5's (deliberately broad) safeguard auto-switched the
