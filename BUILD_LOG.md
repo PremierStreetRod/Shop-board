@@ -1,6 +1,19 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — block 29 ADDENDUM: both honest gaps closed (owner-rep woke the machine)
+
+- The blank Supabase editor was exactly the recorded screen-saver quirk — owner-rep
+confirmed his screen saver had come on; the editor initialized normally once woken.
+- MANAGER 14-DAY LOOK-BACK: now exercised live. Zz woken as a MANAGER → an add
+20 days back returned 403 "Older than 14 days — that one belongs to an admin"
+(no data touched — the guard fires before any insert) · the cockpit's Time
+corrections lane renders for the manager role · a same-day request passed the role
+gate and reached the note check. Every block-29 code path is now proven.
+- ZZ RETIRED CLEAN, the full standard way: active=false · role=production ·
+pin_hash=null · temp_pin=null · must_change_pin=false, verified in the returning
+row. 17 real names on the grid. No deviations outstanding.
+
 ## 2026-07-31 — build block 29: Q111 pt 2 MISSED-PUNCH CORRECTIONS live (server.js v29/.1/.2 + migration 0017)
 
 - WHY: the physical punch clock can't retire until a forgotten punch can be fixed.
