@@ -805,6 +805,7 @@ const boardPage = `<!doctype html>
     <span style="color:#ff453a">■</span> needs help &nbsp;
     <span style="color:#8e8e93">■</span> idle line &nbsp;
     <span style="color:#ff9f0a">▧</span> rework &nbsp;·&nbsp;
+    <a href="#" onclick="history.back();return false" style="color:#8e8e93">← Back</a> &nbsp;·&nbsp;
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
   <div class="stamp" id="stamp"></div>
@@ -819,7 +820,7 @@ const boardPage = `<!doctype html>
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
-          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER <a href="/order/\${encodeURIComponent(l.cab.order)}" style="color:inherit">\${l.cab.order}</a> <span style="opacity:.6;font-weight:400">· \${l.cab.family}</span></div>
+          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER <a href="/order/\${encodeURIComponent(l.cab.order)}" style="color:inherit">\${l.cab.order}</a></div>
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
@@ -861,6 +862,7 @@ const orderPage = (b, family, lineName, tasks) => {
 .kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -872,6 +874,17 @@ const orderPage = (b, family, lineName, tasks) => {
     ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
     ${b.invoice_note ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
+  </div>
+  <!-- v25.2 (owner-rep): UPGRADES & OPTIONS, prominent under the owner box —
+       THIS is what production needs to see to know what they're building.
+       Reads the cab's option tasks, so the moment the Coyote link goes live
+       and options flow in, they populate here automatically. -->
+  <div class="lane" style="border-color:#C8102E">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">UPGRADES &amp; OPTIONS — what this cab gets</div>
+    ${(() => { const opts = tasks.filter((t) => t.source === "option"); return opts.length
+      ? opts.map((o) => `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(o.name)} <span style="opacity:.5">(+${Number(o.man_hours)}h)</span></div>`).join("")
+      : `<div style="opacity:.8;font-size:1.05rem">STOCK BUILD — no upgrade options on file for this cab.</div>`; })()}
+    <div style="opacity:.45;font-size:.85rem;margin-top:6px">Options land here automatically from the order system once the Coyote link is live.</div>
   </div>
   ${tasks.length ? `<div class="lane">
     <div style="font-weight:700;margin-bottom:6px">${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%</div>
@@ -1811,7 +1824,7 @@ http.createServer(async (req, res) => {
         `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/board" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
       const [prodO] = bO.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
       const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
-      const tasksO = await db(`task?select=display_no,name,day_no,man_hours,state,is_background&build_id=eq.${bO.id}&order=day_no,sort_order`);
+      const tasksO = await db(`task?select=display_no,name,day_no,man_hours,state,is_background,source&build_id=eq.${bO.id}&order=day_no,sort_order`);
       return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO));
     }
 
