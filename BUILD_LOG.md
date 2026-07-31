@@ -1,6 +1,14 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — decisions: Q112 AFTER-HOURS SESSIONS + Q113 SHOP-HOURS CONTROL (record only, no code yet)
+
+**The after-hours brainstorm, verified against the engine before designing.** The time machinery already handles evenings and weekends — any-hour clock-ins pay correctly, evening labor lands on the cab's actuals, and the sweeper has given after-day-end sessions their own +8h window since the risk sweep. So the owner-rep's Option B locked: an approved after-hours session IS the normal clock — same line buttons, same cab screen, same tasks.
+
+- **Q112 adds the missing governance:** outside shop hours the clock-in screen asks three things first — WHO approved (roster grid of managers/admins/owners), WHY (editable pick list: Making up hours · Cab behind, catching up · Deadline push · Company project · Overtime), one line on the plan. **Claim-then-confirm** approval (over a hard pre-approval gate — no Saturday tech stuck waiting on an owner's phone): clocking in fires a one-tap-Confirm push to the named approver + owners (Q106-sandboxed until cutover); unconfirmed sessions wear a visible flag on timecards + cockpit. Clock-out wrap-up: note REQUIRED, photos optional. Timecards flag after-hours rows with reason / claimed approver / confirmation. Working through lunch needs nothing — stay clocked in.
+- **Q113, record corrected first:** the app never had a manual morning line-start (Start starts a CAB; the day is engine shop-hours — DAY_END_HOUR_PHX=16, hardcoded with "admin-adjustable later" in the comment). Locked: shop open/close hours become admin-console settings (7:00–16:00 default) feeding the sweeper, engine, and Q112's after-hours detection · manual per-line open/close override (admin always) · "Managers can open/close lines" as a Q65 toggle, default OFF.
+- Build order on the menu: Q112 → Q113 → Q111 part 2 (missed-punch tool). The Coyote mapping job preempts everything when the developer's first post lands (his word: Monday/Tuesday).
+
 ## 2026-07-30 — build block 24: Q111 part 1 — SHOP TIME + TIMECARDS live (server.js v24 + migration 0013)
 
 **The Monday-morning-meeting problem is solved and payroll has its first report — E2E-proven through the real flow the same day the decision was locked.**
