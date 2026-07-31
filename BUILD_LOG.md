@@ -1,6 +1,45 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 27: Q113 SHOP HOURS & LINE CONTROL live (server.js v27 + migration 0015)
+
+- WHAT SHIPPED: the 7-to-4 day stops being hardcoded — shop open/close hours are now
+admin settings (shop_setting table, 60-second cache, Phoenix time). Everything derives
+from the two numbers: the day-end sweeper, Q112 after-hours detection, and the TV board.
+- LINE CONTROL: every line gains a manual OPEN/CLOSE switch in the cockpit (two-tap armed
+button). Admins always; managers only when the new "Managers can open/close lines"
+feature toggle is ON (seeded OFF). A closed line refuses clock-ins, switches, cab starts,
+and kit deliveries with a plain-English message. line.closed / line.reopened audited.
+- TV BOARD: master chip under the logo — SHOP OPEN (green) / AFTER HOURS with who's-on-what
+(amber) / SHOP CLOSED (gray) — plus a CLOSED badge on any manually-closed line tile and
+"Line closed" idle text.
+- SWEEPER (block-26 nit fixed): when the sweeper auto-clocks-out a forgotten after-hours
+punch, it now also ends the open after_hours_session with "(auto-closed — no wrap-up left)"
+and logs afterhours.auto_end — so the cockpit lane and timecards tell the truth.
+- ADMIN CONSOLE: new "Shop hours" panel (open/close, 24-hour numbers) + nav link;
+/api/admin/shop-hours is admin-only, range-checked (0-23, open before close), audited
+as shop.hours_set; the cache refreshes immediately after a save.
+- FILES: server.js v27 (196,367 chars, checksum 3841021750, node --check clean, pairs
+extracted-from-file + reversal-proven to v26 before injection), migration
+0015_shop_hours.sql (shop_setting + seeds 7/16, line.manually_closed, manager_line_control
+toggle) — committed, raw-verified, migration run with in-script verification select
+(2 settings rows · 7/16 · column present · toggle false).
+- E2E (live, as Zz): board chip showed SHOP OPEN during work hours · closed Line 2 as
+admin → CLOSED badge on the TV tile + clock-in AND switch both refused with "That line is
+closed right now — see the manager" · reopened clean, no stray state · shop-hours
+validation: 18/5 → 400, 7.5/16 → 400, 7/16 → ok, line 99 → 404 · flipped Zz to MANAGER
+with the toggle OFF → /api/line/closed returned 403 with the share-it message, the Close
+buttons disappeared from the cockpit, and /api/admin/shop-hours refused 403 · admin page
+shows the panel with 7/16 · Zz signed out (/logout confirmed) and retired.
+- HONEST NOTE: the build/start and kit/deliver closed-line guards were NOT exercised
+end-to-end — every line in test data carries an active or awaiting cab, so their earlier
+"line still has an active cab" guards fire first. They are the identical three-line
+pattern as the two guards proven above; exercise them in a later E2E when an idle line
+with a queued cab exists.
+- NEXT: owner-rep added Q114 mid-block (temporary passcodes for never-signed-in names,
+forced change at first login, launch-day text + printable PDF on his command only —
+Q106 sandbox holds). Q114 is the next build block.
+
 ## 2026-07-31 — build block 26: Q112 AFTER-HOURS SESSIONS live (server.js v26 + migration 0014)
 
 **The governance around the clock — built and E2E-proven the same day it was locked, with the enforcement demonstrated by trying to break it.**
