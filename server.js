@@ -869,7 +869,7 @@ const orderPage = (b, family, lineName, tasks) => {
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
     ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
-    ${b.customer_display || b.customer_name ? `<div class="kv"><b>Customer</b>${escH(b.customer_display || b.customer_name)}</div>` : ""}
+    ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
     ${b.invoice_note ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
   </div>
