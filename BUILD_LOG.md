@@ -1,6 +1,43 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-07-31 — build block 32: Q117 LIVE BOARD via server-sent events (server.js v32, no migration)
+
+- WHAT SHIPPED: the TV board updates within ~2-3s of any change instead of on the
+old 30-second poll. The server holds an EventSource per screen (/api/board-stream);
+a 3-second tick (boardTick) watches ONE cheap signal — the newest event_log id —
+and bumps every connected screen the instant it moves. Because EVERY board-affecting
+mutation (clock in/out/switch, task check-off, build start/finish/rework, kit, line
+close/reopen, cab #, after-hours) writes an event_log row, that one index read on the
+pk catches them all. On a bump the client re-fetches board-state and re-renders — the
+exact same proven render path, just triggered by push instead of a timer.
+- WHY SSE (owner-rep chose it over Supabase Realtime): keys stay SERVER-SIDE. Realtime
+would have needed the anon key + row-level-security rules exposed in the browser — a
+departure from this app's server-only-keys design. SSE keeps the whole model intact.
+- EFFICIENCY: when nobody is watching the TV (no clients) boardTick does zero work; one
+shared signal replaces N client polls; the server pushes ONLY on real change (proven:
+4s idle = 0 bumps). A 30s fallback poll + EventSource auto-reconnect (retry:3000) keep
+the board correct through any Wi-Fi/proxy drop; pure time-drift in pace colours rides
+that fallback. 25s keepalive comments survive idle-proxy timeouts.
+- SINGLE CAVEAT (recorded): the in-memory client set assumes ONE server instance — true
+for this shop. If Railway ever scales to 2+ instances, a client on instance A wouldn't
+get bumps from a mutation served by instance B (the 30s fallback still covers it). Note
+for any future scale-out.
+- SCOPE: the TV board (the passive display that benefits). The manager cockpit was left
+on reload-on-action deliberately — auto-reloading it while a manager is typing a rework
+note would destroy their input; live-updating it cleanly would need a JSON re-render
+rewrite, not worth it now.
+- FILES: server.js v32 = 227,013 / 1442734318 (4 pairs forward+reversal proven). One
+stray em-dash slipped into the first commit attempt (1316x901 viewport moved the dialog
+coords) — caught by the editor hash pre-commit, removed, committed clean. No migration.
+- E2E (live): /api/board-stream returns text/event-stream with "retry: 3000" + initial
+"event: board / data: hello" · on /board the EventSource connected (readyState OPEN) and
+got the connect bump · closed line 2 (real change) → the board received the bump in
+~1.6s AND repainted the CLOSED badge on its own · reopened → bump + badge cleared · 4s
+idle → NO extra bumps (pushes only on change, no spam). Zz retired clean; 17 names, 0
+closed lines.
+- NEXT: Coyote push preempts (Mon/Tue); else Q83 day switch, or more notification events.
+
 ## 2026-07-31 — build block 31: Q116 PACE EARLY-WARNING PUSHES live (server.js v31 + migration 0018)
 
 - WHAT SHIPPED: the board's own RED now reaches OUT. A background patrol
