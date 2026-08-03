@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v41, 2026-08-03: Q118 ADMIN TOGGLE PLAIN-LANGUAGE — a light copy pass so the Features switches read clearly for a non-technical human: "cutover" becomes "until we go live", and the pace-warning and early-red descriptions are plainer. Text only, no behavior change. Previous: v40 Q120 NOTIFICATION INBOX — every person now has an in-app inbox at /inbox showing their own notification history (newest first, unread highlighted), and a small unread "bell" appears top-right on every app screen so a NEW notification is visible even when push/text/email are off. Opening the inbox marks them read. Q106-safe: it only shows a person their own notifications when they sign in — nothing is sent out, and the sandbox still governs push/text/email delivery. Migration 0022 adds notification_log.read_at. Previous: v39 Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v42, 2026-08-03: Q122 SESSION LOCKOUT ON DEACTIVATION — a deactivated employee's existing signed-in session is now rejected on their very next request, not only when their 12-hour cookie finally lapses. Every authenticated route resolves its session through one shared liveSession() chokepoint that re-checks the person is still ACTIVE, so removing someone (or an ex-employee with a still-valid cookie) loses ALL access at once — floor actions, the manager cockpit, and the admin console alike. Closes the Q122 hole where the role gates checked role but not active. No migration (employee.active already exists). Previous: v41 Q118 ADMIN TOGGLE PLAIN-LANGUAGE — a light copy pass so the Features switches read clearly for a non-technical human: "cutover" becomes "until we go live", and the pace-warning and early-red descriptions are plainer. Text only, no behavior change. Previous: v40 Q120 NOTIFICATION INBOX — every person now has an in-app inbox at /inbox showing their own notification history (newest first, unread highlighted), and a small unread "bell" appears top-right on every app screen so a NEW notification is visible even when push/text/email are off. Opening the inbox marks them read. Q106-safe: it only shows a person their own notifications when they sign in — nothing is sent out, and the sandbox still governs push/text/email delivery. Migration 0022 adds notification_log.read_at. Previous: v39 Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -121,6 +121,18 @@ function readSession(cookieHeader = "") {
   const good = crypto.createHmac("sha256", SESSION_SECRET).update(`${empId}.${exp}`).digest("hex");
   if (sig !== good || Number(exp) < Date.now()) return null;
   return empId;
+}
+// Q122: a signed cookie is only good while the person is still ACTIVE. Every
+// authenticated route resolves its session through here, so deactivating
+// someone (or an ex-employee holding a still-valid cookie) is rejected on the
+// very next request — not when the 12h cookie finally lapses. One extra indexed
+// lookup per authed request; the public TV board never signs in, so it is
+// unaffected. Returns the employee id, or null if signed out OR deactivated.
+async function liveSession(req) {
+  const sid = readSession(req.headers.cookie);
+  if (!sid) return null;
+  const [me] = await db(`employee?select=active&id=eq.${sid}`);
+  return me && me.active === true ? sid : null;
 }
 
 // PIN lockout (SPEC-DEFAULT C17: per-PERSON, never the kiosk device —
@@ -2239,7 +2251,7 @@ http.createServer(async (req, res) => {
     // temp-code flow: /api/login accepts the temp code, parks the person at
     // /change-pin, and this endpoint makes the PIN theirs.
     if (url.pathname === "/change-pin") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,must_change_pin&id=eq.${empId}&active=is.true`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
@@ -2247,7 +2259,7 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", changePinPage(emp.first_name));
     }
     if (url.pathname === "/api/pin/change" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const { pin } = await body(req);
       if (!/^\d{4}$/.test(String(pin))) return json(400, { ok: false, error: "PIN must be 4 digits" });
@@ -2286,7 +2298,7 @@ http.createServer(async (req, res) => {
     //  Everyone else    -> watcher home (owners watch the board; future
     //                      departments see "your board is coming" — Q95 amendment).
     if (url.pathname === "/home") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,lines,department,role,must_change_pin&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
@@ -2375,7 +2387,7 @@ http.createServer(async (req, res) => {
     // Rules enforced here: you must be signed in AND clocked on (Q104);
     // only legal transitions; who-did-what recorded; everything event-logged.
     if (url.pathname === "/api/task/state" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const { task_id, to, claimed_at } = await body(req);
       const [t] = await db(`task?select=id,state,build_id,display_no&id=eq.${task_id}`);
@@ -2406,7 +2418,7 @@ http.createServer(async (req, res) => {
 
     // CLOCK IN (Q90 one-tap; Q52 Wi-Fi gate below). Payroll-grade rows (C3.8).
     if (url.pathname === "/api/clock/in" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { line_id, claimed_at, approved_by, ah_reason, ah_plan } = await body(req);
@@ -2464,7 +2476,7 @@ http.createServer(async (req, res) => {
 
     // CLOCK OUT — reason label maps to the event kind (Q77 list drives the UI).
     if (url.pathname === "/api/clock/out" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { reason, claimed_at, wrap_note } = await body(req);
@@ -2493,7 +2505,7 @@ http.createServer(async (req, res) => {
     // feeds your hours to the wrong cab's pace math. Making the honest path
     // one tap is the fix — the friction was the problem.
     if (url.pathname === "/api/clock/switch" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { line_id, claimed_at } = await body(req);
@@ -2532,7 +2544,7 @@ http.createServer(async (req, res) => {
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     // Q120: the unread count for the notifications bell (any signed-in user).
     if (url.pathname === "/api/inbox/unread") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false });
       const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&limit=200`);
       return json(200, { ok: true, count: un.length });
@@ -2541,7 +2553,7 @@ http.createServer(async (req, res) => {
     // Q120: the in-app notification inbox — a person's own history, newest
     // first. Rendering it marks their unread notifications read.
     if (url.pathname === "/inbox") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name&id=eq.${empId}`);
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
@@ -2734,7 +2746,7 @@ http.createServer(async (req, res) => {
 
     // MANAGER COCKPIT — manager + admin only (file 07 permissions).
     if (url.pathname === "/manager") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -2838,7 +2850,7 @@ http.createServer(async (req, res) => {
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
     // Staff-level numbers never reach the floor (file 12 privacy rule).
     if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -2869,7 +2881,7 @@ http.createServer(async (req, res) => {
     // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
     // (Q104); the paused clock there is management's bottleneck (Q53/C11).
     if (url.pathname === "/api/build/finish" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in")
@@ -2898,7 +2910,7 @@ http.createServer(async (req, res) => {
     // for a forgotten clock-out — manager/admin taps the person out from the
     // cockpit's "On the clock" list. Audited: who forced it is in the event.
     if (url.pathname === "/api/clock/force-out" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -2922,7 +2934,7 @@ http.createServer(async (req, res) => {
     // screen, and (block 23) the line's techs get a push the moment it's
     // assigned — Q106-sandboxed to the owner-rep until cutover.
     if (url.pathname === "/api/build/rework" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -2957,7 +2969,7 @@ http.createServer(async (req, res) => {
     // Normal path = from AWAITING INSPECTION; direct from active allowed too
     // (manager judgment call — both are logged with the state they came from).
     if (url.pathname === "/api/build/complete" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -2983,7 +2995,7 @@ http.createServer(async (req, res) => {
     // Q109 gate, shared by the four kit endpoints: warehouse department OR
     // a manager/admin (they can always step in).
     const requireWarehouse = async () => {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return [null, json(401, { ok: false, error: "Signed out" })];
       const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.department !== "Warehouse" && me.role !== "manager" && me.role !== "admin"))
@@ -2992,7 +3004,7 @@ http.createServer(async (req, res) => {
     };
 
     if (url.pathname === "/api/build/start" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -3090,7 +3102,7 @@ http.createServer(async (req, res) => {
     // admin (the everyday quiet tool — no toggle gate like the hard Q113
     // close). Auto-clears at day roll; auto-resumes on clock-in. Audited.
     if (url.pathname === "/api/line/down" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -3117,7 +3129,7 @@ http.createServer(async (req, res) => {
     // Q113: close a line for the day / reopen it. Admins always; managers
     // only when the "Managers can open/close lines" switch is ON. Audited.
     if (url.pathname === "/api/line/closed" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -3143,7 +3155,7 @@ http.createServer(async (req, res) => {
     // "Time-off requests" toggle. Lands PENDING in the manager queue; a
     // manager/admin approves or denies. Delivery is Q106-sandboxed.
     if (url.pathname === "/api/timeoff/request" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [toTog] = await db(`feature_toggle?select=enabled&key=eq.time_off_requests`);
       if (toTog && toTog.enabled === false)
@@ -3170,7 +3182,7 @@ http.createServer(async (req, res) => {
 
     // Q92: approve/deny a pending request. Manager + admin. Optional note.
     if (url.pathname === "/api/timeoff/decide" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       // Q92 (owner-rep 2026-08-03): approving/denying time off is an ADMIN
@@ -3199,7 +3211,7 @@ http.createServer(async (req, res) => {
     // Q92: a manager/admin enters time off for someone directly — lands
     // already approved (recording a known absence, not requesting one).
     if (url.pathname === "/api/timeoff/add" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       // Q92 (owner-rep 2026-08-03): entering time off for someone lands it
@@ -3231,7 +3243,7 @@ http.createServer(async (req, res) => {
     // timecard. Managers reach back 14 days, admins anytime. The tangle
     // guard: a correction must leave the day's punches alternating in/out.
     if (url.pathname === "/api/punch/correct" && req.method === "POST") {
-      const meId = readSession(req.headers.cookie);
+      const meId = await liveSession(req);
       if (!meId) return json(401, { ok: false, error: "Signed out" });
       const [meP] = await db(`employee?select=role&id=eq.${meId}`);
       if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
@@ -3319,7 +3331,7 @@ http.createServer(async (req, res) => {
     // owns an after-hours claim with one tap. Until then the session wears
     // its UNCONFIRMED flag on the cockpit and the timecards.
     if (url.pathname === "/api/afterhours/confirm" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
@@ -3352,7 +3364,7 @@ self.addEventListener("notificationclick", (e) => {
     // A signed-in person registers THIS device for pushes. Re-subscribing
     // the same device just refreshes its row (endpoint is unique).
     if (url.pathname === "/api/push/subscribe" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const { endpoint, p256dh, auth } = await body(req);
       if (!endpoint || !p256dh || !auth) return json(400, { ok: false, error: "Incomplete subscription" });
@@ -3367,7 +3379,7 @@ self.addEventListener("notificationclick", (e) => {
     // sandbox rewrite, sealing, delivery. What the E2E and the owner-rep's
     // phone both use to prove the plumbing.
     if (url.pathname === "/api/push/test" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || me.role !== "admin") return json(403, { ok: false, error: "Admin only" });
@@ -3379,7 +3391,7 @@ self.addEventListener("notificationclick", (e) => {
     // ---------- ADMIN CONSOLE (file 21) — admin role only ----------
     // One shared gate for the page + its three APIs.
     const requireAdmin = async () => {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return [null, json(401, { ok: false, error: "Signed out — sign in again" })];
       const [me] = await db(`employee?select=id,role&id=eq.${empId}`);
       if (!me || me.role !== "admin") return [null, json(403, { ok: false, error: "Admin only" })];
@@ -3387,7 +3399,7 @@ self.addEventListener("notificationclick", (e) => {
     };
 
     if (url.pathname === "/admin") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
@@ -3658,7 +3670,7 @@ self.addEventListener("notificationclick", (e) => {
     // metadata row lands in build_photo. Q86's per-product minimum becomes
     // a hard gate when product settings arrive; today the gate nudges.
     if (url.pathname === "/api/photo/upload" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
@@ -3696,7 +3708,7 @@ self.addEventListener("notificationclick", (e) => {
     // documents a problem or the work right where it happened. Append-only
     // from the floor; who wrote it is recorded.
     if (url.pathname === "/api/task/note" && req.method === "POST") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
@@ -3714,7 +3726,7 @@ self.addEventListener("notificationclick", (e) => {
     // Serve a photo to any SIGNED-IN person — the bucket is private and the
     // app is the only door (spec §10: anon reaches nothing directly).
     if (url.pathname.startsWith("/photo/")) {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const pid = url.pathname.slice("/photo/".length);
       const [p] = await db(`build_photo?select=storage_path&id=eq.${pid}`);
@@ -3773,7 +3785,7 @@ self.addEventListener("notificationclick", (e) => {
     }
 
     if (url.pathname === "/logout") {
-      const empId = readSession(req.headers.cookie);
+      const empId = await liveSession(req);
       if (empId) logEvent("employee.logout", empId, {});
       res.setHeader("Set-Cookie", "sb_session=; Path=/; Max-Age=0");
       res.writeHead(302, { Location: "/login" });
