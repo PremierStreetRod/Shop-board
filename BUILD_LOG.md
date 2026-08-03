@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 42: Q122 session lockout on deactivation (server.js v42, no migration)
+
+- Resume after a session reset (model Fable 5). Verified live first: /health ok; coyote_intake = 2 leftover TEST rows only ("this is not { json" + order "TEST-23613", both unprocessed) → no real dev posts, Coyote does NOT preempt. Proceeded to the deferred Q122/Q123 security block.
+- THE GAP (Q122): readSession() validated only the cookie signature + 12h expiry. Staff READ routes re-checked active, but the role-gated MUTATING routes + requireAdmin re-read the actor with select=role and NOT active — so a deactivated manager/admin holding a still-valid cookie kept its powers until the cookie lapsed. (Role changes were already safe: role is re-read fresh every request, never trusted from the cookie.)
+- THE FIX (v42): one shared chokepoint — new async liveSession(req) = readSession + a single indexed `employee?select=active&id=eq.<id>` lookup; returns the id only if still active, else null. Converted ALL 32 authed route entries (31 empId + 1 meId) from readSession to await liveSession(req). A deactivated person now yields null empId, so every route funnels them into the SAME null-handling it already had for signed-out users (401 / redirect) — no new crash surface. Public TV board / SSE never sign in, so untouched. No migration (employee.active already exists).
+- CODE: v42 = 269,828 / 3845956799 (4 pairs: header, liveSession insert, empId ×31 replace-all, meId ×1; forward AND reversal proven — new→old reproduced v41 exactly at 268,821 / 1985109061). Editor hash gate matched v42 before commit. Commit SHA 1510fefbe9, raw-verified byte-exact (helper present, 32 liveSession calls).
+- VERIFY: liveSession unit-tested 5/5 (active→id; signed-out / inactive / missing-row / null-active → null). DATA: employee.active cleanly splits 17 active staff (keep access) from 1 retired test account (rejected) — teeth without locking out live staff. DEPLOY: /health 200; /api/inbox/unread signed-out = clean 401 (chokepoint doesn't crash on no-cookie); /api/board-state 200 (public board unaffected). HONEST LIMITS: no signed-in deactivated click-test (PIN the harness won't type) and no external signal to confirm the v42 build swapped in — but the commit is byte-verified on main and Railway auto-deploys on push.
+- Q122 → code CLOSED (remaining: a docs offboarding step in file 07/15). Q123 → session-revocation piece done; remaining pre-cutover: security headers, a login rate-limit, an input-validation sweep, the Q52 Wi-Fi gate decision, SECRET rotation, + a fresh full-system break-pass.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else finish Q123 hardening, or Q86/Q91.
+
 ## 2026-08-03 — build block 41: Q118 admin toggle plain-language pass (server.js v41, no migration) + Q124 backups verified
 
 - Owner-rep's approved 20-min plan was Q124 + Q118; Q122/Q123 held back as their own careful security block.
