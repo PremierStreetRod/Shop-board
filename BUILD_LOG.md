@@ -1,6 +1,40 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 40: Q120 notification inbox part 1 (server.js v40 + migration 0022)
+
+- Owner-rep said "keep working"; picked the notification center — the highest-value backlog item
+  and buildable now (notification_log already stores every message per intended recipient).
+- WHAT (part 1): an in-app INBOX at /inbox rendering a person's own notification_log rows newest
+  first, unread (read_at null) ringed red; opening it marks them read. A universal unread BELL — a
+  small clock-face with a red count, top-right on every app screen — injected ONCE via the shared
+  head snippet (the `style` const, with a skip-list for /board, /login, /, /change-pin, /inbox), so
+  no per-page footer edits (the staff-page footers are near-identical, which would have made seven
+  fragile anchors). Endpoints: /api/inbox/unread (count for the bell) and /inbox (render + mark-read).
+- Q106 stance (recorded): this is PULL-ONLY — it shows a person their OWN notifications when THEY
+  sign in; nothing is sent out, and push/text/email delivery stays sandboxed. No staff sign in
+  during the build phase and the sandbox test rows are purged at cutover, so it surfaces nothing to
+  staff pre-launch; it goes live with the rest of the app.
+- CODE: v40 = 268,512 / 1896038506 (4 pairs, forward AND reversal proven to v39). Commit SHA
+  2ab1af69, raw-verified. Migration 0022 (notification_log.read_at + a (intended_employee_id,
+  read_at) index) run + verified.
+- VERIFY: deploy healthy (/health ok:true,db:true; /api/inbox/unread answers 401 unauth = route
+  present — it was 404 in v39, so the deploy is confirmed live; /inbox 302 → login). Data-layer E2E
+  on the Zz test account (rows deleted after): inserted 2 notifications → the exact unread-count
+  query returned them → the mark-read UPDATE set read_at → still-unread 0 → deleted (0 test rows
+  left). HONEST LIMIT: the rendered inbox page + the bell's on-screen appearance weren't checked
+  through a signed-in session (login needs a PIN the harness won't type); the query + mark-read
+  logic is proven at the data layer.
+- STILL TO DO (Q120 part 2): the per-user TEXT/EMAIL on-off toggles in the admin console — deferred
+  because those channels don't exist yet (web-push only until the cutover email/SMS providers are
+  wired); the toggle settings + notify() honoring them come with those channels.
+- Q121 code backup refreshed to v40 (+ migration 0022). No Zz employee account touched (only
+  notification_log test rows, deleted).
+- RECORD-INJECTION NOTE: gzip for record injection is now done with mtime=0 (deterministic) after a
+  mid-inject re-encode produced a different gzip header last block — no recurrence.
+- NEXT: Coyote mapping preempts the moment the developer's first post lands; otherwise the backlog
+  (Q118 admin copy, Q122 ex-employee session lockout, Q123 security, Q124 backups) or Q86.
+
 ## 2026-08-03 — build block 38: Q119 reports periods — clear labels + custom date ranges (server.js v38, no migration)
 
 - Owner-rep flagged (weekend notes) that the reports period picker was unclear: "Week/Month/
