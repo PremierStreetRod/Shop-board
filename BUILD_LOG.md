@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 41: Q118 admin toggle plain-language pass (server.js v41, no migration) + Q124 backups verified
+
+- Owner-rep's approved 20-min plan was Q124 + Q118; Q122/Q123 held back as their own careful security block.
+- Q124 (records only, no code): verified in the Supabase dashboard — Pro plan, automated DAILY physical backups (one restorable per day, 27 Jul–02 Aug listed) + point-in-time recovery + restore-to-new-project. With GitHub holding schema+code, the live DB data is well protected. ⚠ GAP flagged to the cutover checklist: "Storage objects are NOT included" in DB backups — the cab-photos Storage bucket isn't covered; decide the photo-durability plan before real photos matter at go-live.
+- Q118 (v41, TEXT ONLY, no behavior change, no migration): a light plain-language pass on the Features switches — "cutover" → "until we go live" (text/email switches); "Early-red standards guard" → "Cab went red too early" with a plainer line; "Pace early-warning pushes / …Sandboxed to the owner-rep until cutover" → "Pace early-warning heads-up" / "…Until we go live, these come only to you". The rest of the toggle copy was already clear.
+- CODE: v41 = 268,821 / 1985109061 (5 pairs, forward AND reversal proven — new→old reproduced v40 exactly at 268,512 / 1896038506). Editor hash gate matched v41 before commit. Commit SHA 2dec6b9a42, raw-verified byte-exact via the GitHub API at that SHA ("cutover" gone, new pace label present).
+- VERIFY: deploy healthy (/health ok:true, db:true). HONEST LIMIT (standing): the on-screen toggle text wasn't re-checked through a signed-in admin session (login needs a PIN the harness won't type) — proven at the source+commit layer. Code backup + records refreshed to v41 and synced to the owner-rep's machine.
+- NEXT: Coyote mapping preempts the moment the developer's first post lands; else the Q122/Q123 security block, or Q86/Q91.
+
 ## 2026-08-03 — build block 40: Q120 notification inbox part 1 (server.js v40 + migration 0022)
 
 - Owner-rep said "keep working"; picked the notification center — the highest-value backlog item
