@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 44: Q123 login rate-limit (server.js v44, no migration)
+
+- Owner-rep: "go ahead" — approving login rate-limit next (then CSP).
+- DESIGN PROBLEM: a naive per-IP attempt cap is dangerous — the shop almost certainly sits behind ONE shared public IP, so counting raw attempts (or a low distinct threshold) could lock out the whole shop on a busy or temp-code-launch morning.
+- FIX (v44): count DISTINCT employee ids that FAIL a login from a given client IP inside a rolling 10-min window — never raw attempt volume. Trip a 15-min 429 cooldown only at 20 distinct failed ids. 20 is deliberately > the ~17 real names: a legit person only fails against their OWN name, so even all 17 fumbling can't reach 20 — only an attacker spraying bogus ids can. The per-person 5-try lockout still handles single-name brute force; this adds "one source, many names" coverage. Both failure branches feed it (unknown-id/404 + wrong-PIN). Client IP via X-Forwarded-For (Railway), remoteAddress fallback; in-memory like the per-person lockout. No migration. Known limit: X-Forwarded-For spoofing can spread across fake IPs to evade — but the per-person lockout still applies, so defense-in-depth, not the primary control.
+- CODE: v44 = 273,969 / 3292714944 (5 pairs: header, guard-helpers insert, login IP-block check, 404-path note, wrong-PIN note; forward AND reversal proven — new→old reproduced v43 exactly at 271,176 / 216380449). Editor hash gate matched v44 before commit. Commit SHA ca71b4e59b, raw-verified byte-exact.
+- VERIFY: guard unit-tested 5/5 — 17 distinct real-name fails → NOT blocked (no legit lockout); 20 distinct → blocked; clean IP unaffected; window rolls over and resets; cooldown expires and unblocks. DEPLOY: /health 200 ok/db; a POST /api/login with a bogus nonexistent UUID → normal 404 "No PIN on file" (route healthy, one attempt doesn't trip the threshold, no real account touched). HONEST LIMITS: no external signal distinguishes v44 from v43 (both 404 a bogus id) and I deliberately did NOT trigger the 20-fail block on the live system — but the commit is byte-verified and Railway auto-deploys; the guard is unit-proven.
+- Q123 status: security headers (v43) + login rate-limit (v44) DONE. Remaining pre-cutover: a Content-Security-Policy (own sub-block — inline inventory + nonces + Supabase image/connect origins), a full input-validation sweep, the Q52 Wi-Fi/IP gate decision, SESSION_SECRET + key rotation at cutover, + a fresh full-system break-pass when feature-complete.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else the CSP sub-block, or Q86/Q91.
+
 ## 2026-08-03 — build block 43: Q123 security response headers (server.js v43, no migration)
 
 - Owner-rep: "move on to 123." Started the Q123 hardening pass with the safest high-value item — security response headers — and left CSP as its own careful sub-block (the app leans on inline styles/scripts).
