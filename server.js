@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v37, 2026-08-03: Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v38, 2026-08-03: Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -1727,9 +1727,41 @@ const phxDayStart = (d) => Date.parse(d + "T00:00:00Z") + 7 * 3600000;
 // A punch's Phoenix wall-clock HH:MM — what the corrector's inputs speak.
 const phxHHMM = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); };
 
-async function reportData(days) {
+// Q119: parse the reports period from the query — clear presets (rolling
+// "last N days" and calendar to-date) plus a custom From/To range. Returns
+// the window [startMs, endMs), a human label, the exact date range to show,
+// and the querystring to carry on links + CSV.
+function reportPeriod(params) {
   const nowMs = Date.now();
-  const sinceMs = nowMs - days * 86400000;
+  const today = phxDate(nowMs);                 // Phoenix YYYY-MM-DD
+  const todayStart = phxDayStart(today);
+  const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const from = params.get("from"), to = params.get("to");
+  if (isDate(from) && isDate(to)) {
+    let f = from, t = to;
+    if (phxDayStart(f) > phxDayStart(t)) { const x = f; f = t; t = x; }   // swap-safe
+    return { startMs: phxDayStart(f), endMs: phxDayStart(t) + 86400000, preset: "custom",
+      from: f, to: t, label: "Custom", rangeText: f === t ? f : `${f} → ${t}`, qs: `from=${f}&to=${t}` };
+  }
+  let preset = params.get("preset") || "last30";
+  let startMs, label;
+  if (preset === "last7") { startMs = todayStart - 6 * 86400000; label = "Last 7 days"; }
+  else if (preset === "last90") { startMs = todayStart - 89 * 86400000; label = "Last 90 days"; }
+  else if (preset === "wtd") { const dow = new Date(today + "T00:00:00Z").getUTCDay(); startMs = todayStart - ((dow + 6) % 7) * 86400000; label = "This week"; }
+  else if (preset === "mtd") { startMs = phxDayStart(today.slice(0, 8) + "01"); label = "This month"; }
+  else if (preset === "ytd") { startMs = phxDayStart(today.slice(0, 4) + "-01-01"); label = "This year"; }
+  else { preset = "last30"; startMs = todayStart - 29 * 86400000; label = "Last 30 days"; }
+  return { startMs, endMs: nowMs, preset, from: "", to: "", label,
+    rangeText: `${phxDate(startMs)} → ${today}`, qs: `preset=${preset}` };
+}
+
+async function reportData(startMs, endMs) {
+  // Q119: the window is now an explicit [startMs, endMs) range (a preset or a
+  // custom From/To), not "last N days". nowMs stays REAL now for the live
+  // snapshots (open intervals, open-cab aging); winEnd bounds the window.
+  const nowMs = Date.now();
+  const sinceMs = startMs;
+  const winEnd = endMs;
   const lines = await db(`line?select=id,name&order=id`);
   const emps = await db(`employee?select=id,first_name,last_name,active`);
   const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
@@ -1743,7 +1775,7 @@ async function reportData(days) {
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
   const doneAt = {}; for (const e of compEv) if (e.payload && e.payload.build_id) doneAt[e.payload.build_id] = new Date(e.at).getTime();
-  const finished = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && b.started_at);
+  const finished = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && doneAt[b.id] <= winEnd && b.started_at);
   const live = builds.filter((b) => ["active", "rework", "awaiting_inspection"].includes(b.state));
   // Standard hours = the cab's own FROZEN task list (Q97); rework fix tasks
   // carry 0 std hours (Q85 own-bucket) so they never inflate the standard.
@@ -1783,12 +1815,12 @@ async function reportData(days) {
   // Labor per employee for the window (suite 3) — clock truth only (C15).
   const labor = emps.map((p) => {
     const mine = ivs.filter((iv) => iv.emp === p.id);
-    const hrs = mine.reduce((s, iv) => s + overlapHrs(iv, sinceMs, nowMs), 0);
-    const daysSet = new Set(mine.filter((iv) => iv.end > sinceMs).map((iv) => phxDate(Math.max(iv.start, sinceMs))));
+    const hrs = mine.reduce((s, iv) => s + overlapHrs(iv, sinceMs, winEnd), 0);
+    const daysSet = new Set(mine.filter((iv) => iv.end > sinceMs && iv.start < winEnd).map((iv) => phxDate(Math.max(iv.start, sinceMs))));
     return { name: `${p.first_name} ${p.last_name}`, active: p.active, hrs, days: daysSet.size };
   }).filter((r) => r.hrs > 0).sort((a, b) => b.hrs - a.hrs);
   // Rework in the window (suite 5) — count + reasons from the audit trail.
-  const rw = rwEv.filter((e) => new Date(e.at).getTime() >= sinceMs);
+  const rw = rwEv.filter((e) => { const t = new Date(e.at).getTime(); return t >= sinceMs && t <= winEnd; });
   const rwReasons = {};
   for (const e of rw) { const r = (e.payload && e.payload.reason) || "(no reason)"; rwReasons[r] = (rwReasons[r] || 0) + 1; }
   // TIMECARDS (Q111): payroll's view — one row per person per Phoenix day.
@@ -1802,21 +1834,21 @@ async function reportData(days) {
   // prevented in practice by that same sweeper.)
   const tcMap = {};
   for (const iv of ivs) {
-    if (iv.end <= sinceMs || iv.start >= nowMs) continue;
+    if (iv.end <= sinceMs || iv.start >= winEnd) continue;
     const p = emps.find((e) => e.id === iv.emp); if (!p) continue;
     const day = phxDate(Math.max(iv.start, sinceMs));
     const k = iv.emp + "|" + day;
     const row = tcMap[k] || (tcMap[k] = { name: `${p.first_name} ${p.last_name}`, date: day,
       firstIn: iv.start, lastOut: iv.end, paid: 0, shop: 0, flags: new Set() });
     row.firstIn = Math.min(row.firstIn, iv.start); row.lastOut = Math.max(row.lastOut, iv.end);
-    const hrs = overlapHrs(iv, sinceMs, nowMs);
+    const hrs = overlapHrs(iv, sinceMs, winEnd);
     row.paid += hrs;
     if (iv.line === SHOP_LINE_ID) row.shop += hrs;
   }
   for (const ev of events) {
     // Q111 pt 2: corrected/added punches STAMP the day — no silent fixes.
     const tAll = new Date(ev.claimed_at).getTime();
-    if (tAll >= sinceMs && tAll <= nowMs) {
+    if (tAll >= sinceMs && tAll <= winEnd) {
       const rowAll = tcMap[ev.employee_id + "|" + phxDate(tAll)];
       if (rowAll) {
         if (ev.corrected_by) rowAll.flags.add("CORRECTED" + (ev.correction_note ? ": " + ev.correction_note : ""));
@@ -1825,14 +1857,14 @@ async function reportData(days) {
     }
     if (ev.kind === "clock_in") continue;
     const t = new Date(ev.claimed_at).getTime();
-    if (t < sinceMs || t > nowMs) continue;
+    if (t < sinceMs || t > winEnd) continue;
     const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
     if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
     if (ev.reason && !["End of shift", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
   }
   // Q112: after-hours sessions stamp their timecard rows — the reason, the
   // claimed approver, and whether anyone has CONFIRMED the claim yet.
-  const ahSess = await db(`after_hours_session?select=employee_id,reason,approved_by,confirmed_by,started_at&started_at=gte.${new Date(sinceMs).toISOString()}`);
+  const ahSess = await db(`after_hours_session?select=employee_id,reason,approved_by,confirmed_by,started_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
   for (const sA of ahSess) {
     const row = tcMap[sA.employee_id + "|" + phxDate(new Date(sA.started_at).getTime())];
     if (!row) continue;
@@ -1841,7 +1873,7 @@ async function reportData(days) {
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
-  return { days, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons } };
+  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons } };
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
@@ -1869,11 +1901,22 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
   <h2>Reports</h2>
-  <p class="per">Period:
-    ${[7, 30, 90, 365].map((n) => `<a href="/reports?days=${n}" class="${d.days === n ? "on" : ""}">${n === 7 ? "Week" : n === 30 ? "Month" : n === 90 ? "Quarter" : "Year"}</a>`).join("")}
-  </p>
+  <!-- Q119: clear period picker — rolling windows vs calendar to-date, plus a
+       custom From/To range, with the exact dates shown so it's unambiguous. -->
+  <div class="per" style="line-height:2.1">
+    <div><span style="opacity:.55">Rolling window:</span>
+      ${[["last7", "Last 7 days"], ["last30", "Last 30 days"], ["last90", "Last 90 days"]].map(([p, t]) => `<a href="/reports?preset=${p}" class="${d.preset === p ? "on" : ""}">${t}</a>`).join("")}</div>
+    <div><span style="opacity:.55">To date:</span>
+      ${[["wtd", "This week"], ["mtd", "This month"], ["ytd", "This year"]].map(([p, t]) => `<a href="/reports?preset=${p}" class="${d.preset === p ? "on" : ""}">${t}</a>`).join("")}</div>
+    <div><span style="opacity:.55">Custom:</span>
+      From <input type="date" id="rp-from" value="${d.from || ""}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+      To <input type="date" id="rp-to" value="${d.to || ""}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+      <button onclick="rpGo()" style="background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer;${d.preset === "custom" ? "outline:2px solid #30d158" : ""}">Show</button></div>
+    <p style="margin:8px 0 2px"><b>${d.label}</b> · showing <b>${d.rangeText}</b> <span style="opacity:.55">(Phoenix dates)</span></p>
+  </div>
+  <script>function rpGo(){var f=document.getElementById("rp-from").value,t=document.getElementById("rp-to").value;if(!f||!t){return;}location.href="/reports?from="+f+"&to="+t;}</script>
   <div class="lane">
-    <a class="csv" href="/reports.csv?which=products&days=${d.days}">⬇ CSV</a>
+    <a class="csv" href="/reports.csv?which=products&${d.qs}">⬇ CSV</a>
     <h3>Actual vs standard — by product (${d.cabs.length} cab${d.cabs.length === 1 ? "" : "s"} signed off)</h3>
     ${d.products.length ? `<table><tr><th>Product</th><th class="num">Cabs</th><th class="num">Avg standard</th><th class="num">Avg actual</th><th class="num">Variance</th></tr>
       ${d.products.map((p) => `<tr><td>${p.part}</td><td class="num">${p.n}</td><td class="num">${h1(p.avgStd)} h</td><td class="num">${h1(p.avgActual)} h</td>
@@ -1882,7 +1925,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     : `<div style="opacity:.6">No cabs signed off in this period.</div>`}
   </div>
   <div class="lane">
-    <a class="csv" href="/reports.csv?which=cabs&days=${d.days}">⬇ CSV</a>
+    <a class="csv" href="/reports.csv?which=cabs&${d.qs}">⬇ CSV</a>
     <h3>Signed-off cabs — the detail</h3>
     ${d.cabs.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th></tr>
       ${d.cabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td>
@@ -1897,7 +1940,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     : `<div style="opacity:.6">No open cabs.</div>`}
   </div>
   <div class="lane">
-    <a class="csv" href="/reports.csv?which=labor&days=${d.days}">⬇ CSV</a>
+    <a class="csv" href="/reports.csv?which=labor&${d.qs}">⬇ CSV</a>
     <h3>Labor — clocked hours per person</h3>
     ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
       ${d.labor.map((r) => `<tr><td>${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>`).join("")}</table>
@@ -1905,7 +1948,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
   <div class="lane">
-    <a class="csv" href="/reports.csv?which=timecards&days=${d.days}">⬇ CSV</a>
+    <a class="csv" href="/reports.csv?which=timecards&${d.qs}">⬇ CSV</a>
     <h3>Timecards — payroll (Q111)</h3>
     ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th>Notes</th></tr>
       ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table>
@@ -2733,14 +2776,16 @@ http.createServer(async (req, res) => {
         if (!tog || !tog.enabled)
           return send(403, "text/plain", "Reports are admin-only right now. An admin can share them from the console — Features, 'Managers can see Reports'.");
       }
-      const days = [7, 30, 90, 365].includes(Number(url.searchParams.get("days")))
-        ? Number(url.searchParams.get("days")) : 30;
-      const data = await reportData(days);
+      const period = reportPeriod(url.searchParams);
+      const data = await reportData(period.startMs, period.endMs);
+      Object.assign(data, { preset: period.preset, from: period.from, to: period.to,
+        qs: period.qs, label: period.label, rangeText: period.rangeText });
       if (url.pathname === "/reports.csv") {
         const which = ["products", "labor", "cabs", "timecards"].includes(url.searchParams.get("which"))
           ? url.searchParams.get("which") : "cabs";
+        const tag = period.preset === "custom" ? `${period.from}_to_${period.to}` : period.preset;
         res.writeHead(200, { "content-type": "text/csv; charset=utf-8",
-          "content-disposition": `attachment; filename="shopboard-${which}-${days}d.csv"` });
+          "content-disposition": `attachment; filename="shopboard-${which}-${tag}.csv"` });
         return res.end(reportCsv(which, data));
       }
       return send(200, "text/html; charset=utf-8", reportsPage(data, me.role === "admin"));
