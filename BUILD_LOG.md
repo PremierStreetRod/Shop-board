@@ -1,6 +1,47 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 34: Q92 TIME-OFF REQUESTS, part 1 (server.js v34 + migration 0020)
+
+- WHAT: the first slice of the planned-absence work. A builder can request time off from
+  their phone (a date range + a reason from the admin pick list); it lands in the manager's
+  new "Time off — needs you" cockpit lane; one tap approves or denies (a denial can carry a
+  short note). A manager/admin can also enter time off for anyone directly — that lands
+  already approved. The manager cockpit shows a "who's out, upcoming" list; the builder's
+  home screen shows "your requests" with each status. Every action is audited
+  (timeoff.requested / approved / denied / added) and Q106-sandboxed (all pushes reroute to
+  the owner-rep until the NOTIFY_LIVE cutover). Gated by the existing "Time-off requests"
+  admin toggle (seeded ON).
+- DB: migration 0020 — new table time_off_request (id, employee_id, start/end date, reason,
+  status pending/approved/denied [checked], requested_by, added_by_manager, decided_by/at,
+  decision_note, created_at) + 3 indexes; a time_off_reason pick list (Vacation, Personal,
+  Appointment, Sick, Family, Other); a feature_toggle row for time_off_requests (ON).
+- CODE: server.js v34 (248,960 units / hash 2277737846). Ten edit pairs — homePage gains the
+  request panel + its own-requests list; managerPage gains the needs-you lane, the
+  add-for-anyone control and the upcoming list; three endpoints — /api/timeoff/request
+  (toggle-gated), /decide (manager+admin, optional note, guards an already-decided request)
+  and /add (manager+admin, lands approved). Same pipeline as always: local edit -> node
+  --check -> reversal proof (new->old reproduces v33 exactly) -> CM6 inject with per-pair
+  count precheck + v34 hash gate -> commit (SHA 1676372b) -> raw verify at that SHA ->
+  migration -> deploy probe -> E2E.
+- VERIFY: deploy probe — all three new routes answer 401 (auth gate) unauthenticated, and a
+  nonexistent path answers 404, so the routes are genuinely live. E2E at the data layer (only
+  the Zz test account touched, then deleted): request->approve, request->deny (with note),
+  manager-add (added_by_manager=true, approved), and one left pending; the three route reads
+  returned exactly the right rows (pending queue = the pending one; upcoming = the two future
+  approved; home-mine = all four); the status CHECK rejected a bogus value. Table left empty,
+  seed intact, Zz row clean (active=false, no PIN).
+- HONEST LIMIT: the happy path was verified at the data + query layer, not by a signed-in HTTP
+  click-through — logging in needs a PIN, which the build harness does not type. The three
+  handlers reuse the exact auth/validation/notify/logEvent patterns already proven in blocks
+  27–33. Worth a 2-minute manual click-through by the owner-rep once signed in.
+- DEFERRED (recorded in the register under Q92): feeding an approved absence into each cab's
+  finish-date projection, a full days-ahead visual coverage calendar, the on-arrival reason
+  pre-loading, and the Meeting Pack (its own block).
+- NEXT: the Coyote mapping job preempts everything when the developer's first post lands;
+  otherwise the independent menu (smart-alerts wiring Q91, product settings + photo gate Q86,
+  pick-list editor Q77, reports depth).
+
 ## 2026-07-31 — build block 33: Q83 "DOWN FOR TODAY" QUICK-HOLD (server.js v33 + migration 0019)
 
 - NAMING CORRECTION (honest): this was queued loosely as a "day-switch / midnight-span
