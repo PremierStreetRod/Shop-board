@@ -1,6 +1,40 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 38: Q119 reports periods — clear labels + custom date ranges (server.js v38, no migration)
+
+- Owner-rep flagged (weekend notes) that the reports period picker was unclear: "Week/Month/
+  Quarter/Year" were actually rolling last-N-days windows, and he'd guessed year = year-to-date.
+- WHAT: replaced the picker with a grouped, explicit one — ROLLING (Last 7 / 30 / 90 days),
+  TO DATE (This week / month / year, calendar-anchored in Phoenix), and CUSTOM (From/To date
+  pickers). Every view now shows a "<label> · showing <start> → <end> (Phoenix dates)" subtitle so
+  it's unambiguous what's being searched. CSV filenames carry the period.
+- UNDER THE HOOD: new reportPeriod(params) parses the query into a window [startMs, endMs), a label,
+  the exact range text, and the querystring carried on links + CSV. reportData(days) became
+  reportData(startMs, endMs): sinceMs=startMs, winEnd=endMs; every window filter (finished cabs,
+  labor, rework, timecards, after-hours) now uses winEnd. This FIXED A LATENT GAP — the old code
+  only lower-bounded the window (fine when it always ended "now", wrong for a past custom range).
+  The live snapshots (open intervals via workIntervals, open-cab aging) correctly still use real now.
+- CODE: v38 = 263,317 / 634216072 (14 pairs, forward AND reversal proven to v37). Commit SHA
+  6fc6dcbd, raw-verified. No migration.
+- INJECTION LESSON (recorded): the CM6 apply loop replaces a single occurrence, but pair 13 was a
+  replace-ALL (the four CSV `&days=${d.days}` links, count 4). The precheck counted 4 but apply
+  replaced only the first; the v38 hash gate CAUGHT the mismatch (units off by 21 = 3×7), and a
+  corrective replace-all loop fixed the remaining three → hash matched exactly. (Injector should
+  handle count>1 pairs with a loop going forward.)
+- VERIFY: reportPeriod() unit-tested locally, 11/11 — each preset's Phoenix window (last7/30/90,
+  wtd/mtd/ytd, default last30), custom From/To, swap-safe From>To, single-day range, and
+  week-to-date landing on the correct Monday from a mid-week "now". Deploy healthy (/health
+  ok:true,db:true; /reports and /reports.csv with the new params redirect to /login unauth = routes
+  intact). The core report math (variance %, labor, timecards) is UNCHANGED from the block-19 build
+  that was E2E-proven. HONEST LIMIT: the rendered page's numbers weren't re-checked through a
+  signed-in admin session (login needs a PIN the harness won't type) — owner-rep can spot-check by
+  exporting a CSV for a known range (CSV parity with the page is the point).
+- Q121 code backup refreshed to v38 (server.js + MANIFEST). No Zz account touched this block.
+- NEXT: Coyote mapping preempts the moment the developer's first post lands; otherwise the weekend
+  backlog (Q118 admin copy, Q120 notification center, Q122–Q124 security/backups/ex-employees) or
+  Q91/Q86.
+
 ## 2026-08-03 — build block 36/37: Q77 reason-list editor + Q121 code backup started (server.js v36→v37, no migration)
 
 - Owner-rep said "build the next block"; chose the pick-list editor — self-contained, admin-only,
