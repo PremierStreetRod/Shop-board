@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v35, 2026-08-03: Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v36, 2026-08-03: Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -1469,7 +1469,16 @@ const TOGGLE_INFO = {
   // delivery is ALSO gated by the Q106 sandbox until cutover regardless.
   pace_warnings: ["Pace early-warning pushes", "Push the moment a cab crosses into red (needs help). Sandboxed to the owner-rep until cutover."],
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }) => `<!doctype html>
+// Q77: friendly names for the admin-editable reason lists (the pick-list
+// editor). A list_key not named here still appears, keyed by its raw name.
+const PICK_LIST_INFO = {
+  clock_out_reason: "Clock-out reasons",
+  rework_reason: "Rework reasons",
+  after_hours_reason: "After-hours reasons",
+  line_down_reason: "Down-for-today reasons",
+  time_off_reason: "Time-off reasons",
+};
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -1501,6 +1510,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
     <a href="#cabnums" style="color:#fff;font-weight:700;margin-right:16px">Cab #s</a>
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
+    <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
@@ -1586,6 +1596,26 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <p style="opacity:.5;font-size:.85rem">Outside these hours (and on weekends) the clock-in screen asks for after-hours approval, the sweeper closes forgotten punches, and the TV board's chip flips. Changes take effect within a minute.</p>
   </div>
 
+  <!-- Q77: the reason-list editor. Every dropdown of reasons in the app is an
+       admin-managed pick list; this panel adds/renames/reorders/retires the
+       choices in each. Retire-not-delete keeps history intact. -->
+  <div class="panel" id="picklists"><h3>Reason lists</h3>
+  <p style="opacity:.5;font-size:.85rem">These are the choices staff and managers pick from around the app (clock-out reasons, rework reasons, and so on). Rename, reorder, add, or retire them here — retiring keeps past records intact and just drops the choice off new menus.</p>
+  ${pickLists.map((pl) => `
+    <div style="margin-top:16px">
+      <b>${pl.label}</b>
+      ${pl.items.length ? `<table style="margin-top:6px"><tr><th>Choice</th><th></th><th></th><th></th></tr>
+      ${pl.items.map((it, i) => `<tr>
+        <td><input class="nm" id="pl-${it.id}" value="${String(it.label).replace(/"/g, "&quot;")}"></td>
+        <td><button class="b" onclick="savePick('${it.id}',this)">Save</button></td>
+        <td>${i > 0 ? `<button class="b" onclick="movePick('${it.id}','up',this)">&uarr;</button>` : ""}${i < pl.items.length - 1 ? `<button class="b" onclick="movePick('${it.id}','down',this)">&darr;</button>` : ""}</td>
+        <td><button class="b red" onclick="arm(this,()=>retirePick('${it.id}',true))">Retire</button></td>
+      </tr>`).join("")}</table>` : `<div style="opacity:.6;font-size:.9rem">No active choices — add one below.</div>`}
+      <p style="margin-top:6px"><input class="nm" id="pladd-${pl.key}" style="min-width:200px" placeholder="New choice"> <button class="b" onclick="addPick('${pl.key}',this)">Add</button></p>
+      ${pl.retired.length ? `<p style="opacity:.55;font-size:.85rem">Retired: ${pl.retired.map((r) => `${String(r.label).replace(/</g, "&lt;")} <button class="b grn" style="padding:3px 8px" onclick="retirePick('${r.id}',false,this)">Restore</button>`).join(" &nbsp; ")}</p>` : ""}
+    </div>`).join("")}
+  </div>
+
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
   <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
@@ -1639,6 +1669,11 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
+  // Q77: the reason-list (pick-list) editor — same post()/v()/arm() pattern.
+  function savePick(id, btn){ post("/api/admin/picklist", { action: "rename", id, label: v("pl-"+id) }, btn); }
+  function movePick(id, dir, btn){ post("/api/admin/picklist", { action: "move", id, dir }, btn); }
+  function retirePick(id, to, btn){ post("/api/admin/picklist", { action: "retire", id, retired: to === true || to === "true" }, btn); }
+  function addPick(listKey, btn){ post("/api/admin/picklist", { action: "add", list_key: listKey, label: v("pladd-"+listKey) }, btn); }
 </script></body></html>`;
 
 // REPORTS v1 (file 12 / Q26, block 19) — the first slice of the reporting
@@ -3252,7 +3287,17 @@ self.addEventListener("notificationclick", (e) => {
       }
       const nextUp = ["T", "A", "C", "F", "B", "D"].filter((f) => hi[f]).map((f) => `${hi[f] + 1}${f}`).join(" · ");
       const hrsAdmin = await shopHours();
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin));
+      // Q77: assemble the reason lists for the pick-list editor — every
+      // pick_list_item grouped by list_key, active items and retired split.
+      const pickRows = await db(`pick_list_item?select=id,list_key,label,sort_order,retired&order=list_key,sort_order`);
+      const plByKey = {};
+      for (const r of pickRows) {
+        const g = plByKey[r.list_key] || (plByKey[r.list_key] = { key: r.list_key, label: PICK_LIST_INFO[r.list_key] || r.list_key, items: [], retired: [] });
+        (r.retired ? g.retired : g.items).push(r);
+      }
+      const pickOrder = Object.keys(PICK_LIST_INFO).concat(Object.keys(plByKey).filter((k) => !(k in PICK_LIST_INFO)));
+      const pickLists = pickOrder.filter((k) => plByKey[k]).map((k) => plByKey[k]);
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -3416,6 +3461,58 @@ self.addEventListener("notificationclick", (e) => {
           day_no: Number(p.day_no) || 1, man_hours: Number(p.man_hours) || 0,
           is_background: false, sort_order: newSort }) });
         logEvent("template.step_added", adminId, { step_id: row ? row.id : null, template_id: p.template_id, name: p.name, display_no: wantNo, renumbered: Boolean(bumped) });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+
+    // Q77: REASON-LIST (pick-list) EDITOR — admin-only. Manage the choices in
+    // any admin-editable reason list: rename, reorder (swap sort_order with the
+    // neighbour, like steps), add (deduped, appended), retire/restore
+    // (retire-not-delete). Adds only to a list that already exists (code owns
+    // which lists exist). Every change is audited.
+    if (url.pathname === "/api/admin/picklist" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      if (p.action === "rename") {
+        if (!isUuid(p.id)) return json(400, { ok: false, error: "That choice reference isn't valid" });
+        const label = String(p.label || "").trim();
+        if (!label) return json(400, { ok: false, error: "A choice needs a name" });
+        await db(`pick_list_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ label }) });
+        logEvent("picklist.renamed", adminId, { id: p.id, label });
+        return json(200, { ok: true });
+      }
+      if (p.action === "move") {
+        if (!isUuid(p.id)) return json(400, { ok: false, error: "That choice reference isn't valid" });
+        const [it] = await db(`pick_list_item?select=id,list_key,sort_order&id=eq.${p.id}`);
+        if (!it) return json(404, { ok: false, error: "Choice not found" });
+        const dirOp = p.dir === "up" ? `sort_order=lt.${it.sort_order}&order=sort_order.desc` : `sort_order=gt.${it.sort_order}&order=sort_order.asc`;
+        const [n] = await db(`pick_list_item?select=id,sort_order&list_key=eq.${encodeURIComponent(it.list_key)}&retired=is.false&${dirOp}&limit=1`);
+        if (!n) return json(400, { ok: false, error: "Already at the end" });
+        await db(`pick_list_item?id=eq.${it.id}`, { method: "PATCH", body: JSON.stringify({ sort_order: n.sort_order }) });
+        await db(`pick_list_item?id=eq.${n.id}`, { method: "PATCH", body: JSON.stringify({ sort_order: it.sort_order }) });
+        logEvent("picklist.moved", adminId, { id: it.id, dir: p.dir, swapped_with: n.id });
+        return json(200, { ok: true });
+      }
+      if (p.action === "retire") {
+        if (!isUuid(p.id)) return json(400, { ok: false, error: "That choice reference isn't valid" });
+        await db(`pick_list_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: Boolean(p.retired) }) });
+        logEvent(p.retired ? "picklist.retired" : "picklist.restored", adminId, { id: p.id });
+        return json(200, { ok: true });
+      }
+      if (p.action === "add") {
+        const label = String(p.label || "").trim();
+        const listKey = String(p.list_key || "").trim();
+        if (!label) return json(400, { ok: false, error: "A choice needs a name" });
+        if (!listKey) return json(400, { ok: false, error: "Pick a list" });
+        // Add only to a list the code already defines (has at least one row).
+        const existing = await db(`pick_list_item?select=id,label,sort_order&list_key=eq.${encodeURIComponent(listKey)}`);
+        if (!existing.length) return json(400, { ok: false, error: "That list doesn't exist" });
+        if (existing.some((e) => String(e.label).toLowerCase() === label.toLowerCase()))
+          return json(400, { ok: false, error: "That choice is already in this list" });
+        const nextSort = Math.max(0, ...existing.map((e) => e.sort_order || 0)) + 1;
+        const [row] = await db("pick_list_item", { method: "POST", body: JSON.stringify({ list_key: listKey, label, sort_order: nextSort, retired: false }) });
+        logEvent("picklist.added", adminId, { id: row ? row.id : null, list_key: listKey, label });
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown action" });
