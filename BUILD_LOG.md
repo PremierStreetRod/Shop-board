@@ -1,6 +1,40 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 36/37: Q77 reason-list editor + Q121 code backup started (server.js v36→v37, no migration)
+
+- Owner-rep said "build the next block"; chose the pick-list editor — self-contained, admin-only,
+  and immediately useful (he manages every reason list himself instead of me running SQL).
+- WHAT: a new admin-console "Reason lists" panel, modeled on the proven Build-steps editor. It
+  groups every pick_list_item by list_key and shows all NINE admin-managed lists (clock_out_reason,
+  rework_reason, after_hours_reason, line_down_reason, time_off_reason, absence, blocker, hold,
+  fixjob_reason), each with a friendly display name (PICK_LIST_INFO). Per list: ADD (deduped,
+  appended, only to a list that already exists — code owns which lists exist), RENAME, REORDER
+  up/down (swap sort_order with the neighbour), RETIRE/RESTORE (retire-not-delete keeps history and
+  just drops the choice off new menus). Admin-only endpoint /api/admin/picklist with isUuid guards;
+  every change event-logged (picklist.added/renamed/moved/retired/restored). Client JS reuses the
+  admin post()/v()/arm() helpers.
+- CODE: v36 = 258,464 / 1800504917 (8 pairs, forward AND reversal proven to v35). Then a v37 polish
+  (2 pairs): the assembly read surfaced 4 lists I hadn't named (absence/blocker/hold/fixjob) that
+  would have shown raw DB keys — added friendly names for them (the Q118 "plain descriptions" spirit).
+  v37 = 258,831 / 2086803348, commit SHA b9b80ddf, raw-verified at that SHA. No migration
+  (pick_list_item has existed since 0001).
+- VERIFY: deploy healthy (/health 200; /api/admin/picklist answers 401 admin-gated — it was 404 in
+  v35, so the new route confirms the deploy is live). The exact assembly read returned all 9 lists
+  grouped + ordered as the panel renders. A throwaway list (zz_test_list, deleted after) proved
+  rename (AAA→AAA-renamed), retire (CCC→retired), and the move-swap (BBB↔AAA sort_order) all behave
+  — real reason lists untouched. HONEST LIMIT unchanged: not click-tested through a signed-in admin
+  session (login needs a PIN the harness won't type); the endpoint mirrors the block-10-proven
+  /api/admin/step structurally.
+- Q121 CODE BACKUP STARTED (owner-rep's standing ask): created Shop-Board-CODE-BACKUP/ in the Cab
+  Build Board folder with the COMPLETE code — server.js (v37), package.json, README,
+  docs/EVENT_TAXONOMY.md, all 18 migration files, and a MANIFEST.txt (version · hash · GitHub commit
+  · restore-from-scratch notes). It refreshes at each block's records step so it always mirrors the
+  build; a full snapshot again at build's end.
+- NEXT: Coyote mapping preempts the moment the developer's first post lands; otherwise the weekend
+  backlog (Q118–Q124) or the independent menu (smart alerts Q91, product/photo gate Q86, reports
+  depth Q119).
+
 ## 2026-08-03 — block 34 follow-up (owner-rep): Q92 same-day revisions (server.js v35 + migration 0021)
 
 - Owner-rep reviewed the time-off flow and made three calls; all shipped the same day:
