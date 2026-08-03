@@ -1,6 +1,37 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — block 34 follow-up (owner-rep): Q92 same-day revisions (server.js v35 + migration 0021)
+
+- Owner-rep reviewed the time-off flow and made three calls; all shipped the same day:
+  1. APPROVAL IS ADMIN-ONLY (not manager). /api/timeoff/decide and /api/timeoff/add are now
+     admin-only (were manager+admin). In the cockpit the "Time off — needs you" lane and the
+     "Add for someone" control render only for admins; managers keep the read-only "who's out,
+     upcoming" list for floor planning. The new-request heads-up now targets admins.
+  2. OPTIONAL REQUESTER NOTE. The home-screen panel gains a note field → request_note column →
+     shown to the admin in the needs-you lane.
+  3. TOGGLE OFF BY DEFAULT. Migration 0021 flips the "Time-off requests" row that 0020 seeded
+     ON; the request panel stays hidden and /api/timeoff/request refuses until an admin turns it
+     on in Admin → Features.
+- CODE: v35 = 250,439 / 471473873. 12 edit pairs, forward AND reversal proven (new→old
+  reproduced v34 = 248,960 / 2277737846 exactly). Transfer note: one base64 chunk was mis-typed
+  on the way into CM6 and its per-chunk checksum caught it → resent → clean. Commit SHA 2c5e07da,
+  raw-verified at that SHA. Migration 0021 (request_note text column + `update feature_toggle set
+  enabled=false where key='time_off_requests'`) run + verified (column present, toggle=false).
+- VERIFY: deploy healthy (/health 200; the three /api/timeoff/* routes still answer 401
+  unauthenticated). Data-layer E2E on the Zz test account (deleted after): a request WITH a note
+  round-tripped through the exact v35 pending read — request_note came back verbatim ("Dentist at
+  2pm, back by 3"); table left empty, toggle off, Zz clean. HONEST LIMIT unchanged from block 34:
+  the admin-only 403-for-managers, the note-in-lane render, and the toggle-off panel-hide are
+  proven at the code + data layer, not by a signed-in HTTP click-through (login needs a PIN the
+  build harness does not type).
+- OPEN ITEM — EMAIL TO info@premierstreetrod.com ON EACH REQUEST: owner-rep asked for this; NOT
+  built. It needs (a) an email provider wired — an API key he sets on Railway; the app is
+  web-push-only today and I never handle keys — and (b) a Q106 go/no-go, since email delivery is
+  deliberately held until cutover ("no emails until go-live"). info@ is his company inbox, so it
+  is arguably consistent with Q106 (test notifications go to him, not staff), but lifting the email
+  hold is his call. Raised for his decision; nothing was sent.
+
 ## 2026-08-03 — build block 34: Q92 TIME-OFF REQUESTS, part 1 (server.js v34 + migration 0020)
 
 - WHAT: the first slice of the planned-absence work. A builder can request time off from
