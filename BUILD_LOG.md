@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 43: Q123 security response headers (server.js v43, no migration)
+
+- Owner-rep: "move on to 123." Started the Q123 hardening pass with the safest high-value item — security response headers — and left CSP as its own careful sub-block (the app leans on inline styles/scripts).
+- WHAT (v43): four headers on EVERY response, set once via res.setHeader() at the top of the request handler (before routing) so they apply whether a route ends via send(), json(), a redirect, SSE, the CSV download, or the photo proxy (Node merges setHeader with each route's writeHead). Headers: Strict-Transport-Security (max-age=31536000; includeSubDomains — safe, Railway is HTTPS-only, no sub-subdomains under shopboard), X-Content-Type-Options: nosniff, X-Frame-Options: SAMEORIGIN (click-jacking; nothing embeds the app cross-origin), Referrer-Policy: strict-origin-when-cross-origin. No behavior change, no migration.
+- CODE: v43 = 271,176 / 216380449 (2 pairs: header + the setHeader block; forward AND reversal proven — new→old reproduced v42 exactly at 269,828 / 3845956799). Editor hash gate matched v43 before commit. Commit SHA 4908914898, raw-verified byte-exact.
+- VERIFY (strongest yet — headers are externally observable, so this ALSO confirms the deploy swapped in, the signal v42 lacked): local Node test proved the four headers survive writeHead on plain/JSON/redirect; LIVE /health (JSON) = 200 with all four present, /board (HTML) = 200 with all four, nothing broke. (/home read 0 headers only because fetch hides them on an opaque manual-redirect; the redirect response itself carries them.) No honest-limit gap this block.
+- Q123 remaining pre-cutover: a Content-Security-Policy (own sub-block — inline inventory + nonces + Supabase image/connect origins), a login rate-limit beyond the per-person PIN lockout (per-IP on /api/login), a full input-validation sweep, the Q52 Wi-Fi/IP gate decision, SESSION_SECRET + key rotation at cutover, + a fresh full-system break-pass when feature-complete.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else login rate-limit, then CSP, or Q86/Q91.
+
 ## 2026-08-03 — build block 42: Q122 session lockout on deactivation (server.js v42, no migration)
 
 - Resume after a session reset (model Fable 5). Verified live first: /health ok; coyote_intake = 2 leftover TEST rows only ("this is not { json" + order "TEST-23613", both unprocessed) → no real dev posts, Coyote does NOT preempt. Proceeded to the deferred Q122/Q123 security block.
