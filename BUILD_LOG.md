@@ -1,6 +1,17 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 45: Q123 Content-Security-Policy, report-only (server.js v45, no migration)
+
+- Owner-rep (AskUserQuestion): "Finish security — start CSP." Did it the safe way: INVENTORY → REPORT-ONLY → (later) ENFORCE.
+- INVENTORY: the app is fully first-party. Every client fetch() is same-origin (/api/*); EventSource → /api/board-stream (self); cab photos → /photo/<id> proxy (self); worker → /sw.js (self); push subscribe → /api/push/subscribe (self). No external scripts/fonts, zero data: URIs. Decisive: the UI uses inline onclick handlers throughout — which NONCES cannot cover — so script-src MUST keep 'unsafe-inline' (nonce-only would break every button). connect-src 'self' still stops off-origin exfiltration = the meaningful protection.
+- WHAT (v45): a Content-Security-Policy-Report-Only header (in the same setHeader block as the v43 headers, so it rides every response). Report-only = browser reports would-be blocks to its console but blocks NOTHING, so we prove it clean before enforcing. Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'. No behavior change, no migration.
+- CODE: v45 = 275,817 / 58758895 (2 pairs: header + CSP setHeader line; forward AND reversal proven — new→old reproduced v44 exactly at 273,969 / 3292714944). Editor hash gate matched v45. Commit SHA 21588dd97e, raw-verified byte-exact.
+- VERIFY (header is observable, so also confirms the deploy): LIVE on /board (view-only, no login, exercises inline scripts + EventSource + fetch + inline styles): content-security-policy-report-only present, no enforcing CSP; page load = ZERO console messages; a runtime securitypolicyviolation listener while exercising the board's EventSource(/api/board-stream) + fetch(/api/board-state) caught 0 violations → connect-src 'self' clean. HONEST LIMIT: signed-in pages (cockpit/admin/a cab photo) need a PIN the harness won't type — covered by the inventory (all same-origin) and, being report-only, any surprise reports to console WITHOUT breaking anything.
+- NEXT (v46 enforce): once the signed-in pages are confirmed clean under report-only (Daniel clicks through + checks the console), flip the header name Content-Security-Policy-Report-Only → Content-Security-Policy. One-word change = enforce; report-only until then = zero UI-break risk.
+- Q123 status: v42 session-revocation + v43 headers + v44 login rate-limit + v45 CSP(report-only) DONE. Remaining: the enforce flip, an input-validation sweep, the Q52 Wi-Fi/IP gate decision, SESSION_SECRET rotation at cutover, + a full break-pass when feature-complete.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else the CSP enforce-flip (after Daniel's console check), the input-validation sweep, or Q86/Q91.
+
 ## 2026-08-03 — build block 44: Q123 login rate-limit (server.js v44, no migration)
 
 - Owner-rep: "go ahead" — approving login rate-limit next (then CSP).
