@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 46: Q123 CSP flipped to ENFORCING (server.js v46, no migration)
+
+- Daniel's signed-in browser-console check came back clean: the only red was GET /api/inbox/unread 401 (the notifications bell checking for messages on a signed-out page and hiding itself — NOT a CSP violation), and his cab photo opened fine. So flipped the v45 report-only CSP to enforcing.
+- WHAT (v46): header name Content-Security-Policy-Report-Only → Content-Security-Policy (same policy string), + comments updated. Policy unchanged (default-src 'self'; script/style self+unsafe-inline; img self+data:; connect/font/worker self; object-src none; base-uri self; form-action self; frame-ancestors none). No behavior change, no migration. Full revert = one-word change back to -Report-Only.
+- CODE: v46 = 276,432 / 3476865399 (3 pairs; forward AND reversal proven — new→old reproduced v45 exactly at 275,817 / 58758895). Commit SHA 4ad4e36859, raw-verified byte-exact (enforcing setHeader present).
+- INJECTION HICCUP (recorded): the browser window had been resized to 1316px wide between blocks, so the first commit attempt's cached click coordinates missed and dirtied the editor (+2 chars, hash 4036098421). Caught BEFORE committing (post-commit API check showed the PRIOR commit; a screenshot showed still-in-edit-mode). Fixed: re-navigated the edit URL to discard, re-applied the v46 chunks (hash gate → v46 exact), screenshotted to read the ACTUAL button coordinates, then committed. Lesson: after any gap, screenshot to confirm viewport before reusing click coordinates — the hash gate + screenshot both caught the miss, nothing bad shipped.
+- VERIFY (header is observable, so also confirms the deploy): LIVE /board → content-security-policy PRESENT, content-security-policy-report-only ABSENT (flip is live); board still renders (logo present, body populated); a securitypolicyviolation listener caught 0 violations while exercising the board's EventSource(/api/board-stream) + fetch(/api/board-state) UNDER enforcement — nothing broke. The signed-in pages were confirmed clean by Daniel under report-only (same policy). HONEST NOTE: verified the board directly under enforcement; did not re-drive the signed-in pages under enforcement (no PIN) — any failure there is a one-word revert.
+- Q123 status: v42 session-revocation + v43 headers + v44 login rate-limit + v45/46 CSP (now ENFORCING) DONE. Remaining pre-cutover: input-validation sweep, Q52 Wi-Fi/IP gate decision, SESSION_SECRET rotation at cutover, + a full break-pass when feature-complete.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else the input-validation sweep, or Q86/Q91.
+
 ## 2026-08-03 — build block 45: Q123 Content-Security-Policy, report-only (server.js v45, no migration)
 
 - Owner-rep (AskUserQuestion): "Finish security — start CSP." Did it the safe way: INVENTORY → REPORT-ONLY → (later) ENFORCE.
