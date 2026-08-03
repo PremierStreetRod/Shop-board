@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v34, 2026-08-03: Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v35, 2026-08-03: Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -508,6 +508,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
       <select id="to-reason" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">${timeoff.reasons.map((r) => `<option>${r}</option>`).join("")}</select>
       <button class="name" id="to-send" style="display:inline-block;margin:0;padding:10px 16px">Send request</button>
     </div>
+    <input id="to-note" maxlength="200" placeholder="Add a note (optional)" style="width:100%;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
     <div class="msg err" id="to-err" style="margin-top:8px"></div>
     ${timeoff.mine.length ? `<div style="margin-top:12px;font-size:.9rem">
       <div style="opacity:.55;margin-bottom:4px">Your requests</div>
@@ -564,11 +565,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     const err = document.getElementById("to-err"); err.textContent = "";
     const start = document.getElementById("to-start").value,
           end = document.getElementById("to-end").value,
-          reason = document.getElementById("to-reason").value;
+          reason = document.getElementById("to-reason").value,
+          note = (document.getElementById("to-note") || {}).value || "";
     if (!start) { err.textContent = "Pick a start date"; return; }
     if (end && end < start) { err.textContent = "The end date is before the start"; return; }
     toSend.disabled = true; toSend.textContent = "Sending…";
-    const out = await sbPost("/api/timeoff/request", { start_date: start, end_date: end || start, reason },
+    const out = await sbPost("/api/timeoff/request", { start_date: start, end_date: end || start, reason, note },
       (m) => { err.textContent = m; });
     if (out.ok) location.reload();
     else { toSend.disabled = false; toSend.textContent = "Send request"; err.textContent = out.error || "Something went wrong"; }
@@ -1172,12 +1174,12 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming records that the named approval was real. Unconfirmed sessions stay flagged here and on the timecards.</div>
   </div>` : ""}
-  ${timeoff.pending.length ? `
+  ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
        denial can carry a short note back to the person. Approved time shows
        in "Who's out" below (and, a later block, adjusts cab projections). -->
   <div class="lane" style="border-color:#0a6cff"><h3>Time off — needs you</h3>
-    ${timeoff.pending.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}
+    ${timeoff.pending.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}${t.reqnote ? ` <span style="opacity:.75">— "${t.reqnote}"</span>` : ""}
       <input id="ton-${t.id}" placeholder="note (optional, sent on deny)" style="margin-left:8px;min-width:220px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
       <button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0;margin-left:8px" onclick="toDecide('${t.id}','approve',this)">Approve</button>
       <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="toDecide('${t.id}','deny',this)">Deny</button></div>`).join("")}
@@ -1185,11 +1187,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
   <div class="lane"><h3>Time off</h3>
-    <p style="margin:0 0 8px">Add for someone:
+    ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
       From <input type="date" id="toa-start"> To <input type="date" id="toa-end">
       <select id="toa-reason">${(timeoff.reasons || []).map((r) => `<option>${r}</option>`).join("")}</select>
-      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="toAdd()">Add time off</button></p>
+      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="toAdd()">Add time off</button></p>` : ""}
     ${timeoff.upcoming.length ? `<div style="margin-top:6px"><div style="opacity:.6;margin-bottom:4px">Who's out (approved, upcoming)</div>
       ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
       : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
@@ -2665,13 +2667,13 @@ http.createServer(async (req, res) => {
         selEmp: tcEmpSel, date: tcDate, punches: tcPunches };
       // Q92: time-off — pending requests (the "needs you" queue), the upcoming
       // approved list, and the add-for-anyone picker inputs.
-      const toPendRows = await db(`time_off_request?select=id,employee_id,start_date,end_date,reason&status=eq.pending&order=start_date`);
+      const toPendRows = await db(`time_off_request?select=id,employee_id,start_date,end_date,reason,request_note&status=eq.pending&order=start_date`);
       const toUpRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${phxDate(Date.now())}&order=start_date&limit=40`);
       const toReasonsM = (await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`)).map((r) => r.label);
       const toNameOf = (eid) => { const p = empNames.find((x) => x.id === eid); return p ? `${p.first_name} ${p.last_name}` : (nameOf[eid] || "?"); };
       const toDates = (a, b) => (a === b ? a : `${a} → ${b}`);
       const timeoff = {
-        pending: toPendRows.map((t) => ({ id: t.id, who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason })),
+        pending: toPendRows.map((t) => ({ id: t.id, who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason, reqnote: t.request_note })),
         upcoming: toUpRows.map((t) => ({ who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason })),
         emps: tcEmps, reasons: toReasonsM };
       return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff));
@@ -2988,20 +2990,23 @@ http.createServer(async (req, res) => {
       const [toTog] = await db(`feature_toggle?select=enabled&key=eq.time_off_requests`);
       if (toTog && toTog.enabled === false)
         return json(403, { ok: false, error: "Time-off requests are turned off right now." });
-      const { start_date, end_date, reason } = await body(req);
+      const { start_date, end_date, reason, note } = await body(req);
       const okDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
       if (!okDate(start_date)) return json(400, { ok: false, error: "Pick a start date" });
       const end = okDate(end_date) ? end_date : start_date;
       if (end < start_date) return json(400, { ok: false, error: "The end date is before the start" });
       const okR = await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false`);
       const rsn = reason && okR.some((r) => r.label === reason) ? reason : null;
+      // Q92 (owner-rep 2026-08-03): the requester may leave an optional note.
+      const rnote = note && String(note).trim() ? String(note).trim().slice(0, 200) : null;
       const [row] = await db(`time_off_request`, { method: "POST",
-        body: JSON.stringify({ employee_id: empId, start_date, end_date: end, reason: rsn, requested_by: empId }) });
+        body: JSON.stringify({ employee_id: empId, start_date, end_date: end, reason: rsn, requested_by: empId, request_note: rnote }) });
       logEvent("timeoff.requested", empId, { request_id: row && row.id, start_date, end_date: end, reason: rsn });
       const [meT] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
-      const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+      // Approvals are admin-only now, so the new-request heads-up goes to admins.
+      const recips = (await db(`employee?select=id&role=eq.admin&active=is.true`)).map((e) => e.id);
       await notify("timeoff.requested", recips, "Time-off request",
-        `${meT ? meT.first_name + " " + meT.last_name : "Someone"} asked for ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.`, "/manager");
+        `${meT ? meT.first_name + " " + meT.last_name : "Someone"} asked for ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.${rnote ? ` — "${rnote}"` : ""}`, "/manager");
       return json(200, { ok: true });
     }
 
@@ -3010,8 +3015,10 @@ http.createServer(async (req, res) => {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      // Q92 (owner-rep 2026-08-03): approving/denying time off is an ADMIN
+      // function, not a manager one.
+      if (!me || me.role !== "admin")
+        return json(403, { ok: false, error: "Time-off approvals are admin-only" });
       const { id, decision, note } = await body(req);
       if (!isUuid(id)) return json(400, { ok: false, error: "That request reference isn't valid" });
       if (decision !== "approve" && decision !== "deny")
@@ -3037,8 +3044,10 @@ http.createServer(async (req, res) => {
       const empId = readSession(req.headers.cookie);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      // Q92 (owner-rep 2026-08-03): entering time off for someone lands it
+      // already approved, so it is an ADMIN action too.
+      if (!me || me.role !== "admin")
+        return json(403, { ok: false, error: "Time-off entry is admin-only" });
       const { employee_id, start_date, end_date, reason } = await body(req);
       if (!isUuid(employee_id)) return json(400, { ok: false, error: "Pick a person" });
       const okDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
