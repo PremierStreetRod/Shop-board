@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v39, 2026-08-03: Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v40, 2026-08-03: Q120 NOTIFICATION INBOX — every person now has an in-app inbox at /inbox showing their own notification history (newest first, unread highlighted), and a small unread "bell" appears top-right on every app screen so a NEW notification is visible even when push/text/email are off. Opening the inbox marks them read. Q106-safe: it only shows a person their own notifications when they sign in — nothing is sent out, and the sandbox still governs push/text/email delivery. Migration 0022 adds notification_log.read_at. Previous: v39 Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -307,7 +307,32 @@ const style = `<style>
   .err{color:#ff6b6b}
   .back{background:none;border:none;color:#8e8e93;font-size:1rem;cursor:pointer;padding:10px}
   h2{text-align:center;font-weight:600}
-</style>`;
+</style>
+<script>
+// Q120: the notifications bell. On every APP screen (not the TV board, login,
+// PIN, or the inbox itself) a small clock-face links to /inbox and shows the
+// unread count, so a new notification is visible even with push/text/email off.
+(function(){
+  var skip = ["/board","/login","/","/change-pin","/inbox"];
+  if (skip.indexOf(location.pathname) !== -1) return;
+  document.addEventListener("DOMContentLoaded", function(){
+    fetch("/api/inbox/unread").then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+      if (!d || !d.ok) return;
+      var a = document.createElement("a");
+      a.href = "/inbox"; a.title = "Notifications";
+      a.style.cssText = "position:fixed;top:10px;right:12px;z-index:60;text-decoration:none;background:#1c1c1e;border:1px solid #2c2c2e;border-radius:20px;padding:6px 12px;color:#fff;font-size:1.05rem;line-height:1";
+      a.textContent = "\uD83D\uDD14";
+      if (d.count > 0) {
+        var b = document.createElement("span");
+        b.textContent = d.count > 99 ? "99+" : d.count;
+        b.style.cssText = "background:#C8102E;color:#fff;border-radius:10px;padding:1px 7px;margin-left:6px;font-size:.8rem;font-weight:700;vertical-align:top";
+        a.appendChild(b);
+      }
+      document.body.appendChild(a);
+    }).catch(function(){});
+  });
+})();
+</script>`;
 
 const loginPage = (employees) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -951,6 +976,32 @@ const watcherPage = (emp) => `<!doctype html>
     ntestBtn.disabled = false;
   };
 </script></body></html>`;
+
+// Q120: the per-person NOTIFICATION INBOX — their own notification history,
+// newest first, unread ones ringed red. Opening it marks them read. This is
+// how notifications reach someone in-app regardless of push/text/email.
+const inboxPage = (emp, notes) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <h2>Notifications</h2>
+  ${notes.length ? notes.map((n) => {
+    const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
+    const unread = !n.read_at;
+    return `<div style="background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+        <b>${unread ? "\uD83D\uDD34 " : ""}${String(n.title).replace(/</g, "&lt;")}</b>
+        <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
+      </div>
+      <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
+    </div>`; }).join("")
+  : `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`}
+  <p style="text-align:center;margin-top:20px">
+    <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div></body></html>`;
 
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
@@ -2479,6 +2530,29 @@ http.createServer(async (req, res) => {
     }
 
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
+    // Q120: the unread count for the notifications bell (any signed-in user).
+    if (url.pathname === "/api/inbox/unread") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) return json(401, { ok: false });
+      const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&limit=200`);
+      return json(200, { ok: true, count: un.length });
+    }
+
+    // Q120: the in-app notification inbox — a person's own history, newest
+    // first. Rendering it marks their unread notifications read.
+    if (url.pathname === "/inbox") {
+      const empId = readSession(req.headers.cookie);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [emp] = await db(`employee?select=first_name&id=eq.${empId}`);
+      if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const notes = await db(`notification_log?select=id,title,body,created_at,read_at&intended_employee_id=eq.${empId}&order=created_at.desc&limit=100`);
+      const html = inboxPage(emp, notes);
+      const unreadIds = notes.filter((n) => !n.read_at).map((n) => n.id);
+      if (unreadIds.length)
+        await db(`notification_log?id=in.(${unreadIds.join(",")})`, { method: "PATCH", body: JSON.stringify({ read_at: new Date().toISOString() }) });
+      return send(200, "text/html; charset=utf-8", html);
+    }
+
     if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
 
     // ORDER DETAIL (block 25) — public look-up from the board's order links.
