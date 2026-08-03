@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-03 — build block 47: Q123 input-validation sweep pt 1 (server.js v47, no migration)
+
+- Owner-rep "keep going" → continued Q123 with the input-validation sweep. THE REAL RISK (not just ugly 500s): user-supplied ids are interpolated straight into PostgREST query strings (?id=eq.${id}), so an unvalidated id like "<uuid>&or=(id.not.is.null)" could inject an extra filter and WIDEN a PATCH to every row. block-30 already guarded punch/correct + timeoff + picklist; the gap was the many build_id sites, task_id, line_id, approved_by, session_id, admin id, tplId.
+- WHAT (v47, pt 1): guarded the TECH- and WAREHOUSE-reachable write endpoints (lowest privilege = biggest escalation risk) — validate ids BEFORE the DB (isUuid for cab/step/approver ids, Number.isInteger for line ids), clean 400 on bad input. 10 guards: task/state (task_id), clock/in (line_id int + approved_by uuid optional), clock/switch (line_id int), build/finish (build_id), kit status/move/pull/deliver (build_id), task/note (task_id). Manager/admin-gated write endpoints + tplId get pt 2. No migration.
+- CODE: v47 = 278,079 / 1534023461 (10 pairs; forward AND reversal proven — new→old reproduced v46 exactly at 276,432 / 3476865399). Anchors = body-extraction line + the endpoint's unique first query, so each is unique despite several endpoints sharing a destructure. Editor hash gate matched v47. Commit SHA ca7545bd3b, raw-verified byte-exact.
+- VERIFY (STRONGEST yet — a real LIVE E2E, because this browser still held Daniel's signed-in session, so authenticated probes reached the guards; every probe 400/404 with ZERO writes): unit-tested first (valid uuid accepted; "&or=(...)" injection rejected; bare number rejected; line_id "3"/3 ok, "3&or=(x)"/"abc" rejected; optional approved_by undefined/null skips). Then LIVE: POST /api/task/state task_id "x" → 400; build_id "x" to kit/deliver → 400; a valid-format nonexistent uuid → 404 "Task not found" (guard PASSED, no over-rejection, no mutation); the actual attack payload task_id "<uuid>&or=(id.not.is.null)" → 400 (injection blocked before Postgres). No honest-limit gap on guard behavior this block.
+- Q123 status: v42 session-revocation + v43 headers + v44 login rate-limit + v45/46 CSP enforcing + v47 input-validation sweep pt 1 DONE. Remaining: sweep pt 2 (manager/admin write endpoints + tplId), Q52 Wi-Fi/IP gate decision, SESSION_SECRET rotation at cutover, + a full break-pass when feature-complete.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else input-validation sweep pt 2, or Q86/Q91.
+
 ## 2026-08-03 — build block 46: Q123 CSP flipped to ENFORCING (server.js v46, no migration)
 
 - Daniel's signed-in browser-console check came back clean: the only red was GET /api/inbox/unread 401 (the notifications bell checking for messages on a signed-out page and hiding itself — NOT a CSP violation), and his cab photo opened fine. So flipped the v45 report-only CSP to enforcing.
