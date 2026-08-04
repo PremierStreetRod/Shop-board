@@ -1,5 +1,5 @@
 // ============================================================
-// SHOP BOARD — server.js (v49, 2026-08-04: Q86 HARD COMPLETION-PHOTO GATE — the per-product completion-photo minimum is now a HARD gate (block 12 shipped photos + a soft nudge; this makes it real). A new product.photo_min (migration 0023, default 1) is tunable in a new admin "Product settings — completion photos" panel; a builder can't send a cab to inspection until at least that many completion photos are attached (0 = exempt that product). Enforced server-side in /api/build/finish and mirrored on the phone Finish button. No behavior change for cabs that already meet the minimum. Previous: v48 Q123 INPUT-VALIDATION SWEEP pt 2 — completes the sweep: the same id guards now cover the manager/admin-gated write endpoints (build rework/complete/start, admin employee, admin cab-number, after-hours confirm) and the reports template param, so a crafted id can't inject PostgREST filter syntax anywhere a write happens. (The line endpoints already had integer guards from block-30/Q115, and push/subscribe already encodeURIComponent-s its endpoint.) No behavior change for valid input, no migration. Previous: v47 Q123 INPUT-VALIDATION SWEEP pt 1 — the tech- and warehouse-reachable write endpoints now validate their id inputs (isUuid for cab/step/approver ids, integer for line ids) BEFORE those ids reach the database, so a crafted id cannot inject PostgREST filter syntax (e.g. widening a PATCH to every row) and malformed input gets a clean 400 instead of a 500. Covers task state/note, build finish, kit status/move/pull/deliver, and clock in/switch. The manager/admin-gated write endpoints get the same in pt 2. Extends the block-30 isUuid guards. No behavior change for valid input, no migration. Previous: v46 CONTENT-SECURITY-POLICY (ENFORCING) — the CSP shipped report-only in v45 is now ENFORCED (the header name flipped from Content-Security-Policy-Report-Only to Content-Security-Policy). It was confirmed clean first — no violations on the board, the manager cockpit, an order page, or an opened cab photo (the only console red was an unrelated benign 401 from the notifications bell on a signed-out page). If some page ever needs an origin this policy omits, the fix is to add it to the directive; a full revert is the one-word change back to report-only. No behavior change for legitimate use, no migration. Previous: v45 Q123 CONTENT-SECURITY-POLICY (report-only) — a CSP is now sent in REPORT-ONLY mode: the browser reports what WOULD be blocked (to its console) but blocks NOTHING, so the policy can be proven clean on every real page before it is enforced. Inventory confirmed the app is fully first-party (same-origin fetch/SSE/photos/worker, no external scripts/fonts/data-images), so the policy is default-src self, with self + unsafe-inline for script/style (the UI relies on inline scripts, inline styles, AND inline onclick handlers, which nonces cannot cover), self for connect/img/worker/font, plus object-src none, base-uri self, form-action self, frame-ancestors none. Enforcing mode follows once report-only is confirmed clean. No behavior change, no migration. Previous: v44 Q123 LOGIN RATE-LIMIT — a shared-IP-safe guard against name-enumeration / credential-stuffing at the sign-in screen. The existing per-person lockout (5 wrong PINs -> 5 min) already caps brute force on ONE name; this adds a per-source guard that trips only when ONE client IP fails logins against MANY DISTINCT names in a 10-minute window (threshold 20 — deliberately above the ~17 real names, so legitimate shop use behind one shared public IP can never trip it), pausing that IP for 15 minutes. Defense-in-depth: a determined attacker can spoof X-Forwarded-For to evade it, but still hits the per-person lockout. No migration. Previous: v43 Q123 SECURITY HEADERS — every response now carries HSTS, X-Content-Type-Options: nosniff, X-Frame-Options: SAMEORIGIN, and a Referrer-Policy, set once before routing so they apply to every response type (pages, JSON, redirects, SSE, CSV, the photo proxy). A Content-Security-Policy is deliberately deferred to its own pass since the app leans on inline styles/scripts. No behavior change for users, no migration. Previous: v42 Q122 SESSION LOCKOUT ON DEACTIVATION — a deactivated employee's existing signed-in session is now rejected on their very next request, not only when their 12-hour cookie finally lapses. Every authenticated route resolves its session through one shared liveSession() chokepoint that re-checks the person is still ACTIVE, so removing someone (or an ex-employee with a still-valid cookie) loses ALL access at once — floor actions, the manager cockpit, and the admin console alike. Closes the Q122 hole where the role gates checked role but not active. No migration (employee.active already exists). Previous: v41 Q118 ADMIN TOGGLE PLAIN-LANGUAGE — a light copy pass so the Features switches read clearly for a non-technical human: "cutover" becomes "until we go live", and the pace-warning and early-red descriptions are plainer. Text only, no behavior change. Previous: v40 Q120 NOTIFICATION INBOX — every person now has an in-app inbox at /inbox showing their own notification history (newest first, unread highlighted), and a small unread "bell" appears top-right on every app screen so a NEW notification is visible even when push/text/email are off. Opening the inbox marks them read. Q106-safe: it only shows a person their own notifications when they sign in — nothing is sent out, and the sandbox still governs push/text/email delivery. Migration 0022 adds notification_log.read_at. Previous: v39 Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
+// SHOP BOARD — server.js (v50, 2026-08-04: Q86 PHONE PHOTO HAND-OFF (stage 1) — for the rare case where someone works a cab on the shared tablet, they can now get photos off their phone without AirDrop or undocking the tablet: a "Send photos from a phone" button on the finish screen mints a short code (good 20 min), the worker opens /h on ANY phone with NO login, enters the code, and the photos attach straight to that cab as completion photos (they count toward the required minimum). The code is single-cab, add-a-photo-only, capped, and time-limited — it can't read or change anything else. QR one-scan opening + the per-step version come next. No migration. Previous: v49 Q86 HARD COMPLETION-PHOTO GATE — the per-product completion-photo minimum is now a HARD gate (block 12 shipped photos + a soft nudge; this makes it real). A new product.photo_min (migration 0023, default 1) is tunable in a new admin "Product settings — completion photos" panel; a builder can't send a cab to inspection until at least that many completion photos are attached (0 = exempt that product). Enforced server-side in /api/build/finish and mirrored on the phone Finish button. No behavior change for cabs that already meet the minimum. Previous: v48 Q123 INPUT-VALIDATION SWEEP pt 2 — completes the sweep: the same id guards now cover the manager/admin-gated write endpoints (build rework/complete/start, admin employee, admin cab-number, after-hours confirm) and the reports template param, so a crafted id can't inject PostgREST filter syntax anywhere a write happens. (The line endpoints already had integer guards from block-30/Q115, and push/subscribe already encodeURIComponent-s its endpoint.) No behavior change for valid input, no migration. Previous: v47 Q123 INPUT-VALIDATION SWEEP pt 1 — the tech- and warehouse-reachable write endpoints now validate their id inputs (isUuid for cab/step/approver ids, integer for line ids) BEFORE those ids reach the database, so a crafted id cannot inject PostgREST filter syntax (e.g. widening a PATCH to every row) and malformed input gets a clean 400 instead of a 500. Covers task state/note, build finish, kit status/move/pull/deliver, and clock in/switch. The manager/admin-gated write endpoints get the same in pt 2. Extends the block-30 isUuid guards. No behavior change for valid input, no migration. Previous: v46 CONTENT-SECURITY-POLICY (ENFORCING) — the CSP shipped report-only in v45 is now ENFORCED (the header name flipped from Content-Security-Policy-Report-Only to Content-Security-Policy). It was confirmed clean first — no violations on the board, the manager cockpit, an order page, or an opened cab photo (the only console red was an unrelated benign 401 from the notifications bell on a signed-out page). If some page ever needs an origin this policy omits, the fix is to add it to the directive; a full revert is the one-word change back to report-only. No behavior change for legitimate use, no migration. Previous: v45 Q123 CONTENT-SECURITY-POLICY (report-only) — a CSP is now sent in REPORT-ONLY mode: the browser reports what WOULD be blocked (to its console) but blocks NOTHING, so the policy can be proven clean on every real page before it is enforced. Inventory confirmed the app is fully first-party (same-origin fetch/SSE/photos/worker, no external scripts/fonts/data-images), so the policy is default-src self, with self + unsafe-inline for script/style (the UI relies on inline scripts, inline styles, AND inline onclick handlers, which nonces cannot cover), self for connect/img/worker/font, plus object-src none, base-uri self, form-action self, frame-ancestors none. Enforcing mode follows once report-only is confirmed clean. No behavior change, no migration. Previous: v44 Q123 LOGIN RATE-LIMIT — a shared-IP-safe guard against name-enumeration / credential-stuffing at the sign-in screen. The existing per-person lockout (5 wrong PINs -> 5 min) already caps brute force on ONE name; this adds a per-source guard that trips only when ONE client IP fails logins against MANY DISTINCT names in a 10-minute window (threshold 20 — deliberately above the ~17 real names, so legitimate shop use behind one shared public IP can never trip it), pausing that IP for 15 minutes. Defense-in-depth: a determined attacker can spoof X-Forwarded-For to evade it, but still hits the per-person lockout. No migration. Previous: v43 Q123 SECURITY HEADERS — every response now carries HSTS, X-Content-Type-Options: nosniff, X-Frame-Options: SAMEORIGIN, and a Referrer-Policy, set once before routing so they apply to every response type (pages, JSON, redirects, SSE, CSV, the photo proxy). A Content-Security-Policy is deliberately deferred to its own pass since the app leans on inline styles/scripts. No behavior change for users, no migration. Previous: v42 Q122 SESSION LOCKOUT ON DEACTIVATION — a deactivated employee's existing signed-in session is now rejected on their very next request, not only when their 12-hour cookie finally lapses. Every authenticated route resolves its session through one shared liveSession() chokepoint that re-checks the person is still ACTIVE, so removing someone (or an ex-employee with a still-valid cookie) loses ALL access at once — floor actions, the manager cockpit, and the admin console alike. Closes the Q122 hole where the role gates checked role but not active. No migration (employee.active already exists). Previous: v41 Q118 ADMIN TOGGLE PLAIN-LANGUAGE — a light copy pass so the Features switches read clearly for a non-technical human: "cutover" becomes "until we go live", and the pace-warning and early-red descriptions are plainer. Text only, no behavior change. Previous: v40 Q120 NOTIFICATION INBOX — every person now has an in-app inbox at /inbox showing their own notification history (newest first, unread highlighted), and a small unread "bell" appears top-right on every app screen so a NEW notification is visible even when push/text/email are off. Opening the inbox marks them read. Q106-safe: it only shows a person their own notifications when they sign in — nothing is sent out, and the sandbox still governs push/text/email delivery. Migration 0022 adds notification_log.read_at. Previous: v39 Q119 REPORTS CSV HEADERS — the CSV exports now carry plain, human-readable column titles (Title Case + units — "Order #", "Standard hours", "Variance %", "Paid hours", etc.) instead of snake_case keys, so a spreadsheet reads clearly. Same data, friendlier headers. Previous: v38 Q119 REPORTS PERIODS — the reports period picker is now clearly labelled and far more flexible. The old Week/Month/Quarter/Year buttons were actually rolling "last N days" windows (misleading); they are now grouped as ROLLING ("Last 7 / 30 / 90 days") and TO-DATE ("This week / month / year"), plus a CUSTOM From/To date range, and every view shows a "showing <start> → <end> (Phoenix dates)" subtitle so it is unambiguous what is being searched. Under the hood reportData() takes an explicit [start,end) window instead of a day count (adds the missing upper bound, so a past custom range is exact); the live snapshots — open intervals and open-cab aging — still use real now. CSV filenames carry the period. Previous: v37 Q77 REASON-LIST EDITOR polish — friendly display names added for the remaining admin-managed lists (absence/attendance, blocker, hold, fix-job) so the editor shows plain labels, not raw keys (Q118 spirit). Previous: v36 Q77 REASON-LIST EDITOR — the admin console gains a "Reason lists" panel that manages the choices in every admin-editable pick list (clock-out reasons, rework reasons, after-hours reasons, down-for-today reasons, time-off reasons): rename, reorder (up/down), add, and retire (retire-not-delete keeps history and just drops the choice off new menus) — the same pattern as the Build-steps editor, admin-only, fully audited (picklist.added/renamed/moved/retired/restored), no migration. Previous: v35 Q92 TIME-OFF FOLLOW-UP (owner-rep) — (a) approving/denying a request AND the direct "add time off for anyone" are now ADMIN-ONLY (were manager+admin); managers keep only the read-only "who's out, upcoming" list. (b) the requester may leave an OPTIONAL note with the request (shown to the admin in the needs-you lane). (c) the new-request heads-up goes to admins now. (d) the "Time-off requests" toggle ships OFF by default (migration 0021 flips it; the panel stays hidden and /api/timeoff/request refuses until an admin turns it on). Previous: v34 Q92 TIME-OFF REQUESTS — a builder asks for time off from their phone (a date range + a reason); it lands in the manager's "Time off — needs you" cockpit lane; one tap approves or denies (optional note); the person sees the decision and their own pending/upcoming requests on the home screen. A manager or admin can also enter time off for anyone directly (lands already approved). An "upcoming — who's out and when" list shows approved absences ahead. Q106-sandboxed (every push reroutes to the owner-rep until the NOTIFY_LIVE cutover); gated by the "Time-off requests" admin toggle; fully audited (timeoff.requested/approved/denied/added). DEFERRED honestly to a later block: feeding an absence into each cab's finish-date projection, a days-ahead visual calendar, on-arrival reason pre-loading, and the Meeting Pack. Previous: v33 Q83 "DOWN FOR TODAY" QUICK-HOLD — one tap in the cockpit marks a line as EXPECTED idle (staff out / equipment down / no work scheduled): its TV tile goes calm-slate with the reason instead of a bare "Idle line", alerts stay quiet, it AUTO-CLEARS when the day rolls, and it AUTO-RESUMES the instant someone clocks in (Q84: working-while-held is impossible). Manager + admin, reason from an admin-editable pick list, fully audited. Distinct from the Q113 hard line-close (which refuses work and needs a manual reopen). Previous: v32 Q117 LIVE BOARD (server-sent events) — the TV board updates within ~3 seconds of any change instead of on the old 30-second poll. The server holds an EventSource per screen and bumps it the instant a new event_log row lands (every board-affecting action writes one), then the client re-fetches board-state and re-renders (same proven path). Keys stay server-side — no browser DB access. One shared cheap signal replaces N client polls; when nobody is watching the TV it does no work; a 30s fallback poll + EventSource auto-reconnect keep the board correct through any drop. Previous: v31 Q116 PACE EARLY-WARNING PUSHES — a background patrol turns the board's own RED into a push, so the owner-rep hears that a cab needs help instead of having to watch the TV. Edge-triggered (one push when a cab crosses into red, silence while it stays red, re-arms on recovery), reuses the board engine's exact math via an internal read of /api/board-state (zero drift with the TV), Q106-sandboxed (all delivery reroutes to the owner-rep until cutover), gated by a "Pace early-warning pushes" admin toggle, and runnable on demand from the console. Previous: v30 Q115 BREAK-PASS HARDENING — three input-validation guards the block-30 adversarial pass surfaced (all admin/manager-gated, no data risk, but a 500 is ugly): a non-UUID punch id, a non-integer line id, and an array smuggled into shop-hours now all get a clean 400 instead of reaching Postgres or coercing through Number(). Shared isUuid() helper. Previous: v29 Q111 pt 2 MISSED-PUNCH CORRECTIONS — the last piece before the physical punch clock retires. Cockpit gains a "Time corrections" lane: pick a person + Phoenix day, MOVE a punch to the right time, VOID a bogus one, or ADD a forgotten pair. Managers + admins (managers reach back 14 days, admins anytime); every change requires a note, lands in the event log (punch.moved/voided/added), and stamps the person's timecard row — nothing is silent. A correction must leave the day's punches alternating in/out (the tangle guard). Voided punches vanish from EVERY read — timecards, sweeper, board coverage, on-clock checks — but stay visible struck-through in the corrector. Previous: v28 Q114 TEMPORARY PASSCODES — the Q68 "first tap chooses the PIN" onboarding is GONE (it let any stranger who found the site claim a never-signed-in name). Every active name now carries a PIN: real or a unique server-assigned 4-digit TEMP code (stored hashed for login AND plain in employee.temp_pin — kept only until replaced, so the launch-day printed sheet + texts can be produced on the owner-rep's command). A temp-code login is parked at /change-pin until the person picks their own (new PIN may not equal the temp code; on success temp_pin is wiped). Admin "Reset PIN" now issues a fresh temp code instead of opening the old hole; a one-tap backfill covers everyone without a PIN. Launch texts + PDF stay DEFERRED per Q106. Previous: v27 Q113 SHOP HOURS & LINE CONTROL — the 7-to-4 day becomes ADMIN SETTINGS (shop_setting table, cached reads, everything derives from them: sweeper, after-hours detection, the board), per-line manual OPEN/CLOSE from the cockpit behind the "Managers can open/close lines" toggle (admins always; clock-in, switch, start, and kit-deliver all respect a closed line), the TV board gains the master SHOP OPEN / AFTER HOURS / CLOSED chip plus CLOSED tile badges, and the day-end sweeper now closes an abandoned after-hours SESSION honestly with an "(auto-closed)" wrap. See BUILD_LOG.md.)
 // ZERO npm dependencies on purpose (cloud-session constraint,
 // BUILD_LOG 2026-07-24): plain Node http + crypto + fetch.
 // Q-numbers cited throughout per the Q98 code standard.
@@ -184,6 +184,30 @@ function noteLoginFail(req, id) {
   if (g.ids.size >= LOGIN_DISTINCT_MAX) g.blockedUntil = now + LOGIN_COOLDOWN_MS;
 }
 
+// Q86 PHONE PHOTO HAND-OFF: a worker on the shared tablet mints a SHORT-LIVED,
+// single-cab, add-a-photo-only code. The phone opens /h with NO login, enters
+// the code, and its photos attach to THAT cab. In-memory (a restart just
+// invalidates open hand-offs, which expire in 20 min anyway). A code can ONLY
+// add a photo to its one cab — it can't read, change, or reach anything else,
+// and it can't sign anyone in.
+const HANDOFF_TTL_MS = 20 * 60 * 1000;
+const HANDOFF_MAX_PHOTOS = 20;
+const handoffs = new Map(); // code -> { build_id, task_id, created_by, exp, count }
+function newHandoff(build_id, task_id, created_by) {
+  const A = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // no 0/O/1/I/L — easy to read/type
+  const r = crypto.randomBytes(8); let code = "";
+  for (let i = 0; i < 8; i++) code += A[r[i] % A.length];
+  handoffs.set(code, { build_id, task_id: task_id || null, created_by, exp: Date.now() + HANDOFF_TTL_MS, count: 0 });
+  return code;
+}
+function getHandoff(code) {
+  const key = String(code || "").toUpperCase();
+  const h = handoffs.get(key);
+  if (!h) return null;
+  if (h.exp < Date.now()) { handoffs.delete(key); return null; }
+  return h;
+}
+
 // Q52 SHOP-WI-FI GATE for clock actions: if SHOP_EGRESS_IP is set on Railway,
 // clock in/out only works from that public IP (the shop's connection).
 // UNSET during the build phase = gate open, so testing works from anywhere.
@@ -358,7 +382,7 @@ const style = `<style>
 // PIN, or the inbox itself) a small clock-face links to /inbox and shows the
 // unread count, so a new notification is visible even with push/text/email off.
 (function(){
-  var skip = ["/board","/login","/","/change-pin","/inbox"];
+  var skip = ["/board","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
   document.addEventListener("DOMContentLoaded", function(){
     fetch("/api/inbox/unread").then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
@@ -652,7 +676,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0) => {
   const inRework = build.state === "rework";
   // Per-task documentation (file 11): count what's attached to each step.
   const notesOf = {}; for (const n of notes) (notesOf[n.task_id] = notesOf[n.task_id] || []).push(n);
@@ -742,8 +766,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <!-- Completion photos (file 11): captured on the phone camera. -->
     <div style="margin-top:10px;opacity:.85">Completion photos${photoMin > 0 ? ` — at least ${photoMin} required` : " (optional for this product)"}:
       <input type="file" id="fphotos" accept="image/*" capture="environment" multiple style="color:#8e8e93"></div>
+    <div style="margin-top:8px"><button class="b" type="button" onclick="phoneHandoff('${build.id}',null,this)">📱 Send photos from a phone</button>
+      <div id="hoff" style="margin-top:8px"></div></div>
     <div class="msg" id="upmsg"></div>
-    <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px" data-min="${photoMin}"
+    <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px" data-min="${photoMin}" data-have="${photoHave}"
       onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
   <div class="msg err" id="err"></div>
@@ -840,14 +866,32 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     }
   }
   // Finish gate submit (file 11 builder half): photos first, then the note.
+  async function phoneHandoff(buildId, taskId, btn){
+    btn.disabled = true; btn.textContent = "Getting a code...";
+    try{
+      const r = await fetch("/api/handoff/new", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ build_id: buildId, task_id: taskId }) });
+      const o = await r.json();
+      if(!o.ok) throw new Error(o.error || "Couldn't start the hand-off");
+      document.getElementById("hoff").innerHTML =
+        '<div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">' +
+        '<div style="opacity:.75;font-size:.9rem">On any phone, open</div>' +
+        '<div style="font-size:1.1rem;margin:4px 0"><b>' + location.host + '/h</b></div>' +
+        '<div style="opacity:.75;font-size:.9rem">and enter code</div>' +
+        '<div style="font-size:2rem;letter-spacing:4px;font-weight:800;margin:4px 0">' + o.code + '</div>' +
+        '<div style="opacity:.6;font-size:.8rem">Good for 20 minutes. Photos land on this cab - reload to see them.</div>' +
+        '</div>';
+      btn.textContent = "New code"; btn.disabled = false;
+    }catch(e){ document.getElementById("err").textContent = e.message; btn.disabled = false; btn.textContent = "📱 Send photos from a phone"; }
+  }
   async function finishCab(id, btn) {
     const files = document.getElementById("fphotos").files;
-    // Q86 HARD gate: this product needs at least data-min completion photos.
-    // The server enforces the same rule; this stops the tap early with a clear
-    // count so nobody uploads a note then bounces off the finish.
+    // Q86 HARD gate: at least data-min completion photos. data-have counts the
+    // photos already on the cab (incl. any sent from a phone via the hand-off);
+    // the server enforces the same rule.
     const need = Number(btn.dataset.min || 0);
-    if (files.length < need) {
-      document.getElementById("err").textContent = "This cab needs at least " + need + " completion photo" + (need === 1 ? "" : "s") + " before finishing" + (files.length ? " (you've attached " + files.length + ")." : ".");
+    const have = Number(btn.dataset.have || 0);
+    if (have + files.length < need) {
+      document.getElementById("err").textContent = "This cab needs at least " + need + " completion photo" + (need === 1 ? "" : "s") + " before finishing (" + (have + files.length) + " so far).";
       return;
     }
     btn.disabled = true; btn.textContent = "Sending…";
@@ -1048,6 +1092,33 @@ const inboxPage = (emp, notes) => `<!doctype html>
     <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div></body></html>`;
+
+// Q86 hand-off: the NO-LOGIN phone page. With a valid code it shows a photo
+// upload that posts straight to the code's one cab; without one it shows a
+// code-entry box. Plain concatenation (no nested template literals) for safety.
+function handoffPage(info) {
+  const esc = (x) => String(x == null ? "" : x).replace(/</g, "&lt;");
+  const head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Send photos - Shop Board</title>' + style + '</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div>';
+  const foot = '</div></body></html>';
+  if (!info) {
+    return head +
+      '<h2>Send photos to a cab</h2>' +
+      '<p style="text-align:center;opacity:.7">Enter the code shown on the tablet.</p>' +
+      '<div style="text-align:center;margin-top:12px"><input id="cin" autocapitalize="characters" placeholder="CODE" style="text-transform:uppercase;font-size:1.4rem;letter-spacing:3px;text-align:center;background:#111;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;width:190px"><div style="margin-top:10px"><button class="name" id="cgo" style="padding:12px 30px">Open</button></div></div>' +
+      '<p style="text-align:center;opacity:.5;font-size:.85rem;margin-top:12px">The code is good for 20 minutes. No sign-in needed.</p>' +
+      '<script>document.getElementById("cgo").onclick=function(){var v=document.getElementById("cin").value.trim().toUpperCase();if(v)location.href="/h?c="+encodeURIComponent(v);};</script>' +
+      foot;
+  }
+  return head +
+    '<h2>Send photos' + (info.task ? ' for a step' : '') + '</h2>' +
+    '<p style="text-align:center;opacity:.8">Order <b>' + esc(info.order) + '</b>' + (info.cab ? ' &middot; Cab #' + esc(info.cab) : '') + '</p>' +
+    '<p style="text-align:center;opacity:.6;font-size:.9rem">Take or pick photos - they go straight to this cab on the tablet. No sign-in needed.</p>' +
+    '<div style="text-align:center;margin-top:14px"><input type="file" id="hp" accept="image/*" multiple style="color:#8e8e93"></div>' +
+    '<div class="msg" id="hm" style="text-align:center;margin-top:12px"></div>' +
+    '<p style="text-align:center;margin-top:8px"><b id="hc">0</b> sent</p>' +
+    '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Sent! Add more if you like, or finish on the tablet.";e.target.value="";});})();</script>' +
+    foot;
+}
 
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
@@ -2429,7 +2500,9 @@ http.createServer(async (req, res) => {
           // Q86: this product's completion-photo minimum drives the phone Finish gate.
           const [prodMin] = await db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`);
           const photoMin = prodMin ? prodMin.photo_min : 1;
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin));
+          // Completion photos already on the cab (incl. any sent from a phone) count toward the minimum.
+          const cShots = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`);
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -3786,6 +3859,59 @@ self.addEventListener("notificationclick", (e) => {
     // 8 MB cap per photo. Stored in the PRIVATE cab-photos bucket; the
     // metadata row lands in build_photo. Q86's per-product minimum becomes
     // a hard gate when product settings arrive; today the gate nudges.
+    // Q86 hand-off: mint a short code so a phone can add photos to this cab.
+    if (url.pathname === "/api/handoff/new" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastCk || lastCk.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
+      const { build_id, task_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      if (task_id != null && !isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
+      const [b] = await db(`build?select=id&id=eq.${build_id}`);
+      if (!b) return json(404, { ok: false, error: "Cab not found" });
+      const code = newHandoff(build_id, task_id || null, empId);
+      logEvent("handoff.opened", empId, { build_id, task_id: task_id || null });
+      return json(200, { ok: true, code, path: "/h?c=" + code });
+    }
+
+    // Q86 hand-off: the NO-LOGIN phone page (validates the code itself).
+    if (url.pathname === "/h") {
+      const c = url.searchParams.get("c");
+      const h = c ? getHandoff(c) : null;
+      if (!h) return send(200, "text/html; charset=utf-8", handoffPage(null));
+      const [b] = await db(`build?select=order_number,cab_number&id=eq.${h.build_id}`);
+      return send(200, "text/html; charset=utf-8", handoffPage({ code: c, order: b ? b.order_number : "", cab: b ? b.cab_number : "", task: Boolean(h.task_id) }));
+    }
+
+    // Q86 hand-off: the NO-LOGIN photo upload. Guarded by the code alone — it can
+    // ONLY add a photo to that code's one cab, capped, and time-limited.
+    if (url.pathname === "/api/handoff/upload" && req.method === "POST") {
+      const h = getHandoff(url.searchParams.get("code"));
+      if (!h) return json(410, { ok: false, error: "This code expired - ask for a fresh one on the tablet" });
+      if (h.count >= HANDOFF_MAX_PHOTOS) return json(429, { ok: false, error: "That's plenty - this code has taken its limit of photos" });
+      const ctype = String(req.headers["content-type"] || "");
+      if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
+      if (/hei[cf]/.test(ctype)) return json(415, { ok: false, error: "That photo format (HEIC) can't be shown on the shop screens - retake or re-pick it so the phone converts it" });
+      const chunks = []; let size = 0, over = false;
+      await new Promise((resolve) => {
+        req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
+        req.on("end", resolve); req.on("close", resolve);
+      });
+      if (over) return json(413, { ok: false, error: "Photo too large (8 MB max)" });
+      const buf = Buffer.concat(chunks);
+      const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
+      const path = `${h.build_id}/${Date.now()}.${ext}`;
+      const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
+        method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": ctype }, body: buf });
+      if (!up.ok) { console.error("handoff store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
+      const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
+        build_id: h.build_id, task_id: h.task_id, uploaded_by: h.created_by, storage_path: path, kind: h.task_id ? "task" : "finish" }) });
+      h.count += 1;
+      logEvent("handoff.photo", h.created_by, { build_id: h.build_id, task_id: h.task_id, photo_id: row ? row.id : null, bytes: buf.length });
+      return json(200, { ok: true, count: h.count });
+    }
+
     if (url.pathname === "/api/photo/upload" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
