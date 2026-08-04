@@ -1645,6 +1645,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <p style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
     ${isAdmin || showReports ? `<a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>` : ""}
+    <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
     <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -1946,6 +1947,64 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
   }
 </script></body></html>`;
+
+// Q92 (part 2): THE MEETING PACK — an on-demand living snapshot for the
+// (sometimes-floating) Monday meeting. Manager + admin, read-only, no data
+// entry: the floor right now, cabs finishing (awaiting sign-off), sign-offs in
+// the last 7 days, and who's out ahead. Prints cleanly. "The button is the
+// feature" (owner-rep) — an optional Monday auto-push can ride the scheduler later.
+function meetingPage(now, board, awaiting, completed, out) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Meeting Pack</title>${style}
+<style>
+  .mp{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .mp h3{margin:0 0 10px}
+  .row{padding:8px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .muted{opacity:.6}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .g{background:#30d158}.a{background:#ffd60a}.r{background:#ff453a}.n{background:#6b6b70}
+  @media print{ a{display:none} .mp{break-inside:avoid} }
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 14px">
+    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
+    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Meeting Pack</h2>
+  <p class="muted" style="margin-top:-8px">A live snapshot for the meeting — ${esc(now)} (Phoenix). Reload for the latest.</p>
+
+  <div class="mp"><h3>Right now — the floor</h3>
+  ${board && board.lines && board.lines.length ? board.lines.map((l) => {
+    const dot = !l.cab ? "n" : l.cab.color === "red" ? "r" : l.cab.color === "amber" ? "a" : l.cab.color === "green" ? "g" : "n";
+    let line;
+    if (l.closed) line = `<span class="muted">Closed</span>`;
+    else if (l.down) line = `<span class="muted">Down — ${esc(l.down.reason || "")}</span>`;
+    else if (!l.cab) line = `<span class="muted">Idle${l.ondeck ? ` — on deck: ${esc(l.ondeck.order)} (${esc(l.ondeck.family || "")})` : ""}</span>`;
+    else line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}`;
+    const techs = (l.techs && l.techs.length) ? ` <span class="muted">· ${l.techs.map(esc).join(", ")}</span>` : "";
+    return `<div class="row"><span class="dot ${dot}"></span><b>${esc(l.name)}</b> — ${line}${techs}</div>`;
+  }).join("") : `<div class="muted">No lines to show.</div>`}
+  </div>
+
+  <div class="mp"><h3>Finishing — awaiting sign-off (${awaiting.length})</h3>
+  ${awaiting.length ? awaiting.map((a) => `<div class="row"><b>${esc(a.order)}</b> ${esc(a.family || "")} <span class="muted">· ${esc(a.line || "")}</span></div>`).join("") : `<div class="muted">Nothing waiting on inspection.</div>`}
+  </div>
+
+  <div class="mp"><h3>Completed — last 7 days (${completed.length})</h3>
+  ${completed.length ? completed.map((c) => `<div class="row"><b>${esc(c.order)}</b> ${esc(c.family || "")}${c.cab ? ` <span class="muted">· Cab #${esc(c.cab)}</span>` : ""} <span class="muted">· ${esc(c.when)}</span></div>`).join("") : `<div class="muted">No sign-offs in the last 7 days.</div>`}
+  </div>
+
+  <div class="mp"><h3>Who's out — upcoming (${out.length})</h3>
+  ${out.length ? out.map((o) => `<div class="row"><b>${esc(o.who)}</b> <span class="muted">· ${esc(o.dates)}${o.reason ? ` · ${esc(o.reason)}` : ""}</span></div>`).join("") : `<div class="muted">Nobody scheduled out.</div>`}
+  </div>
+</div></body></html>`;
+}
 
 // THE ADMIN CONSOLE v1 (file 21) — admin role only.
 // Three panels this block: EMPLOYEES (roles/departments/lines/active +
@@ -3487,6 +3546,41 @@ http.createServer(async (req, res) => {
         upcoming: toUpRows.map((t) => ({ who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason })),
         emps: tcEmps, reasons: toReasonsM };
       return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff));
+    }
+
+    // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
+    // admin, like the cockpit. Reuses the board engine (internal fetch) plus a
+    // few light reads; no data entry, no new tables.
+    if (url.pathname === "/meeting") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin")) return send(403, "text/plain", "Manager or admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
+      const prods = await db(`product?select=part_number,family`);
+      const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
+      const lns = await db(`line?select=id,name`);
+      const lineName = Object.fromEntries(lns.map((l) => [l.id, l.name]));
+      // Finishing = cabs awaiting sign-off (done building, on the manager's desk).
+      const awaitRows = await db(`build?select=order_number,part_number,line_id&state=eq.awaiting_inspection&order=created_at`);
+      const awaiting = awaitRows.map((b) => ({ order: b.order_number, family: familyOf[b.part_number] || "", line: lineName[b.line_id] || "" }));
+      // Completed in the last 7 days = the production_complete events (payload
+      // carries order_number; join the build for family + cab #).
+      const sinceISO = new Date(Date.now() - 7 * 86400000).toISOString();
+      const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&at=gte.${sinceISO}&order=at.desc&limit=100`);
+      const compIds = compEv.map((e) => e.payload && e.payload.build_id).filter((x) => isUuid(x));
+      const compBuilds = compIds.length ? await db(`build?select=id,part_number,cab_number&id=in.(${compIds.join(",")})`) : [];
+      const bById = Object.fromEntries(compBuilds.map((b) => [b.id, b]));
+      const completed = compEv.map((e) => { const p = e.payload || {}, bb = bById[p.build_id] || {}; return { order: p.order_number || "?", family: familyOf[bb.part_number] || "", cab: bb.cab_number || "", when: phxHM(e.at) }; });
+      // Who's out ahead = approved time off not yet ended.
+      const today = phxDate(Date.now());
+      const outRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${today}&order=start_date&limit=60`);
+      const emps = await db(`employee?select=id,first_name,last_name`);
+      const nameOf = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim()]));
+      const fmtD = (d) => String(d).slice(5).replace("-", "/"); // MM/DD from YYYY-MM-DD
+      const out = outRows.map((t) => ({ who: nameOf[t.employee_id] || "?", dates: t.start_date === t.end_date ? fmtD(t.start_date) : `${fmtD(t.start_date)}–${fmtD(t.end_date)}`, reason: t.reason || "" }));
+      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
