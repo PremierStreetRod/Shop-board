@@ -1018,6 +1018,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
 const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0) => {
   const inRework = build.state === "rework";
+  const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
   // Per-task documentation (file 11): count what's attached to each step.
   const notesOf = {}; for (const n of notes) (notesOf[n.task_id] = notesOf[n.task_id] || []).push(n);
   const photosOf = {}; for (const p of tphotos) (photosOf[p.task_id] = photosOf[p.task_id] || []).push(p);
@@ -1067,8 +1068,18 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"} · fix within ${Number(build.rework_hours) || "—"} hrs
     ${build.rework_note ? `<br><span style="opacity:.8">Manager's note: ${build.rework_note}</span>` : ""}
   </div>` : ""}
+  ${inFix ? `
+  <!-- Q85 FIX-JOB BANNER: this cab was ALREADY signed off and came BACK — a
+       Body Shop kickback or a customer return. The fix step sits in the FIX
+       group below (day_no 0). Finish it and the finish gate returns — resubmit
+       sends the cab to AWAITING INSPECTION for RE-INSPECTION (never straight to
+       complete). Fix hours are their own bucket (0 standard hours). -->
+  <div class="note" style="background:#12233a;border-color:#4a90d9">
+    ⟲ RETURNED FOR FIX — ${build.fix_kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${build.fix_reason || "see note"}${build.fix_hours ? ` · within ${Number(build.fix_hours)} hrs` : ""}
+    ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
+  </div>` : ""}
   ${days.map((d) => `
-    <div class="dayhead">${d === 0 ? "REWORK — fix these first" : `DAY ${d}`}</div>
+    <div class="dayhead">${d === 0 ? (inFix ? "FIX — do these first" : "REWORK — fix these first") : `DAY ${d}`}</div>
     ${tasks.filter((t) => t.day_no === d).map((t) => `
       <button class="task ${t.state === "complete" ? "done" : t.state === "in_progress" ? "doing" : ""}"
               data-id="${t.id}" data-state="${t.state}">
@@ -1113,7 +1124,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       <div id="hoff" style="margin-top:8px"></div></div>
     <div class="msg" id="upmsg"></div>
     <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px" data-min="${photoMin}" data-have="${photoHave}"
-      onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
+      onclick="finishCab('${build.id}',this)">${(inRework || inFix) ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
   <div class="msg err" id="err"></div>
   <!-- SWITCH LINE (Q107): going to help another line "for a bit" used to
@@ -1651,7 +1662,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -1768,6 +1779,26 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days; older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
     ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
   </div>` : ""}
+  <!-- Q85 FIX JOB: a signed-off cab came back (Body Shop kickback / customer
+       return). Opening one re-opens its ORIGINAL record as a fix job (own
+       deadline + hours bucket, re-inspection to close) and logs a sign-off
+       escape. It "runs alongside" — it doesn't force-pause a live build. -->
+  <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
+    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hrs` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off below.</div>`}
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <b>Open a fix job on a returned cab:</b>
+      <p>Order
+        <select id="fx-cab">${fixjob.completed.length ? fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
+        <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
+        <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
+      </p>
+      <p>On line <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+        · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
+      <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
+      <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
+      <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off below.</span>
+    </div>
+  </div>
   ${rows.map((r) => `
     <div class="lane">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
@@ -1878,6 +1909,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  // Q85: open a fix job on a returned/kicked-back cab.
+  async function openFix(){
+    var cab = document.getElementById("fx-cab").value;
+    if(!cab){ document.getElementById("err").textContent = "No completed cab to send back."; return; }
+    var payload = { build_id: cab, kind: document.getElementById("fx-kind").value,
+      reason: document.getElementById("fx-reason").value, line_id: document.getElementById("fx-line").value,
+      hours: document.getElementById("fx-hours").value, note: document.getElementById("fx-note").value };
+    try {
+      var r = await fetch("/api/build/fixjob", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+      var out = await r.json();
+      if(out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch(e){ document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
   async function lineClosed(lineId, to) {
     try {
       const r = await fetch("/api/line/closed", { method: "POST",
@@ -2511,6 +2556,9 @@ async function reportData(startMs, endMs) {
   // Sign-off + rework moments live in the append-only event log (spec §3).
   const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
   const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
+  // Q85: sign-off escapes — a cab that came BACK after manager sign-off (a Body
+  // Shop kickback or a customer return, opened as a fix job).
+  const fxEv = await db(`event_log?select=at,payload&event_type=eq.build.fixjob_opened&order=at.asc&limit=2000`);
   // Same windowing caveat as the board engine: fine for years at this shop's
   // event volume; revisit alongside the engine if history ever outgrows it.
   const events = await db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`);
@@ -2566,6 +2614,15 @@ async function reportData(startMs, endMs) {
   const rw = rwEv.filter((e) => { const t = new Date(e.at).getTime(); return t >= sinceMs && t <= winEnd; });
   const rwReasons = {};
   for (const e of rw) { const r = (e.payload && e.payload.reason) || "(no reason)"; rwReasons[r] = (rwReasons[r] || 0) + 1; }
+  // Q85 suite 5: SIGN-OFF ESCAPES in the window — the scoreboard the inspection
+  // gate exists to zero out. Split by kind (kickback / customer return) + reason.
+  const fx = fxEv.filter((e) => { const t = new Date(e.at).getTime(); return t >= sinceMs && t <= winEnd; });
+  const escapes = { total: fx.length, kickback: 0, customer: 0, reasons: {} };
+  for (const e of fx) {
+    const p = e.payload || {};
+    if (p.kind === "kickback") escapes.kickback++; else if (p.kind === "customer_return") escapes.customer++;
+    const r = p.reason || "(no reason)"; escapes.reasons[r] = (escapes.reasons[r] || 0) + 1;
+  }
   // TIMECARDS (Q111): payroll's view — one row per person per Phoenix day.
   // Paid = the sum of on-the-clock intervals (C15 clock truth; lunch drops
   // out because they clocked out for it, and downtime waiting on a kit stays
@@ -2616,7 +2673,7 @@ async function reportData(startMs, endMs) {
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
-  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons } };
+  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes };
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
@@ -2702,6 +2759,16 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <h3>Rework (${d.rework.n} in period)</h3>
     ${d.rework.n ? Object.entries(d.rework.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.85">${r} — ${n}</div>`).join("")
     : `<div style="opacity:.6">No rework assigned in this period. Good.</div>`}
+  </div>
+  <!-- Q85 suite 5: SIGN-OFF ESCAPES — cabs that came BACK after manager sign-off
+       (Body Shop kickbacks + customer returns). The number the inspection gate
+       exists to drive to zero. Management-only, like the rest of reports. -->
+  <div class="lane" style="border-color:#4a90d9">
+    <h3>Sign-off escapes (${(d.escapes && d.escapes.total) || 0} in period)</h3>
+    ${(d.escapes && d.escapes.total)
+      ? `<div style="padding:3px 0;opacity:.9">Body Shop kickbacks — ${d.escapes.kickback} &nbsp;·&nbsp; Customer returns — ${d.escapes.customer}</div>
+         ${Object.entries(d.escapes.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.75">${r} — ${n}</div>`).join("")}`
+      : `<div style="opacity:.6">No cabs came back after sign-off in this period. That's the goal.</div>`}
   </div>
 </div></body></html>`;
 
@@ -3142,7 +3209,11 @@ http.createServer(async (req, res) => {
       if (clockedIn && url.searchParams.get("clockout") !== "1") {
         // ON THE CLOCK: front-center cab = the active build on YOUR line (Q90).
         // A cab in REWORK still owns its line and its screen (files 11/18).
-        const [build] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours&line_id=eq.${last.line_id}&state=in.(active,rework)&order=started_at&limit=1`);
+        // Q85: fix_job joins active/rework as a workable cab, but active/rework
+        // WIN the screen — a fix job only appears when its line has no live
+        // build (it "runs alongside", never displacing current work).
+        const cands = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours,fix_kind,fix_reason,fix_note,fix_hours&line_id=eq.${last.line_id}&state=in.(active,rework,fix_job)&order=started_at`);
+        const build = cands.find((x) => x.state === "active" || x.state === "rework") || cands.find((x) => x.state === "fix_job") || null;
         if (build) {
           // Q107: started_by/completed_by ride along so the screen can show
           // WHO is on a step — two techs sharing a cab see each other's work.
@@ -3429,7 +3500,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
       // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
       // would silently drop a long-running cab's EARLIEST coverage after about
       // a month of real usage — corrupting pace math invisibly. Now the window
@@ -3476,6 +3547,12 @@ http.createServer(async (req, res) => {
         if ((b.state === "active" || b.state === "rework") && !cabOf[b.line_id]) cabOf[b.line_id] = b;
         if (b.state === "awaiting_inspection" && !waitOf[b.line_id]) waitOf[b.line_id] = b;
         if (b.state === "upcoming" && !deckOf[b.line_id]) deckOf[b.line_id] = b;
+      }
+      // Q85: a FIX JOB owns the tile ONLY on a line with no live build (it
+      // "runs alongside", never displacing current work) — second pass so
+      // active/rework always win the tile first.
+      for (const b of builds) {
+        if (b.state === "fix_job" && !cabOf[b.line_id]) cabOf[b.line_id] = b;
       }
       const ids = Object.values(cabOf).map((b) => b.id);
       const tasks = ids.length
@@ -3567,15 +3644,29 @@ http.createServer(async (req, res) => {
           rcolor = !frame ? "amber" : rwHrs > frame ? "red" : rwHrs > frame * 0.75 ? "amber" : "green";
           rstatus = `In extra time — ${b.rework_reason || "fixes"} · ${rwHrs.toFixed(1)} of ${frame || "—"} hrs used`;
         }
+        // Q85 FIX JOB OVERRIDE: a returned/kicked-back cab. Distinct badge + its
+        // OWN deadline countdown = ELAPSED wall-time since the fix opened vs the
+        // manager's hour frame (a returned cab shares no clean line-labor with a
+        // live build, so the honest measure is the wall-clock deadline). Fix
+        // hours are their own bucket; the normal build pace math stays out of it.
+        let fixJob = false;
+        if (b.state === "fix_job") {
+          fixJob = true; badge = "FIX JOB";
+          const fxStart = new Date(b.fix_assigned_at || b.started_at).getTime();
+          const elapsedH = Math.max(0, (now - fxStart) / 3600000);
+          const frame = Number(b.fix_hours) || 0;
+          rcolor = !frame ? "amber" : elapsedH > frame ? "red" : elapsedH > frame * 0.75 ? "amber" : "green";
+          rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${elapsedH.toFixed(1)} of ${frame || "—"} hrs`;
+        }
         return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "",
-            done_mh: a.done.toFixed(1), total_mh: a.total.toFixed(1),
-            pct: a.total ? Math.round(100 * a.done / a.total) : 0,
+            done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
+            pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
             // Promised date is FIXED at start (Q103-6); remaining standard
             // man-hours is the honest v1 "how much is left" figure.
             promised: b.promised_finish || null,
-            remaining_mh: (a.total - a.done).toFixed(1),
-            color: rcolor, status: rstatus, badge, day, total_days: totalDays } };
+            remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
+            color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays } };
       }) });
     }
 
@@ -3679,7 +3770,17 @@ http.createServer(async (req, res) => {
         pending: toPendRows.map((t) => ({ id: t.id, who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason, reqnote: t.request_note })),
         upcoming: toUpRows.map((t) => ({ who: toNameOf(t.employee_id), dates: toDates(t.start_date, t.end_date), reason: t.reason })),
         emps: tcEmps, reasons: toReasonsM };
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff));
+      // Q85: fix jobs — the currently-open ones + the recent signed-off cabs a
+      // manager can send back, + the fixjob reason list.
+      const fxOpenRows = await db(`build?select=order_number,cab_number,line_id,fix_kind,fix_reason,fix_hours,fix_note&state=eq.fix_job&order=fix_assigned_at`);
+      const fxLineName = Object.fromEntries(lines.map((l) => [l.id, l.name]));
+      const fxCompleted = await db(`build?select=id,order_number,cab_number&state=eq.production_complete&order=created_at.desc&limit=40`);
+      const fxReasons = await db(`pick_list_item?select=label&list_key=eq.fixjob_reason&retired=is.false&order=sort_order`);
+      const fixjob = {
+        open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note })),
+        completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
+        reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff, fixjob));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -3834,8 +3935,9 @@ http.createServer(async (req, res) => {
       const { build_id, note, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number&id=eq.${build_id}`);
-      // Accepts ACTIVE (first finish) and REWORK (resubmit after fixes, file 18).
-      if (!b || (b.state !== "active" && b.state !== "rework"))
+      // Accepts ACTIVE (first finish), REWORK (resubmit after fixes, file 18),
+      // and FIX_JOB (Q85: a returned/kicked-back cab resubmitting for re-inspection).
+      if (!b || (b.state !== "active" && b.state !== "rework" && b.state !== "fix_job"))
         return json(400, { ok: false, error: "Cab is not in a finishable state" });
       const open = await db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete&limit=1`);
       if (open.length) return json(400, { ok: false, error: "There are still open steps on this cab" });
@@ -3929,6 +4031,54 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Q85: OPEN A FIX JOB — a signed-off (production_complete) cab comes BACK
+    // for a production fix: a Body Shop kickback or a customer return. It
+    // re-opens its ORIGINAL record as a FIX JOB (never a new build): reason-
+    // coded, own deadline, own hours bucket (fix task = 0 standard hours, like
+    // rework — pace/earned never gains from fix work), and it must pass
+    // RE-INSPECTION to close. Opening one logs a "sign-off escape".
+    if (url.pathname === "/api/build/fixjob" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, kind, reason, note, hours, line_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      if (kind !== "kickback" && kind !== "customer_return")
+        return json(400, { ok: false, error: "Pick kickback or customer return" });
+      if (!reason) return json(400, { ok: false, error: "Pick a reason" });
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
+      if (!b || b.state !== "production_complete")
+        return json(400, { ok: false, error: "Only a signed-off cab can come back as a fix job" });
+      // Which line it runs on: the manager's pick, else the cab's original line.
+      let lineId = b.line_id;
+      if (line_id !== undefined && line_id !== null && line_id !== "") {
+        if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "That line isn't valid" });
+        lineId = Number(line_id);
+      }
+      const when = claimed_at || new Date().toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        state: "fix_job", line_id: lineId, fix_kind: kind, fix_reason: reason,
+        fix_note: note || null, fix_hours: Number(hours) || null, fix_assigned_at: when }) });
+      const priors = await db(`task?select=id&build_id=eq.${build_id}&source=eq.fix`);
+      await db("task", { method: "POST", body: JSON.stringify({
+        build_id, display_no: `F${priors.length + 1}`,
+        name: `Fix: ${reason}${note ? ` — ${note}` : ""}`,
+        day_no: 0, man_hours: 0, is_background: false,
+        source: "fix", state: "not_started", sort_order: 2000 + priors.length }) });
+      // THE SIGN-OFF ESCAPE record (management scoreboard, Q85 report suite 5) —
+      // a return AFTER manager sign-off, the number the inspection gate zeroes out.
+      logEvent("build.fixjob_opened", empId, { build_id, order_number: b.order_number,
+        kind, reason, note: note || "", hours: Number(hours) || null, line_id: lineId, was_signed_off: true, at: when });
+      // The chosen line's techs hear it (Q106 sandbox holds delivery to owner-rep).
+      const techsFx = await db(`employee?select=id&active=is.true&lines=cs.{${lineId}}`);
+      notify("build.fixjob_opened", techsFx.map((t) => t.id),
+        `Order ${b.order_number} came back — ${kind === "kickback" ? "Body Shop kickback" : "customer return"}`,
+        `${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs given. The fix step is on the cab screen.`, "/home");
+      return json(200, { ok: true });
+    }
+
     // SIGN-OFF: manager completes the cab (file 11 gate, manager half).
     // Normal path = from AWAITING INSPECTION; direct from active allowed too
     // (manager judgment call — both are logged with the state they came from).
@@ -3940,11 +4090,17 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,fix_kind,fix_reason,fix_assigned_at&id=eq.${build_id}`);
       if (!b || (b.state !== "active" && b.state !== "awaiting_inspection"))
         return json(400, { ok: false, error: "Cab is not active or awaiting inspection" });
-      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
-      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at });
+      // Q85: if this cab carried a fix job (fix_assigned_at set), signing off is
+      // the RE-INSPECTION pass — close the fix episode and clear its fields.
+      const wasFix = !!b.fix_assigned_at;
+      const patchC = { state: "production_complete" };
+      if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
+      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix });
+      if (wasFix) logEvent("build.fixjob_closed", empId, { build_id, order_number: b.order_number, kind: b.fix_kind, reason: b.fix_reason, signed_off_at: claimed_at });
       // Q109: sign-off frees the line — warehouse can deliver the next
       // verified kit the moment this fires. Q106 sandbox applies.
       const [lnC] = await db(`line?select=name&id=eq.${b.line_id}`);
