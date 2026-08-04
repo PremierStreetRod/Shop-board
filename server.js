@@ -2323,6 +2323,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
+    <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -2869,6 +2870,138 @@ function reportCsv(which, d) {
         phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), t.flags])).join("");
   return row(["Order #", "Cab #", "Product", "Line", "Standard hours", "Actual hours", "Variance %", "Started", "Signed off", "Signed off by", "Admin sign-off"]) +
     d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed, c.by, c.byAdmin ? "yes" : ""])).join("");
+}
+
+// Q84: MANAGER-INTEGRITY DIAGNOSTICS — ADMIN ONLY (file 25). Once a bonus rides
+// on "keeping lines green," the player-coach manager (who shares the bonus and
+// holds most of the pause buttons) is inside the circle of temptation — so these
+// flags go ABOVE him, to the admin. Everything here is DERIVED from the append-
+// only event log (spec §3); it writes nothing. It FLAGS, humans JUDGE (the
+// escalation principle) — never a floor-facing number, never auto-punishment.
+// Structural note: the bonus keys off the un-fakeable calendar (fixed promised
+// finish), never pace color, and clock-in on a held cab auto-resumes it — so
+// this view is the honest backstop, not the primary defense.
+async function integrityData(startMs, endMs) {
+  const sIso = new Date(startMs).toISOString(), eIso = new Date(endMs).toISOString();
+  const emps = await db(`employee?select=id,first_name,last_name,role`);
+  const nameOf = {}, roleOf = {};
+  for (const p of emps) { nameOf[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim(); roleOf[p.id] = p.role; }
+  const lines = await db(`line?select=id,name`);
+  const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
+  // The integrity-sensitive moments, in-window: down-for-today holds, a hold
+  // that a clock-in RESUMED (held then worked — the defensive-hold tell), the
+  // three clock corrections, and sign-offs (with the by_role captured in Q86).
+  const ev = await db(`event_log?select=at,actor_id,event_type,payload&event_type=in.(line.down,line.down_resumed,punch.moved,punch.voided,punch.added,build.production_complete)&at=gte.${sIso}&at=lt.${eIso}&order=at.asc&limit=8000`);
+  const acts = {};   // actor id -> tallies
+  const A = (id) => acts[id] || (acts[id] = { holds: 0, corrections: 0, signoffs: 0, selfSigns: 0 });
+  const holds = [], resumed = [], signoffs = [], reasonCount = {};
+  for (const e of ev) {
+    if (e.event_type === "line.down") { A(e.actor_id).holds++; holds.push(e); const r = (e.payload && e.payload.reason) || "—"; reasonCount[r] = (reasonCount[r] || 0) + 1; }
+    else if (e.event_type === "line.down_resumed") resumed.push(e);
+    else if (e.event_type === "punch.moved" || e.event_type === "punch.voided" || e.event_type === "punch.added") A(e.actor_id).corrections++;
+    else if (e.event_type === "build.production_complete") { A(e.actor_id).signoffs++; signoffs.push(e); }
+  }
+  // HELD-THEN-WORKED: for each resume, the manager who held that line = the
+  // latest line.down on the same line before the resume (same shop day).
+  const resumedList = resumed.map((e) => {
+    const lid = e.payload && e.payload.line_id, t = new Date(e.at).getTime();
+    let heldBy = null, heldAt = 0;
+    for (const h of holds) { if ((h.payload && h.payload.line_id) === lid && new Date(h.at).getTime() <= t && new Date(h.at).getTime() >= heldAt) { heldBy = h.actor_id; heldAt = new Date(h.at).getTime(); } }
+    return { line: lineName[lid] || ("Line " + lid), heldBy: heldBy ? (nameOf[heldBy] || "?") : "—", resumedBy: nameOf[e.actor_id] || "?", when: phxHM(e.at) };
+  });
+  // SELF-SIGN: a sign-off where the signer was clocked onto that cab's line
+  // during the build (a line runs one cab at a time, so a clock-in on the line
+  // between start and sign-off = they worked the cab they then passed).
+  const soBuildIds = [...new Set(signoffs.map((e) => e.payload && e.payload.build_id).filter(isUuid))];
+  const soBuilds = soBuildIds.length ? await db(`build?select=id,order_number,line_id,started_at&id=in.(${soBuildIds.join(",")})`) : [];
+  const bById = {}; for (const b of soBuilds) bById[b.id] = b;
+  const signers = [...new Set(signoffs.map((e) => e.actor_id).filter(Boolean))];
+  const signerClocks = signers.length ? await db(`clock_event?select=employee_id,line_id,claimed_at&voided=is.false&kind=eq.clock_in&employee_id=in.(${signers.join(",")})&order=claimed_at.asc&limit=8000`) : [];
+  const selfSignList = [];
+  for (const e of signoffs) {
+    const b = bById[e.payload && e.payload.build_id]; if (!b || !b.started_at) continue;
+    const s = new Date(b.started_at).getTime(), f = new Date(e.at).getTime();
+    const worked = signerClocks.some((c) => c.employee_id === e.actor_id && c.line_id === b.line_id && new Date(c.claimed_at).getTime() >= s && new Date(c.claimed_at).getTime() <= f);
+    if (worked) { A(e.actor_id).selfSigns++; selfSignList.push({ who: nameOf[e.actor_id] || "?", order: b.order_number, line: lineName[b.line_id] || ("Line " + b.line_id), when: phxHM(e.at) }); }
+  }
+  const rows = Object.keys(acts).map((id) => ({ name: nameOf[id] || "?", role: roleOf[id] === "admin" ? "Admin" : roleOf[id] === "manager" ? "Manager" : "Team Member", ...acts[id] }))
+    .filter((r) => r.holds || r.corrections || r.signoffs || r.selfSigns)
+    .sort((a, b) => (b.holds + b.corrections + b.signoffs + b.selfSigns) - (a.holds + a.corrections + a.signoffs + a.selfSigns));
+  const reasons = Object.entries(reasonCount).map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n);
+  return { rows, resumedList, reasons, holdCount: holds.length, resumedCount: resumed.length, selfSignList };
+}
+function integrityPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Integrity</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:middle}
+  .num{text-align:right}
+  .muted{opacity:.6}
+  .flag{background:#3a2f10;color:#ffd60a;padding:1px 8px;border-radius:10px;font-size:.82em;white-space:nowrap}
+  .pb{display:inline-block;padding:4px 10px;border-radius:20px;background:#3a3a3c;color:#fff;text-decoration:none;margin:0 4px 6px 0;font-size:.9rem}
+  .pb.on{outline:2px solid #30d158}
+  @media print{ a.pb,.csv{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:960px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
+    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Integrity — admin only</h2>
+  <p class="muted" style="margin-top:-8px">Integrity-sensitive actions, derived from the audit log. <b>These flag; you judge.</b> Nothing here is auto-acted on and none of it ever reaches the floor. The manager shares the team bonus and holds the pause buttons, so his own integrity signals are surfaced here, above him — same spirit as the self-sign tag.</p>
+  <div class="lane" style="padding:10px 16px">
+    <span class="muted">Period:</span>
+    <a class="pb ${d.preset === "last7" ? "on" : ""}" href="/integrity?preset=last7">Last 7 days</a>
+    <a class="pb ${d.preset === "last30" ? "on" : ""}" href="/integrity?preset=last30">Last 30 days</a>
+    <a class="pb ${d.preset === "last90" ? "on" : ""}" href="/integrity?preset=last90">Last 90 days</a>
+    <a class="pb ${d.preset === "mtd" ? "on" : ""}" href="/integrity?preset=mtd">This month</a>
+    <div style="margin-top:6px;font-size:.9rem"><b>${esc(d.label)}</b> · showing <b>${esc(d.rangeText)}</b> <span class="muted">(Phoenix dates)</span></div>
+  </div>
+
+  <div class="lane">
+    <h3>Manager actions this period</h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">Down-for-today holds placed, clock corrections made, cabs signed off, and — flagged — self-signs (signed off a cab whose line they were clocked onto during the build).</p>
+    ${d.rows.length ? `<table><tr><th>Who</th><th>Role</th><th class="num">Holds</th><th class="num">Clock corrections</th><th class="num">Sign-offs</th><th class="num">Self-signs</th></tr>
+      ${d.rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.role)}</td><td class="num">${r.holds}</td><td class="num">${r.corrections}</td><td class="num">${r.signoffs}</td><td class="num">${r.selfSigns ? `<span class="flag">${r.selfSigns}</span>` : "0"}</td></tr>`).join("")}</table>`
+    : `<div class="muted">No integrity-sensitive actions in this period.</div>`}
+  </div>
+
+  <div class="lane">
+    <h3>Held then worked <span class="muted" style="font-weight:400;font-size:.85rem">(${d.resumedCount})</span></h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">A line was marked "down for today," then a clock-in resumed it the same day — the defensive-hold tell. Not proof of anything; a line genuinely can come back. Worth a glance when one name recurs.</p>
+    ${d.resumedList.length ? `<table><tr><th>Line</th><th>Held by</th><th>Resumed by (clocked in)</th><th>When</th></tr>
+      ${d.resumedList.map((r) => `<tr><td>${esc(r.line)}</td><td>${esc(r.heldBy)}</td><td>${esc(r.resumedBy)}</td><td class="muted">${esc(r.when)}</td></tr>`).join("")}</table>`
+    : `<div class="muted">No held-then-worked lines in this period.</div>`}
+  </div>
+
+  <div class="lane">
+    <h3>Self-signs <span class="muted" style="font-weight:400;font-size:.85rem">(${d.selfSignList.length})</span></h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">Sign-offs by someone who was clocked onto that cab's line during its build — the inspector and a builder were the same person.</p>
+    ${d.selfSignList.length ? `<table><tr><th>Order</th><th>Line</th><th>Signed off by</th><th>When</th></tr>
+      ${d.selfSignList.map((r) => `<tr><td><b>${esc(r.order)}</b></td><td>${esc(r.line)}</td><td>${esc(r.who)} <span class="flag">self-sign</span></td><td class="muted">${esc(r.when)}</td></tr>`).join("")}</table>`
+    : `<div class="muted">No self-signs in this period.</div>`}
+  </div>
+
+  <div class="lane">
+    <h3>Hold reasons <span class="muted" style="font-weight:400;font-size:.85rem">(${d.holdCount} total)</span></h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">The reason mix on down-for-today holds — a skew toward one reason is worth a look.</p>
+    ${d.reasons.length ? `<table><tr><th>Reason</th><th class="num">Count</th><th class="num">Share</th></tr>
+      ${d.reasons.map((r) => `<tr><td>${esc(r.reason)}</td><td class="num">${r.n}</td><td class="num muted">${d.holdCount ? Math.round(100 * r.n / d.holdCount) : 0}%</td></tr>`).join("")}</table>`
+    : `<div class="muted">No holds in this period.</div>`}
+  </div>
+
+  <p class="muted" style="font-size:.85rem;text-align:center">Deferred to a later pass (they need pace snapshots the app doesn't store yet): holds placed right at a green→amber turn, and per-person rates scored against a shop baseline. This view covers what the audit log can prove today.</p>
+</div></body></html>`;
 }
 
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
@@ -3984,6 +4117,23 @@ http.createServer(async (req, res) => {
         return res.end(reportCsv(which, data));
       }
       return send(200, "text/html; charset=utf-8", reportsPage(data, me.role === "admin"));
+    }
+
+    // Q84: MANAGER-INTEGRITY DIAGNOSTICS — ADMIN ONLY (file 25). The player-coach
+    // manager is inside the circle of temptation (he shares the bonus and holds
+    // the pause buttons), so his integrity signals surface to the ADMIN, above
+    // him — never to the floor, never auto-acted on. Read-only, derived from the
+    // append-only audit log; reuses the reports period picker.
+    if (url.pathname === "/integrity") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const period = reportPeriod(url.searchParams);
+      const data = await integrityData(period.startMs, period.endMs);
+      Object.assign(data, { preset: period.preset, from: period.from, to: period.to, qs: period.qs, label: period.label, rangeText: period.rangeText });
+      return send(200, "text/html; charset=utf-8", integrityPage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
