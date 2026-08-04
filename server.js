@@ -2071,7 +2071,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}) {
   </div>
 
   <div class="mp"><h3>Completed — last 7 days (${completed.length})</h3>
-  ${completed.length ? completed.map((c) => `<div class="row"><b>${esc(c.order)}</b> ${esc(c.family || "")}${c.cab ? ` <span class="muted">· Cab #${esc(c.cab)}</span>` : ""} <span class="muted">· ${esc(c.when)}</span></div>`).join("") : `<div class="muted">No sign-offs in the last 7 days.</div>`}
+  ${completed.length ? completed.map((c) => `<div class="row"><b>${esc(c.order)}</b> ${esc(c.family || "")}${c.cab ? ` <span class="muted">· Cab #${esc(c.cab)}</span>` : ""} <span class="muted">· ${esc(c.when)}</span>${c.by ? ` <span class="muted">· by ${esc(c.by)}</span>` : ""}${c.byAdmin ? ` <span style="background:#3a2f10;color:#ffd60a;padding:1px 6px;border-radius:10px;font-size:.78em">admin sign-off</span>` : ""}</div>`).join("") : `<div class="muted">No sign-offs in the last 7 days.</div>`}
   </div>
 
   <div class="mp"><h3>Who's out — upcoming (${out.length})</h3>
@@ -2620,10 +2620,11 @@ async function reportData(startMs, endMs) {
   const sinceMs = startMs;
   const winEnd = endMs;
   const lines = await db(`line?select=id,name&order=id`);
-  const emps = await db(`employee?select=id,first_name,last_name,active`);
+  const emps = await db(`employee?select=id,first_name,last_name,active,role`);
   const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
   // Sign-off + rework moments live in the append-only event log (spec §3).
-  const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
+  // Q86: actor_id on the sign-off event = WHO passed steel.
+  const compEv = await db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
   const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
   // Q85: sign-off escapes — a cab that came BACK after manager sign-off (a Body
   // Shop kickback or a customer return, opened as a fix job).
@@ -2634,7 +2635,14 @@ async function reportData(startMs, endMs) {
   const ivs = workIntervals(events, nowMs);
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
-  const doneAt = {}; for (const e of compEv) if (e.payload && e.payload.build_id) doneAt[e.payload.build_id] = new Date(e.at).getTime();
+  // Q86: WHO signed it off travels with the same last-wins rule — the actor plus
+  // the role captured at sign-off (by_role; falls back to the signer's CURRENT
+  // role for events logged before block 62) so an ADMIN sign-off (the manager
+  // was out, duties flowed up) can be tagged in the record.
+  const nameOf = {}, roleOf = {};
+  for (const p of emps) { nameOf[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim(); roleOf[p.id] = p.role; }
+  const doneAt = {}, signerOf = {};
+  for (const e of compEv) if (e.payload && e.payload.build_id) { doneAt[e.payload.build_id] = new Date(e.at).getTime(); signerOf[e.payload.build_id] = { id: e.actor_id, role: (e.payload && e.payload.by_role) || null }; }
   const finished = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && doneAt[b.id] <= winEnd && b.started_at);
   const live = builds.filter((b) => ["active", "rework", "awaiting_inspection"].includes(b.state));
   // Standard hours = the cab's own FROZEN task list (Q97); rework fix tasks
@@ -2652,9 +2660,12 @@ async function reportData(startMs, endMs) {
     const s = new Date(b.started_at).getTime(); const e = doneAt[b.id];
     const actual = ivs.filter((iv) => iv.line === b.line_id).reduce((sum, iv) => sum + overlapHrs(iv, s, e), 0);
     const std = stdOf[b.id] || 0;
+    const sg = signerOf[b.id] || {};
+    const byRole = sg.role || roleOf[sg.id] || null;   // captured-at-sign-off, else current
     return { order: b.order_number, cab: b.cab_number || "", part: b.part_number || "?", line: lineName[b.line_id] || "?",
       std, actual, varPct: std ? Math.round(((actual - std) / std) * 100) : null,
-      started: phxHM(b.started_at), completed: phxHM(new Date(e).toISOString()) };
+      started: phxHM(b.started_at), completed: phxHM(new Date(e).toISOString()),
+      by: nameOf[sg.id] || "—", byAdmin: byRole === "admin" };
   });
   // Product rollup — where the standards get honest over time (feeds Q96).
   const prodMap = {};
@@ -2796,9 +2807,9 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=cabs&${d.qs}">⬇ CSV</a>
     <h3>Signed-off cabs — the detail</h3>
-    ${d.cabs.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th></tr>
+    ${d.cabs.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Signed off</th><th>By</th></tr>
       ${d.cabs.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td>
-        <td class="num ${c.varPct === null ? "" : c.varPct > 25 ? "way" : c.varPct > 0 ? "over" : "under"}">${c.varPct === null ? "—" : (c.varPct > 0 ? "+" : "") + c.varPct + "%"}</td><td style="opacity:.7">${c.completed}</td></tr>`).join("")}</table>`
+        <td class="num ${c.varPct === null ? "" : c.varPct > 25 ? "way" : c.varPct > 0 ? "over" : "under"}">${c.varPct === null ? "—" : (c.varPct > 0 ? "+" : "") + c.varPct + "%"}</td><td style="opacity:.7">${c.completed}</td><td>${c.by}${c.byAdmin ? ` <span style="background:#3a2f10;color:#ffd60a;padding:1px 6px;border-radius:10px;font-size:.78em;white-space:nowrap">admin sign-off</span>` : ""}</td></tr>`).join("")}</table>`
     : `<div style="opacity:.6">Nothing in this period.</div>`}
   </div>
   <div class="lane">
@@ -2856,8 +2867,8 @@ function reportCsv(which, d) {
     return row(["Employee", "Date", "First in", "Last out", "Paid hours", "Shop-time hours", "Notes / flags"]) +
       d.timecards.map((t) => row([t.name, t.date, phxHM(new Date(t.firstIn).toISOString()),
         phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), t.flags])).join("");
-  return row(["Order #", "Cab #", "Product", "Line", "Standard hours", "Actual hours", "Variance %", "Started", "Signed off"]) +
-    d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed])).join("");
+  return row(["Order #", "Cab #", "Product", "Line", "Standard hours", "Actual hours", "Variance %", "Started", "Signed off", "Signed off by", "Admin sign-off"]) +
+    d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed, c.by, c.byAdmin ? "yes" : ""])).join("");
 }
 
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
@@ -3876,16 +3887,19 @@ http.createServer(async (req, res) => {
       // Completed in the last 7 days = the production_complete events (payload
       // carries order_number; join the build for family + cab #).
       const sinceISO = new Date(Date.now() - 7 * 86400000).toISOString();
-      const compEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&at=gte.${sinceISO}&order=at.desc&limit=100`);
+      // Q86: names + roles resolved once, used for both the sign-off "by" tag
+      // (who passed steel; ADMIN sign-offs flagged) and the who's-out list.
+      const emps = await db(`employee?select=id,first_name,last_name,role`);
+      const nameOf = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim()]));
+      const roleOf = Object.fromEntries(emps.map((e) => [e.id, e.role]));
+      const compEv = await db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&at=gte.${sinceISO}&order=at.desc&limit=100`);
       const compIds = compEv.map((e) => e.payload && e.payload.build_id).filter((x) => isUuid(x));
       const compBuilds = compIds.length ? await db(`build?select=id,part_number,cab_number&id=in.(${compIds.join(",")})`) : [];
       const bById = Object.fromEntries(compBuilds.map((b) => [b.id, b]));
-      const completed = compEv.map((e) => { const p = e.payload || {}, bb = bById[p.build_id] || {}; return { order: p.order_number || "?", family: familyOf[bb.part_number] || "", cab: bb.cab_number || "", when: phxHM(e.at) }; });
+      const completed = compEv.map((e) => { const p = e.payload || {}, bb = bById[p.build_id] || {}; const byRole = (p.by_role) || roleOf[e.actor_id] || null; return { order: p.order_number || "?", family: familyOf[bb.part_number] || "", cab: bb.cab_number || "", when: phxHM(e.at), by: nameOf[e.actor_id] || "", byAdmin: byRole === "admin" }; });
       // Who's out ahead = approved time off not yet ended.
       const today = phxDate(Date.now());
       const outRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${today}&order=start_date&limit=60`);
-      const emps = await db(`employee?select=id,first_name,last_name`);
-      const nameOf = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim()]));
       const fmtD = (d) => String(d).slice(5).replace("-", "/"); // MM/DD from YYYY-MM-DD
       const out = outRows.map((t) => ({ who: nameOf[t.employee_id] || "?", dates: t.start_date === t.end_date ? fmtD(t.start_date) : `${fmtD(t.start_date)}–${fmtD(t.end_date)}`, reason: t.reason || "" }));
       // Block 61: projected finish on the floor lines — shared helper, reusing
@@ -4148,7 +4162,7 @@ http.createServer(async (req, res) => {
       const patchC = { state: "production_complete" };
       if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
-      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix });
+      logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix, by_role: me.role });
       if (wasFix) logEvent("build.fixjob_closed", empId, { build_id, order_number: b.order_number, kind: b.fix_kind, reason: b.fix_reason, signed_off_at: claimed_at });
       // Q109: sign-off frees the line — warehouse can deliver the next
       // verified kit the moment this fires. Q106 sandbox applies.
