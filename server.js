@@ -1056,6 +1056,9 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
           <input type="file" id="ap-${t.id}" accept="image/*" capture="environment" multiple style="color:#8e8e93;margin-top:6px">
           <button class="back" style="color:#fff;background:#3a3a3c;border-radius:8px;margin-top:6px"
             onclick="saveAtt('${t.id}','${build.id}',this)">Save</button>
+          <div style="margin-top:6px"><button class="back" type="button" style="color:#fff;background:#3a3a3c;border-radius:8px"
+            onclick="phoneHandoff('${build.id}','${t.id}',this,'hoff-${t.id}')">📱 From a phone</button></div>
+          <div id="hoff-${t.id}" style="margin-top:8px"></div>
         </div>
       </div>`).join("")}`).join("")}
   ${tasks.every((t) => t.is_background || t.state === "complete") ? `
@@ -1170,13 +1173,15 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     }
   }
   // Finish gate submit (file 11 builder half): photos first, then the note.
-  async function phoneHandoff(buildId, taskId, btn){
+  async function phoneHandoff(buildId, taskId, btn, targetId){
+    targetId = targetId || "hoff";
+    const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "Getting a code...";
     try{
       const r = await fetch("/api/handoff/new", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ build_id: buildId, task_id: taskId }) });
       const o = await r.json();
       if(!o.ok) throw new Error(o.error || "Couldn't start the hand-off");
-      document.getElementById("hoff").innerHTML =
+      document.getElementById(targetId).innerHTML =
         '<div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;color:#111">' +
         '<div style="font-weight:700;font-size:.95rem;color:#111">Scan with a phone camera</div>' +
         '<div style="margin:10px auto 6px;max-width:260px;line-height:0">' + (o.qr || "") + '</div>' +
@@ -1185,7 +1190,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         '<div style="opacity:.55;font-size:.8rem;color:#111">Good for 20 minutes. Photos land on this cab — reload to see them.</div>' +
         '</div>';
       btn.textContent = "New code"; btn.disabled = false;
-    }catch(e){ document.getElementById("err").textContent = e.message; btn.disabled = false; btn.textContent = "📱 Send photos from a phone"; }
+    }catch(e){ document.getElementById("err").textContent = e.message; btn.disabled = false; btn.textContent = orig; }
   }
   async function finishCab(id, btn) {
     const files = document.getElementById("fphotos").files;
