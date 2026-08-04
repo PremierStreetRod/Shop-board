@@ -1,6 +1,14 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-04 — block 51: hand-off stage 2 = scannable QR on the finish screen (v51, no migration)
+- The tablet finish screen now shows a QR ("Scan with a phone camera") that opens /h?c=CODE in one scan; the /h address + 8-char code stay as the fallback below it. Photos still land on that one cab; 20-min TTL, single-cab guard, and the finish photo-count are all unchanged from v50.
+- QR built from scratch — the build sandbox has npm AND pip blocked (no jsQR/qrcode). Byte-mode encoder, EC level L, versions 1-5, auto-picking the smallest fitting version, rendered server-side as a plain inline SVG so it works under the enforcing CSP with no external library.
+- Verified against THREE independent decoders before shipping: OpenCV, zbar 0.23 (ctypes binding), and the qrcode-terminal npm library's own encoder as a reference matrix. Found + fixed 3 encoder bugs; the decisive one was a transposed format-info placement (bits ran along a row where the spec runs them down a column), caught by diffing against the reference. 28/28 varied codes/lengths decode on both zbar and cv2.
+- Deploy: server.js v51 = 305,545 units / hash 2459282991, commit 8bd5412. Applied to the editor via 3 programmatic edits (QR block insert + 2 small changes) gated on before/after hashes, then committed to main. /health green and stable across the deploy window.
+- The code-comment version header still reads (v50) — cosmetic only; bump next block. HONEST LIMIT: the on-screen QR renders only after a clocked-in tech mints a code (needs a real cab + clock-in), so the live end-to-end scan was not staged; the encoder + SVG are proven correct and the deployed bytes are byte-identical to the sandbox-verified v51.
+- NEXT: stage 3 = the per-task-step "send from a phone" button (mechanism already carries task_id -> kind='task'). Coyote mapping job preempts when the dev's first REAL post lands.
+
 ## 2026-08-04 — build block 50: Q86 PHONE PHOTO HAND-OFF, stage 1 (server.js v50, no migration)
 
 - Owner-rep's edge case: a worker who won't sign in on their own phone works a cab on the shared tablet, but taking photos on the tablet is awkward. Chosen (AskUserQuestion): the QR/link hand-off, because devices are MIXED and the tablet is NOT Apple (AirDrop unavailable). Clarified: completion photos REQUIRED at finish (v49); photos AND notes OPTIONAL at any task step / finish — notes already typeable on-device; the hand-off is about PHOTOS.
