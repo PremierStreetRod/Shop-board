@@ -208,6 +208,310 @@ function getHandoff(code) {
   return h;
 }
 
+// ---- QR encoder (byte mode, EC level L, versions 1-5) + SVG renderer.
+// Self-contained, zero-dependency. Verified against zbar + OpenCV decoders.
+const qrSvg = (function () {
+// Self-contained byte-mode QR encoder. Zero dependencies.
+// Scope kept deliberately small: EC level L, single EC block, versions 1..5.
+// That range covers our ~51-char handoff URL (lands at v3-L, capacity 55 data
+// codewords) while avoiding multi-block interleaving (>=6-L) and version-info
+// modules (>=7). Auto-picks the smallest fitting version.
+
+// ---- GF(256) tables (primitive 0x11D) ----
+const EXP = new Array(512), LOG = new Array(256);
+(function () {
+  let x = 1;
+  for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11D; }
+  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+})();
+function gmul(a, b) { if (a === 0 || b === 0) return 0; return EXP[LOG[a] + LOG[b]]; }
+
+function rsGenPoly(n) {
+  let poly = [1];
+  for (let i = 0; i < n; i++) {
+    const next = new Array(poly.length + 1).fill(0);
+    for (let j = 0; j < poly.length; j++) {
+      next[j] ^= gmul(poly[j], 1);
+      next[j + 1] ^= gmul(poly[j], EXP[i]);
+    }
+    poly = next;
+  }
+  return poly;
+}
+function rsEncode(data, ecLen) {
+  const gen = rsGenPoly(ecLen);
+  const res = new Array(ecLen).fill(0);
+  for (let i = 0; i < data.length; i++) {
+    const factor = data[i] ^ res[0];
+    res.shift(); res.push(0);
+    // gen is monic (gen[0]===1); skip the leading term, use gen[j+1]
+    if (factor !== 0) for (let j = 0; j < ecLen; j++) res[j] ^= gmul(gen[j + 1], factor);
+  }
+  return res;
+}
+
+// ---- Per-version (level L, single block) capacity table ----
+// [version]: {size, dataCW, ecCW, align:[positions]}
+const VER = {
+  1: { dataCW: 19, ecCW: 7,  align: [] },
+  2: { dataCW: 34, ecCW: 10, align: [6, 18] },
+  3: { dataCW: 55, ecCW: 15, align: [6, 22] },
+  4: { dataCW: 80, ecCW: 20, align: [6, 26] },
+  5: { dataCW: 108, ecCW: 26, align: [6, 30] },
+};
+
+function pickVersion(byteLen) {
+  // byte mode: 4 (mode) + 8 (count, v1..9) + byteLen*8 bits
+  const bitsNeeded = 4 + 8 + byteLen * 8;
+  for (let v = 1; v <= 5; v++) {
+    if (VER[v].dataCW * 8 >= bitsNeeded) return v;
+  }
+  throw new Error("payload too large for v1..5-L: " + byteLen + " bytes");
+}
+
+function buildDataCodewords(bytes, version) {
+  const cfg = VER[version];
+  const bits = [];
+  const push = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >> i) & 1); };
+  push(0b0100, 4);           // byte mode
+  push(bytes.length, 8);     // char count (8 bits for v1..9)
+  for (const b of bytes) push(b, 8);
+  // terminator
+  const cap = cfg.dataCW * 8;
+  for (let i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+  // pad to byte boundary
+  while (bits.length % 8 !== 0) bits.push(0);
+  // to codewords
+  const cw = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let b = 0; for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
+    cw.push(b);
+  }
+  // pad codewords 0xEC / 0x11 alternating
+  const pads = [0xEC, 0x11];
+  let p = 0;
+  while (cw.length < cfg.dataCW) { cw.push(pads[p & 1]); p++; }
+  return cw;
+}
+
+// ---- Matrix construction ----
+function makeMatrix(version, allCodewords) {
+  const size = 17 + version * 4;
+  const m = Array.from({ length: size }, () => new Array(size).fill(null)); // null=unset
+  const reserved = Array.from({ length: size }, () => new Array(size).fill(false));
+
+  function place(r, c, val, isFn) { m[r][c] = val ? 1 : 0; if (isFn) reserved[r][c] = true; }
+
+  // finder pattern at (r,c) top-left corner
+  function finder(tr, tc) {
+    for (let r = -1; r <= 7; r++) for (let c = -1; c <= 7; c++) {
+      const rr = tr + r, cc = tc + c;
+      if (rr < 0 || cc < 0 || rr >= size || cc >= size) continue;
+      let v = 0;
+      if (r >= 0 && r <= 6 && c >= 0 && c <= 6) {
+        const inRing = (r === 0 || r === 6 || c === 0 || c === 6);
+        const inCore = (r >= 2 && r <= 4 && c >= 2 && c <= 4);
+        v = (inRing || inCore) ? 1 : 0;
+      } else v = 0; // separator
+      place(rr, cc, v, true);
+    }
+  }
+  finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+
+  // timing patterns
+  for (let i = 8; i < size - 8; i++) {
+    if (m[6][i] === null) place(6, i, i % 2 === 0 ? 1 : 0, true);
+    if (m[i][6] === null) place(i, 6, i % 2 === 0 ? 1 : 0, true);
+  }
+
+  // alignment patterns
+  const ap = VER[version].align;
+  const centers = [];
+  for (const r of ap) for (const c of ap) centers.push([r, c]);
+  for (const [cr, cc] of centers) {
+    // skip if overlaps a finder region
+    const overlapFinder =
+      (cr <= 8 && cc <= 8) ||
+      (cr <= 8 && cc >= size - 9) ||
+      (cr >= size - 9 && cc <= 8);
+    if (overlapFinder) continue;
+    for (let r = -2; r <= 2; r++) for (let c = -2; c <= 2; c++) {
+      const ring = Math.max(Math.abs(r), Math.abs(c));
+      const v = (ring === 1) ? 0 : 1; // center=1, ring1=0, ring2=1
+      place(cr + r, cc + c, v, true);
+    }
+  }
+
+  // dark module
+  place(size - 8, 8, 1, true);
+
+  // reserve format info areas (fill later)
+  for (let i = 0; i < 9; i++) {
+    if (m[8][i] === null) reserved[8][i] = true;
+    if (m[i][8] === null) reserved[i][8] = true;
+  }
+  // Second format copy (matches placeFormat): row 8 holds 8 modules
+  // (cols size-1..size-8), col 8 holds 7 (rows size-7..size-1). The
+  // dark module (size-8,8) is reserved separately above.
+  for (let i = 0; i < 8; i++) reserved[8][size - 1 - i] = true;  // row 8 right: 8
+  for (let j = 0; j < 7; j++) reserved[size - 7 + j][8] = true;  // col 8 bottom: 7
+
+  // ---- place data bits, zig-zag ----
+  const bitstream = [];
+  for (const cw of allCodewords) for (let b = 7; b >= 0; b--) bitstream.push((cw >> b) & 1);
+  let bi = 0;
+  let upward = true;
+  for (let col = size - 1; col > 0; col -= 2) {
+    if (col === 6) col--; // skip timing column
+    for (let i = 0; i < size; i++) {
+      const row = upward ? size - 1 - i : i;
+      for (let dc = 0; dc < 2; dc++) {
+        const c = col - dc;
+        if (m[row][c] === null && !reserved[row][c]) {
+          m[row][c] = bi < bitstream.length ? bitstream[bi] : 0;
+          bi++;
+        }
+      }
+    }
+    upward = !upward;
+  }
+
+  return { m, size, reserved };
+}
+
+// ---- masking ----
+const MASKS = [
+  (r, c) => (r + c) % 2 === 0,
+  (r, c) => r % 2 === 0,
+  (r, c) => c % 3 === 0,
+  (r, c) => (r + c) % 3 === 0,
+  (r, c) => (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0,
+  (r, c) => ((r * c) % 2) + ((r * c) % 3) === 0,
+  (r, c) => (((r * c) % 2) + ((r * c) % 3)) % 2 === 0,
+  (r, c) => (((r + c) % 2) + ((r * c) % 3)) % 2 === 0,
+];
+
+function applyMask(m, size, reserved, maskIdx) {
+  const out = m.map(row => row.slice());
+  const fn = MASKS[maskIdx];
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+    if (!reserved[r][c] && m[r][c] !== null) {
+      if (fn(r, c)) out[r][c] ^= 1;
+    }
+  }
+  return out;
+}
+
+// format info: EC level L = bits 01, mask 3 bits. BCH(15,5) + mask 0x5412
+function formatBits(maskIdx) {
+  const ecBits = 0b01; // L
+  let data = (ecBits << 3) | maskIdx; // 5 bits
+  let rem = data << 10;
+  const g = 0b10100110111;
+  for (let i = 14; i >= 10; i--) if ((rem >> i) & 1) rem ^= g << (i - 10);
+  let bits = ((data << 10) | (rem & 0x3FF)) ^ 0b101010000010010;
+  return bits & 0x7FFF; // 15 bits
+}
+
+function placeFormat(m, size, maskIdx) {
+  const f = formatBits(maskIdx);
+  const bit = i => (f >> i) & 1;
+  // Mirrors the reference setupTypeInfo exactly.
+  // Vertical (col 8): bits 0-5 in rows 0-5, bit6 row7, bit7 row8, bits 8-14 rows size-7..size-1
+  for (let v = 0; v <= 5; v++) m[v][8] = bit(v);
+  m[7][8] = bit(6); m[8][8] = bit(7);
+  for (let v = 8; v <= 14; v++) m[size - 15 + v][8] = bit(v);
+  // Horizontal (row 8): bits 0-7 cols size-1..size-8, bit8 col7, bits 9-14 cols 5..0
+  for (let h = 0; h <= 7; h++) m[8][size - 1 - h] = bit(h);
+  m[8][7] = bit(8);
+  for (let h = 9; h <= 14; h++) m[8][15 - h - 1] = bit(h);
+  m[size - 8][8] = 1; // dark module stays
+}
+
+// penalty scoring for mask selection
+function penalty(m, size) {
+  let p = 0;
+  // rule 1: runs of 5+
+  for (let r = 0; r < size; r++) {
+    let run = 1;
+    for (let c = 1; c < size; c++) {
+      if (m[r][c] === m[r][c - 1]) { run++; if (run === 5) p += 3; else if (run > 5) p += 1; }
+      else run = 1;
+    }
+  }
+  for (let c = 0; c < size; c++) {
+    let run = 1;
+    for (let r = 1; r < size; r++) {
+      if (m[r][c] === m[r - 1][c]) { run++; if (run === 5) p += 3; else if (run > 5) p += 1; }
+      else run = 1;
+    }
+  }
+  // rule 2: 2x2 blocks
+  for (let r = 0; r < size - 1; r++) for (let c = 0; c < size - 1; c++) {
+    const v = m[r][c];
+    if (v === m[r][c + 1] && v === m[r + 1][c] && v === m[r + 1][c + 1]) p += 3;
+  }
+  // rule 3: finder-like patterns 1011101 with 4 light
+  const pat1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0];
+  const pat2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
+  const check = (arr) => {
+    for (let i = 0; i + 11 <= arr.length; i++) {
+      let m1 = true, m2 = true;
+      for (let k = 0; k < 11; k++) { if (arr[i + k] !== pat1[k]) m1 = false; if (arr[i + k] !== pat2[k]) m2 = false; }
+      if (m1 || m2) p += 40;
+    }
+  };
+  for (let r = 0; r < size; r++) check(m[r]);
+  for (let c = 0; c < size; c++) { const col = []; for (let r = 0; r < size; r++) col.push(m[r][c]); check(col); }
+  // rule 4: dark ratio
+  let dark = 0; for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) dark += m[r][c];
+  const ratio = dark / (size * size) * 100;
+  p += Math.floor(Math.abs(ratio - 50) / 5) * 10;
+  return p;
+}
+
+function encode(text) {
+  const bytes = Array.from(Buffer.from(text, "utf8"));
+  const version = pickVersion(bytes.length);
+  const cfg = VER[version];
+  const dataCW = buildDataCodewords(bytes, version);
+  const ecCW = rsEncode(dataCW, cfg.ecCW);
+  const all = dataCW.concat(ecCW);
+  const { m, size, reserved } = makeMatrix(version, all);
+
+  // try all masks, pick lowest penalty
+  let best = null, bestP = Infinity, bestMask = 0;
+  for (let mk = 0; mk < 8; mk++) {
+    const masked = applyMask(m, size, reserved, mk);
+    placeFormat(masked, size, mk);
+    const p = penalty(masked, size);
+    if (p < bestP) { bestP = p; best = masked; bestMask = mk; }
+  }
+  return { matrix: best, size, version, mask: bestMask, penalty: bestP };
+}
+// SVG renderer (server-side, CSP-safe: no scripts). Dark modules as one <path>.
+function qrSvg(text, opts) {
+  opts = opts || {};
+  const mod = opts.module || 8;
+  const quiet = opts.quiet == null ? 4 : opts.quiet;
+  const { matrix, size } = encode(text);
+  const dim = (size + quiet * 2) * mod;
+  let d = "";
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+    if (matrix[r][c]) {
+      const x = (c + quiet) * mod, y = (r + quiet) * mod;
+      d += "M" + x + " " + y + "h" + mod + "v" + mod + "h-" + mod + "z";
+    }
+  }
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="' + dim + '" height="' + dim +
+    '" viewBox="0 0 ' + dim + ' ' + dim + '" shape-rendering="crispEdges"' +
+    ' style="width:100%;height:auto;display:block">' +
+    '<rect width="' + dim + '" height="' + dim + '" fill="#fff"/>' +
+    '<path d="' + d + '" fill="#000"/></svg>';
+}
+return qrSvg;
+})();
+
 // Q52 SHOP-WI-FI GATE for clock actions: if SHOP_EGRESS_IP is set on Railway,
 // clock in/out only works from that public IP (the shop's connection).
 // UNSET during the build phase = gate open, so testing works from anywhere.
@@ -873,12 +1177,12 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       const o = await r.json();
       if(!o.ok) throw new Error(o.error || "Couldn't start the hand-off");
       document.getElementById("hoff").innerHTML =
-        '<div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">' +
-        '<div style="opacity:.75;font-size:.9rem">On any phone, open</div>' +
-        '<div style="font-size:1.1rem;margin:4px 0"><b>' + location.host + '/h</b></div>' +
-        '<div style="opacity:.75;font-size:.9rem">and enter code</div>' +
-        '<div style="font-size:2rem;letter-spacing:4px;font-weight:800;margin:4px 0">' + o.code + '</div>' +
-        '<div style="opacity:.6;font-size:.8rem">Good for 20 minutes. Photos land on this cab - reload to see them.</div>' +
+        '<div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;color:#111">' +
+        '<div style="font-weight:700;font-size:.95rem;color:#111">Scan with a phone camera</div>' +
+        '<div style="margin:10px auto 6px;max-width:260px;line-height:0">' + (o.qr || "") + '</div>' +
+        '<div style="opacity:.75;font-size:.85rem;color:#111">or open <b>' + location.host + '/h</b> and enter</div>' +
+        '<div style="font-size:1.8rem;letter-spacing:4px;font-weight:800;margin:4px 0;color:#111">' + o.code + '</div>' +
+        '<div style="opacity:.55;font-size:.8rem;color:#111">Good for 20 minutes. Photos land on this cab — reload to see them.</div>' +
         '</div>';
       btn.textContent = "New code"; btn.disabled = false;
     }catch(e){ document.getElementById("err").textContent = e.message; btn.disabled = false; btn.textContent = "📱 Send photos from a phone"; }
@@ -3872,7 +4176,9 @@ self.addEventListener("notificationclick", (e) => {
       if (!b) return json(404, { ok: false, error: "Cab not found" });
       const code = newHandoff(build_id, task_id || null, empId);
       logEvent("handoff.opened", empId, { build_id, task_id: task_id || null });
-      return json(200, { ok: true, code, path: "/h?c=" + code });
+      const origin = "https://" + (req.headers.host || "shopboard.premierstreetrod.com");
+      const qrUrl = origin + "/h?c=" + code;
+      return json(200, { ok: true, code, path: "/h?c=" + code, url: qrUrl, qr: qrSvg(qrUrl) });
     }
 
     // Q86 hand-off: the NO-LOGIN phone page (validates the code itself).
