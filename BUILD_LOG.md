@@ -1,6 +1,18 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-04 — build block 48: Q123 input-validation sweep pt 2 — sweep COMPLETE (server.js v48, no migration)
+
+- Owner-rep "continue with part 2." Completed the sweep across the MANAGER/ADMIN-gated write endpoints + the reports template param.
+- AUDIT: line/down + line/closed already had integer guards (block-30/Q115); push/subscribe already encodeURIComponent-s its endpoint before the dedup DELETE (safe). Gap: build rework/complete/start (build_id), afterhours/confirm (session_id), admin/employee (id), admin/cab-number (build_id), and /admin tplId query param (template_id=eq.${tplId}).
+- WHAT (v48): 7 guards — isUuid for build_id/session_id/employee-id, and a graceful "tplId && isUuid(tplId)" on the admin page (invalid tplId → no steps, not a bad query). Clean 400 on bad input. No migration.
+- CODE: v48 = 279,236 / 3661352623 (8 pairs incl. header; forward AND reversal proven — new→old reproduced v47 exactly at 278,079 / 1534023461). Editor hash gate matched v48. Commit SHA fc09c08c6a, raw-verified byte-exact.
+- VERIFY (LIVE E2E, Daniel's session active; all probes 400/404, ZERO writes): same isUuid logic unit-proven in v47. Deploy: /health 200; POST /api/afterhours/confirm with injection payload session_id "x&or=(id.not.is.null)" → 400 (blocked before Postgres); valid-format nonexistent uuid → 404 "Session not found" (guard PASSED, no mutation).
+- SWEEP COMPLETE (pt 1 v47 tech/warehouse + pt 2 v48 manager/admin): every user-supplied id at a write endpoint is validated (isUuid/integer) before the DB — PostgREST filter-injection closed app-wide.
+- Q123 status: v42 session-revocation + v43 headers + v44 login rate-limit + v45/46 CSP enforcing + v47/48 input-validation sweep DONE. Remaining is all cutover/feature-complete: Q52 Wi-Fi/IP gate go-live decision (set SHOP_EGRESS_IP), SESSION_SECRET rotation at cutover, + a full break-pass when feature-complete.
+- (Housekeeping: this entry was committed 2026-08-04 after a brief Chrome-extension disconnect delayed it; the v48 code itself shipped + was verified live the prior session.)
+- NEXT: Coyote preempts when the dev's first REAL post lands; else Q86 (product settings + hard photo gate) or Q91 (smart alerts).
+
 ## 2026-08-03 — build block 47: Q123 input-validation sweep pt 1 (server.js v47, no migration)
 
 - Owner-rep "keep going" → continued Q123 with the input-validation sweep. THE REAL RISK (not just ugly 500s): user-supplied ids are interpolated straight into PostgREST query strings (?id=eq.${id}), so an unvalidated id like "<uuid>&or=(id.not.is.null)" could inject an extra filter and WIDEN a PATCH to every row. block-30 already guarded punch/correct + timeoff + picklist; the gap was the many build_id sites, task_id, line_id, approved_by, session_id, admin id, tplId.
