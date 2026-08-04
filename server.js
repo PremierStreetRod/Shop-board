@@ -1646,6 +1646,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
     ${isAdmin || showReports ? `<a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>` : ""}
     <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
+    <a href="/coverage" style="color:#8e8e93;margin-right:18px">Coverage</a>
     <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -1973,6 +1974,7 @@ function meetingPage(now, board, awaiting, completed, out) {
   <div class="logo">SHOP <span>BOARD</span></div>
   <p style="text-align:center;margin:-4px 0 14px">
     <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
+    <a href="/coverage" style="color:#8e8e93;margin-right:18px">Coverage</a>
     <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -2003,6 +2005,61 @@ function meetingPage(now, board, awaiting, completed, out) {
   <div class="mp"><h3>Who's out — upcoming (${out.length})</h3>
   ${out.length ? out.map((o) => `<div class="row"><b>${esc(o.who)}</b> <span class="muted">· ${esc(o.dates)}${o.reason ? ` · ${esc(o.reason)}` : ""}</span></div>`).join("") : `<div class="muted">Nobody scheduled out.</div>`}
   </div>
+</div></body></html>`;
+}
+
+// Q92 pt 2: THE COVERAGE CALENDAR. A days-ahead, at-a-glance read of who's
+// out (approved time off) laid against the shop calendar, so a manager sees a
+// thin day BEFORE it arrives instead of discovering it at 7am. Read-only,
+// reuses the shop-calendar work-day rule + the Q92 pt-1 time-off data. `days`
+// is pre-assembled by the route; this is a pure render.
+function coveragePage(now, days, builderCount) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Coverage</title>${style}
+<style>
+  .mp{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 16px;margin-bottom:14px}
+  .crow{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .crow:last-child{border-bottom:none}
+  .cwhen{min-width:96px;font-weight:600}
+  .cwhen .sub{display:block;font-weight:400;opacity:.55;font-size:.85em}
+  .cmid{flex:1;padding-top:1px}
+  .muted{opacity:.6}
+  .today{background:rgba(200,16,46,.10);border-radius:10px;margin:0 -8px;padding-left:8px;padding-right:8px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .g{background:#30d158}.a{background:#ffd60a}.r{background:#ff453a}.n{background:#6b6b70}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.82em;background:rgba(255,255,255,.06)}
+  @media print{ a{display:none} .mp{break-inside:avoid} }
+</style></head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 14px">
+    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
+    <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
+    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Coverage — who's out, days ahead</h2>
+  <p class="muted" style="margin-top:-8px;text-align:center">The next ${days.length} days at a glance — approved time off against the shop calendar.${builderCount ? ` ${builderCount} builder${builderCount === 1 ? "" : "s"} on the roster.` : ""} As of ${esc(now)} (Phoenix).</p>
+  <div class="mp">
+  ${days.map((d) => {
+    const cls = d.closed ? "n" : (!builderCount ? "g" : (d.present <= 0 || d.thin ? "r" : d.buildersOut ? "a" : "g"));
+    let mid;
+    if (d.closed) mid = `<span class="muted">Closed${d.closedReason ? ` — ${esc(d.closedReason)}` : ""}</span>`;
+    else {
+      const cover = builderCount ? `<span class="pill">${d.present} of ${builderCount} builder${builderCount === 1 ? "" : "s"} in</span>` : `<span class="muted">No builders on the roster yet</span>`;
+      const names = d.out.length ? ` <span class="muted">· out: ${d.out.map((o) => esc(o.who) + (o.reason ? ` (${esc(o.reason)})` : "")).join(", ")}</span>` : (builderCount ? ` <span class="muted">· full crew in</span>` : "");
+      mid = cover + names;
+    }
+    return `<div class="crow${d.isToday ? " today" : ""}">
+      <div class="cwhen"><span class="dot ${cls}"></span>${esc(d.dow)}<span class="sub">${esc(d.label)}${d.isToday ? " · today" : ""}</span></div>
+      <div class="cmid">${mid}</div>
+    </div>`;
+  }).join("")}
+  </div>
+  <p class="muted" style="font-size:.85em;text-align:center"><span class="dot g"></span>full crew &nbsp; <span class="dot a"></span>someone out &nbsp; <span class="dot r"></span>thin coverage &nbsp; <span class="dot n"></span>closed. &nbsp; Time off is managed in the Manager cockpit; closed days in the Admin shop calendar.</p>
 </div></body></html>`;
 }
 
@@ -3581,6 +3638,47 @@ http.createServer(async (req, res) => {
       const fmtD = (d) => String(d).slice(5).replace("-", "/"); // MM/DD from YYYY-MM-DD
       const out = outRows.map((t) => ({ who: nameOf[t.employee_id] || "?", dates: t.start_date === t.end_date ? fmtD(t.start_date) : `${fmtD(t.start_date)}–${fmtD(t.end_date)}`, reason: t.reason || "" }));
       return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out));
+    }
+
+    // Q92 pt 2: the COVERAGE CALENDAR — the next 14 days of who's out, laid
+    // against the shop calendar, so a manager sees a thin day coming. Same
+    // manager/admin gate as /meeting; read-only, nothing goes out.
+    if (url.pathname === "/coverage") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin")) return send(403, "text/plain", "Manager or admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const N = 14;
+      const phxMid = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+      const dates = [];
+      for (let i = 0; i < N; i++) dates.push(phxDate(phxMid + i * 86400000));
+      const today = dates[0], lastDate = dates[N - 1];
+      // Shop-calendar overrides (holidays / worked Saturdays) + their reasons.
+      const calRows = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&cal_date=lte.${lastDate}`).catch(() => []);
+      const calOv = {}, calReason = {};
+      for (const r of calRows) { const d = String(r.cal_date).slice(0, 10); calOv[d] = r.is_open === true; calReason[d] = r.reason || ""; }
+      // Approved time off overlapping the window.
+      const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${today}&start_date=lte.${lastDate}&order=start_date`).catch(() => []);
+      const emps = await db(`employee?select=id,first_name,last_name,role&active=is.true`);
+      const nameOf = {}, roleOf = {};
+      for (const e of emps) { nameOf[e.id] = `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim(); roleOf[e.id] = e.role; }
+      const builderCount = emps.filter((e) => e.role === "production").length;
+      const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const days = dates.map((d) => {
+        const dow = new Date(d + "T12:00:00Z").getUTCDay();
+        const open = d in calOv ? calOv[d] : (dow >= 1 && dow <= 5);
+        const outAll = offRows.filter((t) => t.start_date <= d && t.end_date >= d)
+          .map((t) => ({ who: nameOf[t.employee_id] || "?", reason: t.reason || "", role: roleOf[t.employee_id] || "" }));
+        const buildersOut = outAll.filter((o) => o.role === "production").length;
+        const present = Math.max(0, builderCount - buildersOut);
+        const thin = builderCount > 0 && present > 0 && present < Math.ceil(builderCount / 2);
+        return { date: d, dow: WD[dow], label: MON[Number(d.slice(5, 7)) - 1] + " " + Number(d.slice(8, 10)),
+          closed: !open, closedReason: (d in calOv && !calOv[d]) ? (calReason[d] || "Holiday") : (!open ? "Weekend" : ""),
+          out: outAll, buildersOut, present, thin, isToday: d === today };
+      });
+      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
