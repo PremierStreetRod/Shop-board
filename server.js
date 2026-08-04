@@ -1662,7 +1662,7 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -1839,7 +1839,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
         </div>`).join("")}
       ${r.active ? `
-        <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active</div>
+        <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active${proj[r.active.order_number] ? ` · ${projPhrase(proj[r.active.order_number])}` : ""}</div>
         <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
       : `<div style="opacity:.6">No active cab</div>
         ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
@@ -2025,7 +2025,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
 // entry: the floor right now, cabs finishing (awaiting sign-off), sign-offs in
 // the last 7 days, and who's out ahead. Prints cleanly. "The button is the
 // feature" (owner-rep) — an optional Monday auto-push can ride the scheduler later.
-function meetingPage(now, board, awaiting, completed, out) {
+function meetingPage(now, board, awaiting, completed, out, proj = {}) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2059,7 +2059,8 @@ function meetingPage(now, board, awaiting, completed, out) {
     if (l.closed) line = `<span class="muted">Closed</span>`;
     else if (l.down) line = `<span class="muted">Down — ${esc(l.down.reason || "")}</span>`;
     else if (!l.cab) line = `<span class="muted">Idle${l.ondeck ? ` — on deck: ${esc(l.ondeck.order)} (${esc(l.ondeck.family || "")})` : ""}</span>`;
-    else line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}`;
+    else { const pp = proj[l.cab.order];
+      line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}${pp ? ` · ${projPhrase(pp)}` : ""}`; }
     const techs = (l.techs && l.techs.length) ? ` <span class="muted">· ${l.techs.map(esc).join(", ")}</span>` : "";
     return `<div class="row"><span class="dot ${dot}"></span><b>${esc(l.name)}</b> — ${line}${techs}</div>`;
   }).join("") : `<div class="muted">No lines to show.</div>`}
@@ -2097,6 +2098,74 @@ function projFinish(days, remaining) {
     if (seen === remaining) return { finish: d.date, remaining0: false, lostDays: lost, atRiskDays: atRisk, ranOut: false };
   }
   return { finish: null, remaining0: false, lostDays: lost, atRiskDays: atRisk, ranOut: true };
+}
+
+// Block 61 (Q92 pt 2): the finish projection was born on the Coverage page but
+// belongs everywhere a manager looks at the floor. This SHARED async helper is
+// now the single source of truth — given the live board it returns each
+// in-progress cab's projection (coverage-page shape) AND a byOrder map keyed by
+// order number, so /coverage, the Meeting Pack floor, and the cockpit all read
+// IDENTICALLY. It does its own light reads (shop calendar, approved time off,
+// per-line crew) and uses projFinish for the math. Each horizon day object
+// carries `date` (the v58 bug: a missing date made projFinish return undefined).
+async function cabProjections(board) {
+  const HORIZON = 180;
+  const phxMid = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+  const today = phxDate(phxMid);
+  const horizonEnd = phxDate(phxMid + HORIZON * 86400000);
+  const calRows = await db(`shop_calendar?select=cal_date,is_open&cal_date=gte.${today}&cal_date=lte.${horizonEnd}`).catch(() => []);
+  const calOv = {};
+  for (const r of calRows) calOv[String(r.cal_date).slice(0, 10)] = r.is_open === true;
+  const isOpenDay = (d) => (d in calOv ? calOv[d] : (() => { const dw = new Date(d + "T12:00:00Z").getUTCDay(); return dw >= 1 && dw <= 5; })());
+  const offRows = await db(`time_off_request?select=employee_id,start_date,end_date&status=eq.approved&end_date=gte.${today}&start_date=lte.${horizonEnd}&order=start_date`).catch(() => []);
+  const emps = await db(`employee?select=id,role,lines&active=is.true`);
+  const crewOf = {};   // line id -> [builder ids assigned to it]
+  for (const e of emps) if (e.role === "production" && Array.isArray(e.lines)) for (const ln of e.lines) (crewOf[ln] = crewOf[ln] || []).push(e.id);
+  const offOn = (id, d) => offRows.some((t) => t.employee_id === id && t.start_date <= d && t.end_date >= d);
+  const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const fmtFin = (ds) => ds ? WD[new Date(ds + "T12:00:00Z").getUTCDay()] + " " + MON[Number(ds.slice(5, 7)) - 1] + " " + Number(ds.slice(8, 10)) : null;
+  const hdates = [];
+  for (let i = 1; i <= HORIZON; i++) hdates.push(phxDate(phxMid + i * 86400000)); // tomorrow onward
+  const cabs = [], byOrder = {};
+  if (board && Array.isArray(board.lines)) {
+    for (const l of board.lines) {
+      const c = l.cab;
+      if (!c || !c.total_days || Number(c.total_days) <= 0) continue;   // active/rework only (awaiting/fix have 0)
+      const remaining = Math.max(0, Number(c.total_days) - Number(c.day || 0));
+      const crew = crewOf[l.id] || [];
+      const dayArr = hdates.map((d) => {
+        const open = isOpenDay(d);
+        let allOut = false, someOut = false;
+        if (open && crew.length) {
+          const outN = crew.filter((id) => offOn(id, d)).length;
+          allOut = outN > 0 && outN === crew.length;
+          someOut = outN > 0 && outN < crew.length;
+        }
+        return { date: d, open, allOut, someOut };
+      });
+      const pf = projFinish(dayArr, remaining);
+      const rec = { order: c.order, family: c.family || "", line: l.name, noStd: false,
+        remaining0: pf.remaining0, ranOut: pf.ranOut, finish: fmtFin(pf.finish), slip: pf.lostDays, atRisk: pf.atRiskDays };
+      cabs.push(rec);
+      byOrder[c.order] = rec;
+    }
+  }
+  return { cabs, byOrder };
+}
+
+// Block 61: a compact projected-finish phrase for an in-progress cab, reused on
+// the Meeting Pack floor + the manager cockpit (same wording as the coverage
+// page). Takes a byOrder record from cabProjections(); returns "" when there's
+// nothing meaningful to show. All values are server-generated (formatted date +
+// integers), so the fragment is safe to inject un-escaped.
+function projPhrase(p) {
+  if (!p || p.noStd) return "";
+  if (p.remaining0) return `<span style="opacity:.6">wrapping up</span>`;
+  if (!p.finish) return `<span style="opacity:.6">finish beyond the horizon</span>`;
+  const base = `<span style="opacity:.75">finishes ${p.finish}</span>`;
+  if (p.slip > 0) return base + ` <span style="color:#ff9f0a">· pushed ${p.slip} day${p.slip === 1 ? "" : "s"} by time off</span>`;
+  if (p.atRisk > 0) return base + ` <span style="opacity:.55">· ${p.atRisk} at-risk day${p.atRisk === 1 ? "" : "s"} ahead</span>`;
+  return base;
 }
 
 // Q92 pt 2: THE COVERAGE CALENDAR. A days-ahead, at-a-glance read of who's
@@ -3780,7 +3849,11 @@ http.createServer(async (req, res) => {
         open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note })),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff, fixjob));
+      // Block 61: projected finish per in-progress cab, shown on each active
+      // line card. Same shared helper as /coverage + /meeting (one board read).
+      const mgrBoard = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
+      const { byOrder: mgrProj } = await cabProjections(mgrBoard);
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff, fixjob, mgrProj));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -3815,7 +3888,10 @@ http.createServer(async (req, res) => {
       const nameOf = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim()]));
       const fmtD = (d) => String(d).slice(5).replace("-", "/"); // MM/DD from YYYY-MM-DD
       const out = outRows.map((t) => ({ who: nameOf[t.employee_id] || "?", dates: t.start_date === t.end_date ? fmtD(t.start_date) : `${fmtD(t.start_date)}–${fmtD(t.end_date)}`, reason: t.reason || "" }));
-      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out));
+      // Block 61: projected finish on the floor lines — shared helper, reusing
+      // the board we already fetched above (no extra board read).
+      const { byOrder: mtProj } = await cabProjections(board);
+      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out, mtProj));
     }
 
     // Q92 pt 2: the COVERAGE CALENDAR — the next 14 days of who's out, laid
@@ -3859,37 +3935,10 @@ http.createServer(async (req, res) => {
           closed: !open, closedReason: (d in calOv && !calOv[d]) ? (calReason[d] || "Holiday") : (!open ? "Weekend" : ""),
           out: outAll, buildersOut, present, thin, isToday: d === today };
       });
-      // Per-cab finish projection. Base = remaining build-days over open shop
-      // days; a whole day the cab's LINE crew is off pushes the date (owner-rep).
-      const hdates = [];
-      for (let i = 1; i <= HORIZON; i++) hdates.push(phxDate(phxMid + i * 86400000)); // tomorrow onward
-      const crewOf = {};   // line id -> [builder ids assigned to it]
-      for (const e of emps) if (e.role === "production" && Array.isArray(e.lines)) for (const ln of e.lines) (crewOf[ln] = crewOf[ln] || []).push(e.id);
-      const offOn = (id, d) => offRows.some((t) => t.employee_id === id && t.start_date <= d && t.end_date >= d);
-      const fmtFin = (ds) => ds ? WD[new Date(ds + "T12:00:00Z").getUTCDay()] + " " + MON[Number(ds.slice(5, 7)) - 1] + " " + Number(ds.slice(8, 10)) : null;
+      // Per-cab finish projection — now the SHARED helper (block 61), the one
+      // source of truth the Meeting Pack floor + the cockpit also read.
       const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
-      const cabs = [];
-      if (board && Array.isArray(board.lines)) {
-        for (const l of board.lines) {
-          const c = l.cab;
-          if (!c || !c.total_days || Number(c.total_days) <= 0) continue;   // active/rework only (awaiting has total_days 0)
-          const remaining = Math.max(0, Number(c.total_days) - Number(c.day || 0));
-          const crew = crewOf[l.id] || [];
-          const dayArr = hdates.map((d) => {
-            const open = isOpenDay(d);
-            let allOut = false, someOut = false;
-            if (open && crew.length) {
-              const outN = crew.filter((id) => offOn(id, d)).length;
-              allOut = outN > 0 && outN === crew.length;
-              someOut = outN > 0 && outN < crew.length;
-            }
-            return { date: d, open, allOut, someOut };
-          });
-          const pf = projFinish(dayArr, remaining);
-          cabs.push({ order: c.order, family: c.family || "", line: l.name, noStd: false,
-            remaining0: pf.remaining0, ranOut: pf.ranOut, finish: fmtFin(pf.finish), slip: pf.lostDays, atRisk: pf.atRiskDays });
-        }
-      }
+      const { cabs } = await cabProjections(board);
       return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs));
     }
 
