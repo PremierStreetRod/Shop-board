@@ -2008,12 +2008,32 @@ function meetingPage(now, board, awaiting, completed, out) {
 </div></body></html>`;
 }
 
+// Q92 pt 2: FINISH-DATE PROJECTION (owner-rep 2026-08-04: base = remaining
+// build-days counted forward over OPEN shop days; an absence moves the date
+// only on a WHOLE lost day). `days` is the cab's LINE horizon (tomorrow onward),
+// each {open, allOut, someOut}: an open day where the line's whole assigned crew
+// is off is a LOST day (pushes the finish, no progress); any other open day is
+// productive (a partial-crew day still counts, just flagged at-risk). The
+// (remaining)-th productive open day is the projected finish. Pure + testable.
+function projFinish(days, remaining) {
+  if (remaining <= 0) return { finish: null, remaining0: true, lostDays: 0, atRiskDays: 0, ranOut: false };
+  let seen = 0, lost = 0, atRisk = 0;
+  for (const d of days) {
+    if (!d.open) continue;
+    if (d.allOut) { lost++; continue; }
+    if (d.someOut) atRisk++;
+    seen++;
+    if (seen === remaining) return { finish: d.date, remaining0: false, lostDays: lost, atRiskDays: atRisk, ranOut: false };
+  }
+  return { finish: null, remaining0: false, lostDays: lost, atRiskDays: atRisk, ranOut: true };
+}
+
 // Q92 pt 2: THE COVERAGE CALENDAR. A days-ahead, at-a-glance read of who's
 // out (approved time off) laid against the shop calendar, so a manager sees a
 // thin day BEFORE it arrives instead of discovering it at 7am. Read-only,
 // reuses the shop-calendar work-day rule + the Q92 pt-1 time-off data. `days`
 // is pre-assembled by the route; this is a pure render.
-function coveragePage(now, days, builderCount) {
+function coveragePage(now, days, builderCount, cabs) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2058,6 +2078,19 @@ function coveragePage(now, days, builderCount) {
       <div class="cmid">${mid}</div>
     </div>`;
   }).join("")}
+  </div>
+  <h3 style="margin:18px 0 6px">Cabs in progress — projected finish</h3>
+  <p class="muted" style="margin:0 0 8px;font-size:.85em">Remaining build-days counted forward over open shop days; a whole day the cab's line crew is off pushes the date.</p>
+  <div class="mp">
+  ${cabs && cabs.length ? cabs.map((c) => {
+    const cls = c.noStd ? "n" : c.slip > 0 ? "r" : c.atRisk > 0 ? "a" : "g";
+    let right;
+    if (c.noStd) right = `<span class="muted">no standard build-days set</span>`;
+    else if (c.remaining0) right = `<span class="pill">wrapping up</span>`;
+    else if (!c.finish) right = `<span class="muted">beyond the horizon</span>`;
+    else right = `<span class="pill">${esc(c.finish)}</span>` + (c.slip > 0 ? ` <span style="color:#ff9f0a">· pushed ${c.slip} day${c.slip === 1 ? "" : "s"} by time off</span>` : (c.atRisk > 0 ? ` <span class="muted">· ${c.atRisk} at-risk day${c.atRisk === 1 ? "" : "s"} ahead</span>` : ""));
+    return `<div class="crow"><div class="cwhen"><span class="dot ${cls}"></span>${esc(c.order)}</div><div class="cmid"><span class="muted">${esc(c.line)}${c.family ? " · " + esc(c.family) : ""}</span> — ${right}</div></div>`;
+  }).join("") : `<div class="muted" style="padding:8px 0">No cabs in progress.</div>`}
   </div>
   <p class="muted" style="font-size:.85em;text-align:center"><span class="dot g"></span>full crew &nbsp; <span class="dot a"></span>someone out &nbsp; <span class="dot r"></span>thin coverage &nbsp; <span class="dot n"></span>closed. &nbsp; Time off is managed in the Manager cockpit; closed days in the Admin shop calendar.</p>
 </div></body></html>`;
@@ -3649,26 +3682,29 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) return send(403, "text/plain", "Manager or admin only");
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
-      const N = 14;
+      const N = 14, HORIZON = 180;   // grid shows 14 days; projection scans up to 180 ahead
       const phxMid = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
       const dates = [];
       for (let i = 0; i < N; i++) dates.push(phxDate(phxMid + i * 86400000));
-      const today = dates[0], lastDate = dates[N - 1];
-      // Shop-calendar overrides (holidays / worked Saturdays) + their reasons.
-      const calRows = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&cal_date=lte.${lastDate}`).catch(() => []);
+      const today = dates[0];
+      const horizonEnd = phxDate(phxMid + HORIZON * 86400000);
+      // Shop-calendar overrides (holidays / worked Saturdays) + their reasons —
+      // widened to the whole projection horizon so a far-off finish is exact.
+      const calRows = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&cal_date=lte.${horizonEnd}`).catch(() => []);
       const calOv = {}, calReason = {};
       for (const r of calRows) { const d = String(r.cal_date).slice(0, 10); calOv[d] = r.is_open === true; calReason[d] = r.reason || ""; }
-      // Approved time off overlapping the window.
-      const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${today}&start_date=lte.${lastDate}&order=start_date`).catch(() => []);
-      const emps = await db(`employee?select=id,first_name,last_name,role&active=is.true`);
+      // Approved time off overlapping the horizon.
+      const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${today}&start_date=lte.${horizonEnd}&order=start_date`).catch(() => []);
+      const emps = await db(`employee?select=id,first_name,last_name,role,lines&active=is.true`);
       const nameOf = {}, roleOf = {};
       for (const e of emps) { nameOf[e.id] = `${e.first_name} ${e.last_name ? e.last_name[0] + "." : ""}`.trim(); roleOf[e.id] = e.role; }
       const builderCount = emps.filter((e) => e.role === "production").length;
       const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
       const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const isOpenDay = (d) => (d in calOv ? calOv[d] : (() => { const dw = new Date(d + "T12:00:00Z").getUTCDay(); return dw >= 1 && dw <= 5; })());
       const days = dates.map((d) => {
         const dow = new Date(d + "T12:00:00Z").getUTCDay();
-        const open = d in calOv ? calOv[d] : (dow >= 1 && dow <= 5);
+        const open = isOpenDay(d);
         const outAll = offRows.filter((t) => t.start_date <= d && t.end_date >= d)
           .map((t) => ({ who: nameOf[t.employee_id] || "?", reason: t.reason || "", role: roleOf[t.employee_id] || "" }));
         const buildersOut = outAll.filter((o) => o.role === "production").length;
@@ -3678,7 +3714,38 @@ http.createServer(async (req, res) => {
           closed: !open, closedReason: (d in calOv && !calOv[d]) ? (calReason[d] || "Holiday") : (!open ? "Weekend" : ""),
           out: outAll, buildersOut, present, thin, isToday: d === today };
       });
-      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount));
+      // Per-cab finish projection. Base = remaining build-days over open shop
+      // days; a whole day the cab's LINE crew is off pushes the date (owner-rep).
+      const hdates = [];
+      for (let i = 1; i <= HORIZON; i++) hdates.push(phxDate(phxMid + i * 86400000)); // tomorrow onward
+      const crewOf = {};   // line id -> [builder ids assigned to it]
+      for (const e of emps) if (e.role === "production" && Array.isArray(e.lines)) for (const ln of e.lines) (crewOf[ln] = crewOf[ln] || []).push(e.id);
+      const offOn = (id, d) => offRows.some((t) => t.employee_id === id && t.start_date <= d && t.end_date >= d);
+      const fmtFin = (ds) => ds ? WD[new Date(ds + "T12:00:00Z").getUTCDay()] + " " + MON[Number(ds.slice(5, 7)) - 1] + " " + Number(ds.slice(8, 10)) : null;
+      const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
+      const cabs = [];
+      if (board && Array.isArray(board.lines)) {
+        for (const l of board.lines) {
+          const c = l.cab;
+          if (!c || !c.total_days || Number(c.total_days) <= 0) continue;   // active/rework only (awaiting has total_days 0)
+          const remaining = Math.max(0, Number(c.total_days) - Number(c.day || 0));
+          const crew = crewOf[l.id] || [];
+          const dayArr = hdates.map((d) => {
+            const open = isOpenDay(d);
+            let allOut = false, someOut = false;
+            if (open && crew.length) {
+              const outN = crew.filter((id) => offOn(id, d)).length;
+              allOut = outN > 0 && outN === crew.length;
+              someOut = outN > 0 && outN < crew.length;
+            }
+            return { open, allOut, someOut };
+          });
+          const pf = projFinish(dayArr, remaining);
+          cabs.push({ order: c.order, family: c.family || "", line: l.name, noStd: false,
+            remaining0: pf.remaining0, ranOut: pf.ranOut, finish: fmtFin(pf.finish), slip: pf.lostDays, atRisk: pf.atRiskDays });
+        }
+      }
+      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
