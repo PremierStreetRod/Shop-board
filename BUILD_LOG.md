@@ -1,6 +1,13 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-04 — block 52: hand-off stage 3 = per-task-step "send from a phone" (v52, no migration)
+- Completes the Q86 phone photo hand-off. Stages 1-2 put it on the finish screen (completion photos); stage 3 puts the same hand-off on EVERY task step, so a worker on the shared tablet can pass a photo from their phone for a specific step too. Optional (kind='task') — it never counts toward the completion-photo gate.
+- The backend already carried task_id and stored kind = task_id ? 'task' : 'finish' (v50), so this was purely UI: phoneHandoff() generalized to render into any target (default "hoff") and restore the button's own label on error; each task's note/photo panel gains a "📱 From a phone" button + its own QR/code container. The phone's photo attaches to that cab as a task photo and shows in that step's panel on reload.
+- Deploy: server.js v52 = 305,904 units / hash 3607755328, commit 7e76871. Three programmatic editor edits gated on the live v51 start hash (2459282991) and target hash; validated locally first (reconstructed v51 reproduced its hash exactly, forward-apply reproduced v52 byte-for-byte). /health green after deploy.
+- Same honest limit as v51: the per-step button + QR render only for a clocked-in tech on a real cab, so the live on-screen render wasn't staged from here; the mechanism is pre-existing/proven and the deployed bytes match the verified v52. Code-comment version header still reads (v50) — cosmetic, still to bump.
+- NEXT: Q86 hand-off is feature-complete (stages 1-3 shipped). Open: Q123 cutover (SHOP_EGRESS_IP wifi gate, SESSION_SECRET rotation, full break-pass), Q91 smart alerts. Coyote mapping job preempts when the dev's first REAL post lands.
+
 ## 2026-08-04 — block 51: hand-off stage 2 = scannable QR on the finish screen (v51, no migration)
 - The tablet finish screen now shows a QR ("Scan with a phone camera") that opens /h?c=CODE in one scan; the /h address + 8-char code stay as the fallback below it. Photos still land on that one cab; 20-min TTL, single-cab guard, and the finish photo-count are all unchanged from v50.
 - QR built from scratch — the build sandbox has npm AND pip blocked (no jsQR/qrcode). Byte-mode encoder, EC level L, versions 1-5, auto-picking the smallest fitting version, rendered server-side as a plain inline SVG so it works under the enforcing CSP with no external library.
