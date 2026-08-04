@@ -1504,6 +1504,13 @@ const boardPage = `<!doctype html>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
   <div class="stamp" id="stamp"></div>
+  <!-- Q86: TV SLEEP overlay — a near-black dim screen shown outside working
+       hours / on closed days (burn-in + power). Tap anywhere to peek for 20s. -->
+  <div id="sleep" style="display:none;position:fixed;inset:0;background:#000;z-index:9999;text-align:center;cursor:pointer" onclick="peek()">
+    <div id="sleepclock" style="font-size:9vw;font-weight:800;margin-top:31vh;color:#33333a;letter-spacing:.04em"></div>
+    <div id="sleepmsg" style="font-size:2.4vw;margin-top:10px;color:#2b2b31"></div>
+    <div style="position:fixed;bottom:26px;left:0;right:0;font-size:1.3vw;color:#232329">SHOP BOARD — asleep · tap to peek</div>
+  </div>
 <script>
   // Plain fetch-poll every 30 s — Realtime push replaces this in Stage 3.
   async function refresh(){
@@ -1536,8 +1543,27 @@ const boardPage = `<!doctype html>
           <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
         </div>\`).join("");
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
+      lastState = s; applySleep(s);
     }catch(e){ /* board never crashes; next poll retries */ }
   }
+  // Q86: TV sleep overlay control. The server says whether the board should be
+  // asleep (outside hours / closed day); a tap peeks for 20s. A dim, slowly
+  // drifting clock keeps it low-power and burn-in-safe.
+  var lastState = null, peekUntil = 0;
+  function applySleep(s){
+    var el = document.getElementById("sleep"); if(!el) return;
+    var asleep = !!(s && s.tv && s.tv.asleep) && Date.now() > peekUntil;
+    el.style.display = asleep ? "block" : "none";
+    if(asleep){ var m = document.getElementById("sleepmsg"); if(m) m.textContent = (s.tv.message || ""); }
+  }
+  function peek(){ peekUntil = Date.now() + 20000; applySleep(lastState); setTimeout(function(){ applySleep(lastState); }, 20050); }
+  setInterval(function(){
+    var c = document.getElementById("sleepclock"); if(!c) return;
+    var d = new Date(), hh = d.getHours() % 12; if(hh === 0) hh = 12;
+    var mm = d.getMinutes();
+    c.textContent = hh + ":" + (mm < 10 ? "0" : "") + mm;
+    c.style.transform = "translateX(" + (Math.sin(Date.now() / 60000) * 3) + "vw)";
+  }, 1000);
   refresh();
   // Q117: live updates over server-sent events — the server bumps this screen
   // the instant an event lands, so the board re-renders within ~3s instead of
@@ -2121,6 +2147,7 @@ const TOGGLE_INFO = {
   early_red_standards_guard: ["Cab went red too early", "Points out a cab that hit red much sooner than it should — usually a sign the time target is off, not the crew."],
   day_start_nudge: ["Day-start nudge", "A quiet good-morning push at the start of each work day. Never on weekends or closed days (see the Shop calendar)."],
   customer_names_on_tv: ["Customer names on the TV", "Show customer names on the board tiles."],
+  tv_sleep: ["Sleep the TV after hours", "Dim the shop-TV board outside working hours and on closed days (saves the screen and power); it wakes on its own when the shop opens."],
   time_off_requests: ["Time-off requests", "Techs can ask for time off from their phones."],
   // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
   // is running the floor. This switch lets an admin share the page if wanted.
@@ -3470,7 +3497,24 @@ http.createServer(async (req, res) => {
           ? { state: "after_hours", detail: ahOpenB.map((s2) => `${nameOf[s2.employee_id] || "?"} on ${(lines.find((l) => l.id === s2.line_id) || {}).name || (s2.line_id === 10 ? "Shop time" : "line " + s2.line_id)}`).join(" · ") }
           : { state: "closed", detail: "" };
       }
-      return json(200, { shop: shopState, lines: lines.map((l) => {
+      // Q86: TV SLEEP — dim the shop-TV board outside working hours and on
+      // closed days (burn-in + power). Awake = a work day AND within shop hours,
+      // OR someone's on an approved after-hours session; asleep otherwise.
+      // Admin toggle (default ON; a missing row = ON). Never sleeps on error.
+      let tv = { asleep: false, message: "" };
+      try {
+        const [slp] = await db(`feature_toggle?select=enabled&key=eq.tv_sleep`);
+        const sleepOn = !slp || slp.enabled !== false;
+        const phxN = new Date(now - PHX_OFFSET_MS);
+        const hrNow = phxN.getUTCHours() + phxN.getUTCMinutes() / 60;
+        const workday = await isWorkDay(phxDate(now));
+        const openForBiz = workday && hrNow >= hrsB.open && hrNow < hrsB.close;
+        if (sleepOn && !openForBiz && shopState.state !== "after_hours") {
+          const fmtH = (h) => { const ap = h < 12 ? "AM" : "PM"; let hh = Math.floor(h) % 12; if (hh === 0) hh = 12; return hh + ":00 " + ap; };
+          tv = { asleep: true, message: !workday ? "Shop closed today" : (hrNow < hrsB.open ? ("Opens " + fmtH(hrsB.open)) : "Closed for the day") };
+        }
+      } catch (e) { /* toggle hiccup — never sleep on error */ }
+      return json(200, { shop: shopState, tv, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "" } : null;
         // No active cab but one waiting on Mike? The board says so plainly.
