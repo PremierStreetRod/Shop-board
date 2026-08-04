@@ -560,6 +560,42 @@ function isAfterHours(ms, hrs = SHOP_HOURS) {
   const dow = phx.getUTCDay(), hr = phx.getUTCHours();
   return dow === 0 || dow === 6 || hr < hrs.open || hr >= hrs.close;
 }
+
+// Q91: the SHOP CALENDAR. Default work week is Mon-Fri; a shop_calendar row
+// OVERRIDES one date open or closed (holidays, or a rare worked Saturday).
+// Read through a 5-minute cache so the morning scheduler stays cheap. If the
+// table isn't there yet, the plain weekday rule holds.
+const SHOP_CAL = { rows: {}, loadedAt: 0 };
+async function calendarOverrides() {
+  if (SHOP_CAL.loadedAt && Date.now() - SHOP_CAL.loadedAt < 5 * 60000) return SHOP_CAL.rows;
+  if (!DB_READY) return SHOP_CAL.rows;
+  try {
+    const rows = await db(`shop_calendar?select=cal_date,is_open`);
+    const map = {};
+    for (const r of rows) map[String(r.cal_date).slice(0, 10)] = r.is_open === true;
+    SHOP_CAL.rows = map; SHOP_CAL.loadedAt = Date.now();
+  } catch (e) { /* table not there yet — weekday default holds */ }
+  return SHOP_CAL.rows;
+}
+// Is a given Phoenix date (YYYY-MM-DD) a WORK day? A calendar override wins;
+// otherwise Mon-Fri is a work day, Sat/Sun are not. (Noon-UTC avoids any
+// date-boundary drift when reading the weekday of a bare date string.)
+async function isWorkDay(phxDateStr) {
+  const ov = await calendarOverrides();
+  if (phxDateStr in ov) return ov[phxDateStr];
+  const dow = new Date(phxDateStr + "T12:00:00Z").getUTCDay();
+  return dow >= 1 && dow <= 5;
+}
+// The day-start nudge time for a weekday (0=Sun..6=Sat), from shop_setting,
+// defaulting to Mon 07:35 / others 07:05. Returns "HH:MM".
+const NUDGE_KEYS = ["nudge_sun", "nudge_mon", "nudge_tue", "nudge_wed", "nudge_thu", "nudge_fri", "nudge_sat"];
+async function nudgeTimeFor(dow) {
+  try {
+    const [row] = await db(`shop_setting?select=value&key=eq.${NUDGE_KEYS[dow]}`);
+    if (row && /^\d{1,2}:\d{2}$/.test(row.value)) return row.value;
+  } catch (e) { /* fall through to default */ }
+  return dow === 1 ? "07:35" : "07:05";
+}
 // Close every interval still open long past its day end. Runs at boot (catches
 // anything that happened while the server was down) and every 10 minutes.
 async function sweepForgottenClockOuts() {
@@ -1934,6 +1970,7 @@ const TOGGLE_INFO = {
   line_frees_soon_alert: ["Line-frees-soon heads-up", "A nudge when a line looks like it will open up soon."],
   inspect_before_close_nudge: ["Inspect-before-close nudge", "A reminder to sign off finished cabs before day end."],
   early_red_standards_guard: ["Cab went red too early", "Points out a cab that hit red much sooner than it should — usually a sign the time target is off, not the crew."],
+  day_start_nudge: ["Day-start nudge", "A quiet good-morning push at the start of each work day. Never on weekends or closed days (see the Shop calendar)."],
   customer_names_on_tv: ["Customer names on the TV", "Show customer names on the board tiles."],
   time_off_requests: ["Time-off requests", "Techs can ask for time off from their phones."],
   // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
@@ -1959,7 +1996,7 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = []) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -1991,6 +2028,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
     <a href="#cabnums" style="color:#fff;font-weight:700;margin-right:16px">Cab #s</a>
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
+    <a href="#calendar" style="color:#fff;font-weight:700;margin-right:16px">Shop calendar</a>
     <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
@@ -2110,6 +2148,40 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   </tr>`).join("")}</table>` : `<div style="opacity:.6">No products in the catalog yet.</div>`}
   </div>
 
+  <!-- Q91: SHOP CALENDAR — the shop runs Mon-Fri 7-4 by default; this marks the
+       exceptions (holidays closed, or a rare worked Saturday open) and sets the
+       morning day-start nudge times. The nudge itself is switched on under Features. -->
+  <div class="panel" id="calendar"><h3>Shop calendar — open &amp; closed days</h3>
+  <p style="opacity:.5;font-size:.85rem">The shop runs Monday–Friday, 7 to 4. Mark a holiday or shutdown day CLOSED here, or mark a weekend OPEN if you're working it. Days you don't list follow the normal week. The day-start nudge (turn it on under Features) skips any closed day automatically.</p>
+
+  <h4 style="margin:14px 0 6px">Day-start nudge times <span style="opacity:.5;font-weight:400;font-size:.85rem">(Phoenix, 24-hour)</span></h4>
+  <table><tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th></th></tr>
+  <tr>
+    <td><input id="ng-mon" value="${nudgeTimes.mon || "07:35"}" style="width:5em"></td>
+    <td><input id="ng-tue" value="${nudgeTimes.tue || "07:05"}" style="width:5em"></td>
+    <td><input id="ng-wed" value="${nudgeTimes.wed || "07:05"}" style="width:5em"></td>
+    <td><input id="ng-thu" value="${nudgeTimes.thu || "07:05"}" style="width:5em"></td>
+    <td><input id="ng-fri" value="${nudgeTimes.fri || "07:05"}" style="width:5em"></td>
+    <td><button class="b" onclick="saveNudge(this)">Save times</button></td>
+  </tr></table>
+
+  <h4 style="margin:18px 0 6px">Closed / open days</h4>
+  ${calDays.length ? `<table><tr><th>Date</th><th>Status</th><th>Reason</th><th></th></tr>
+  ${calDays.map((d) => { const ds = String(d.cal_date).slice(0, 10); const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T12:00:00Z").getUTCDay()]; return `<tr>
+    <td><b>${ds}</b> <span style="opacity:.5">${wd}</span></td>
+    <td>${d.is_open ? '<span style="color:#30d158">OPEN</span>' : '<span style="color:#ff453a">CLOSED</span>'}</td>
+    <td>${String(d.reason || "").replace(/</g, "&lt;")}</td>
+    <td><button class="back" style="color:#fff;background:#3a3a3c;border-radius:8px" onclick="arm(this,()=>removeCalDay('${ds}',this))">Remove</button></td>
+  </tr>`; }).join("")}</table>` : `<div style="opacity:.6">No exceptions listed — the normal Mon–Fri week applies.</div>`}
+
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <input type="date" id="cal-date" style="color:#fff">
+    <input id="cal-reason" placeholder="Reason (e.g. Christmas)" style="min-width:14em">
+    <button class="b" style="background:#5a1d1d;border-color:#ff453a" onclick="saveCalendar(false,this)">Mark CLOSED</button>
+    <button class="b" style="background:#1d3a24;border-color:#30d158" onclick="saveCalendar(true,this)">Mark OPEN</button>
+  </div>
+  </div>
+
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
   <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
@@ -2164,6 +2236,10 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
   function savePhotoMin(part, btn){ post("/api/admin/product", { part_number: part, photo_min: Number(v("pm-"+part)) }, btn); }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
+  // Q91: shop calendar + day-start nudge times.
+  function saveNudge(btn){ post("/api/admin/nudge-times", { mon: v("ng-mon"), tue: v("ng-tue"), wed: v("ng-wed"), thu: v("ng-thu"), fri: v("ng-fri") }, btn); }
+  function saveCalendar(isOpen, btn){ post("/api/admin/calendar", { action: "set", cal_date: v("cal-date"), is_open: isOpen, reason: v("cal-reason") }, btn); }
+  function removeCalDay(date, btn){ post("/api/admin/calendar", { action: "remove", cal_date: date }, btn); }
   // Q77: the reason-list (pick-list) editor — same post()/v()/arm() pattern.
   function savePick(id, btn){ post("/api/admin/picklist", { action: "rename", id, label: v("pl-"+id) }, btn); }
   function movePick(id, dir, btn){ post("/api/admin/picklist", { action: "move", id, dir }, btn); }
@@ -2616,6 +2692,37 @@ async function pacePatrol() {
   } catch (e) { console.error("pace patrol failed (will retry):", e.message); }
 }
 setInterval(pacePatrol, 10 * 60 * 1000);   // Q116: steady patrol, same cadence as the day-end sweeper
+
+// Q91: the DAY-START NUDGE — one quiet good-morning push per WORK day, at the
+// per-weekday time, calendar-aware (never weekends/holidays). Edge-triggered
+// via notification_log so a redeploy mid-morning can't double-fire, and it
+// won't nag: if the server was down past the window it just skips the day.
+// OFF unless the admin turns on the day_start_nudge toggle; delivery still
+// obeys the Q106 sandbox (routes to the owner-rep until go-live).
+async function dayStartNudge() {
+  try {
+    if (!DB_READY) return;
+    const [tog] = await db(`feature_toggle?select=enabled&key=eq.day_start_nudge`);
+    if (!tog || tog.enabled !== true) return;                     // OFF unless explicitly on
+    const now = Date.now();
+    const phx = new Date(now - PHX_OFFSET_MS);
+    const today = phxDate(now);                                   // Phoenix YYYY-MM-DD
+    if (!(await isWorkDay(today))) return;                        // weekend / holiday
+    const [hh, mm] = (await nudgeTimeFor(phx.getUTCDay())).split(":").map(Number);
+    const target = hh * 60 + mm, nowMin = phx.getUTCHours() * 60 + phx.getUTCMinutes();
+    if (nowMin < target || nowMin > target + 120) return;         // before the time, or >2h late (was down) — skip
+    // Already fired today? (Phoenix midnight -> real ms -> ISO for the filter.)
+    const phxMidReal = new Date(today + "T00:00:00Z").getTime() + PHX_OFFSET_MS;
+    const prior = await db(`notification_log?select=id&event_type=eq.nudge.daystart&created_at=gte.${new Date(phxMidReal).toISOString()}&limit=1`);
+    if (prior.length) return;
+    const recips = (await db(`employee?select=id&role=in.(production,manager)&active=is.true`)).map((e) => e.id);
+    if (!recips.length) return;
+    await notify("nudge.daystart", recips, "Good morning — let's get started",
+      "Clock in and pick up your line when you're ready.", "/home");
+    logEvent("nudge.daystart", null, { date: today, at: `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`, recipients: recips.length });
+  } catch (e) { console.error("day-start nudge failed (will retry):", e.message); }
+}
+setInterval(dayStartNudge, 5 * 60 * 1000);   // check every 5 min; fires once per work day
 
 // Q117: LIVE BOARD via server-sent events. Screens hold an EventSource; this
 // tick watches ONE cheap signal — the newest event_log id — and bumps every
@@ -3915,7 +4022,12 @@ self.addEventListener("notificationclick", (e) => {
       const pickLists = pickOrder.filter((k) => plByKey[k]).map((k) => plByKey[k]);
       // Q86: per-product completion-photo minimums for the Product settings panel.
       const products = await db("product?select=part_number,family,photo_min&order=family,part_number");
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products));
+      // Q91: the shop calendar (upcoming overrides only) + the nudge times.
+      const today = phxDate(Date.now());
+      const calDays = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&order=cal_date`).catch(() => []);
+      const ntRows = await db(`shop_setting?select=key,value&key=in.(nudge_mon,nudge_tue,nudge_wed,nudge_thu,nudge_fri)`).catch(() => []);
+      const nudgeTimes = {}; for (const r of ntRows) nudgeTimes[r.key.replace("nudge_", "")] = r.value;
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -3979,6 +4091,45 @@ self.addEventListener("notificationclick", (e) => {
       }
       SHOP_HOURS.loadedAt = 0; // next read refreshes immediately
       logEvent("shop.hours_set", adminId, { open: o, close: c });
+      return json(200, { ok: true });
+    }
+
+    // Q91: SHOP CALENDAR — mark a date closed/open, or clear the override.
+    if (url.pathname === "/api/admin/calendar" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { action, cal_date, is_open, reason } = await body(req);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(cal_date || "")) || isNaN(new Date(cal_date + "T12:00:00Z").getTime()))
+        return json(400, { ok: false, error: "Pick a real date first" });
+      if (action === "remove") {
+        await db(`shop_calendar?cal_date=eq.${cal_date}`, { method: "DELETE" });
+        logEvent("calendar.cleared", adminId, { cal_date });
+      } else {
+        // upsert: clear any prior override for the date, then set the new one
+        await db(`shop_calendar?cal_date=eq.${cal_date}`, { method: "DELETE" });
+        await db("shop_calendar", { method: "POST", body: JSON.stringify({
+          cal_date, is_open: Boolean(is_open), reason: String(reason || "").slice(0, 120) || null, created_by: adminId }) });
+        logEvent("calendar.set", adminId, { cal_date, is_open: Boolean(is_open) });
+      }
+      SHOP_CAL.loadedAt = 0; // next read refreshes immediately
+      return json(200, { ok: true });
+    }
+
+    // Q91: DAY-START NUDGE TIMES — per-weekday HH:MM (Phoenix).
+    if (url.pathname === "/api/admin/nudge-times" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const b = await body(req);
+      const days = ["mon", "tue", "wed", "thu", "fri"];
+      for (const d of days) {
+        const t = String(b[d] || "").trim();
+        if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(t))
+          return json(400, { ok: false, error: `${d.toUpperCase()} time needs to look like 7:05 or 07:35` });
+      }
+      for (const d of days) {
+        const t = String(b[d]).trim();
+        await db(`shop_setting?key=eq.nudge_${d}`, { method: "DELETE" });
+        await db("shop_setting", { method: "POST", body: JSON.stringify({ key: `nudge_${d}`, value: t }) });
+      }
+      logEvent("nudge.times_set", adminId, { mon: b.mon, tue: b.tue, wed: b.wed, thu: b.thu, fri: b.fri });
       return json(200, { ok: true });
     }
 
