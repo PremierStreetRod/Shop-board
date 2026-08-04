@@ -1,6 +1,15 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-04 — build block 49: Q86 HARD completion-photo gate + product settings (server.js v49 + migration 0023)
+
+- Owner-rep: "im good to move to q86 now." (Naming note: Q86 in the register is "manager-out → duties up to Admin", already DECIDED; the piece meant here is Q86's decided sub-item — completion-photo minimum = per-product setting, default >= 1. Block 12 shipped it SOFT; 0006_photos.sql deferred the HARD gate "until per-product settings land in the admin console." This lands them.)
+- CONFIRMED with owner-rep first (AskUserQuestion): gate at the BUILDER'S FINISH (not manager sign-off); admin can set a product's min to 0 (= exempt). Default stays 1.
+- WHAT (v49 + migration 0023): 0023 adds product.photo_min int not null default 1 (CHECK 0..20; all 16 products at 1). HARD gate in /api/build/finish — after the open-steps check, look up the product's photo_min via the cab's part_number, count completion photos (build_photo kind='finish'); if fewer, clean 400 (0 skips = exempt). New admin "Product settings — completion photos" panel (products · family · editable min · Save) + /api/admin/product endpoint (admin-only, validates 0..20 + product exists, encodeURIComponent-safe, audited). Phone Finish button carries data-min and the client blocks early with a clear count; the photos label shows "at least N required" / "optional".
+- CODE: v49 = 283,545 / 2957991451 (13 pairs; forward AND reversal proven — new→old reproduced v48 exactly at 279,236 / 3661352623). Editor hash gate matched v49. Commit SHA e6a0a2cbbe, raw-verified byte-exact. Migration 0023 run + verified (16 products, all photo_min=1).
+- VERIFY: gate logic unit-tested (min>0 & shots<min → block; min=0 exempt — 7/7) + client check unit-tested. LIVE: /health 200; /admin 200 AND the new "Product settings — completion photos" panel RENDERS (Daniel's admin session) — proves the migration column is live/readable and the panel works end-to-end; /api/admin/product validation POST-tested (bad photo_min 99 → 400, nonexistent product → 404, no mutations). HONEST LIMIT: the finish-gate BLOCK through a live signed-in tech finish isn't staged (needs a real finishable cab) — unit-proven + deploy-healthy.
+- NEXT: Coyote preempts when the dev's first REAL post lands; else Q91 (smart alerts) or another feature. Remaining Q123 items stay cutover/feature-complete.
+
 ## 2026-08-04 — build block 48: Q123 input-validation sweep pt 2 — sweep COMPLETE (server.js v48, no migration)
 
 - Owner-rep "continue with part 2." Completed the sweep across the MANAGER/ADMIN-gated write endpoints + the reports template param.
