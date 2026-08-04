@@ -1,6 +1,16 @@
 # BUILD_LOG — Shop Board
 Chronological build journal. Every work chunk gets an entry (Q99). Newest first.
 
+## 2026-08-04 — block 55: Q92 pt 2 — the Meeting Pack (v55, no migration)
+- Continues Q92 (pt 1 = the time-off request→decide loop). Owner-rep's Q92 note wanted an on-demand, always-current "Meeting Pack" for the sometimes-floating Monday meeting — a button you pull up when the meeting starts, not a scheduled artifact. This builds that. No migration.
+- NEW /meeting page (manager+admin; "Meeting Pack" link added to the cockpit header; liveSession + must-change-pin gated like /manager). It reads the SAME live board the TV uses (internal fetch to /api/board-state — zero drift with the floor) and lays out four plain sections: (1) Right now — the floor: every line, its cab (order # · line), pace color, % done. (2) Finishing — awaiting sign-off: the awaiting_inspection cabs. (3) Completed — last 7 days: production_complete events over the last 7 Phoenix days, each with order # + product family (joins the build row). (4) Who's out — upcoming: approved time_off_request rows with end_date >= today (reuses Q92 pt-1 data).
+- Prints cleanly — an @media print block strips the chrome so it drops straight into a meeting handout / PDF.
+- Read-only: nothing goes OUT, so it's outside the Q106 sandbox and needs no toggle. The optional Monday auto-push is deliberately NOT built — owner-rep said the button IS the feature.
+- meetingPage(now, board, awaiting, completed, out) is a pure render; the /meeting route does the gather (role gate, board-state fetch, familyOf, the awaiting slice, the last-7-days production_complete query, the approved-and-current time-off query). No new event types, tables, or toggles.
+- CODE: v55 = 329,218 units / hash 863210913, commit 5a8fe44. Hash-gated editor edits (reconstructed v54 = 336582976 exactly, forward-apply = v55 byte-for-byte). node --check clean. No migration.
+- VERIFY: /health green after deploy (new route + meetingPage booted clean). Reuses the TV's own board engine + the block-19/34/49 queries. HONEST LIMIT: /meeting is login-gated (manager/admin PIN the harness won't type), so the rendered page wasn't click-tested through a signed-in session — proven at the code+data layer, deploy healthy.
+- CARRIED: server.js header comment still says (v50) — cosmetic. STILL Q92 pt 2: the days-ahead visual coverage calendar + the absence-fed finish-date projections (both reuse the shop calendar + this time-off data); the Monday auto-push is a third future option. Coyote mapping job preempts when the dev's first REAL post lands.
+
 ## 2026-08-04 — block 54: Q91 block 2 — the four proactive touches (v54, no migration)
 - Completes Q91. Block 53 built the shop calendar + day-start nudge (and the daily-scheduler pattern); this block wires the four smart touches owner-rep chose, all reusing that scheduler + isWorkDay, all OFF by default (toggles already seeded), all Q106-sandboxed to the owner-rep until go-live.
 - MORNING PRE-BRIEF (morning_prebrief, ~6:55): a one-line floor summary to managers before the day — "N cabs in progress · M awaiting inspection · K out today."
