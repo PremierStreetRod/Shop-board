@@ -3738,7 +3738,7 @@ http.createServer(async (req, res) => {
               allOut = outN > 0 && outN === crew.length;
               someOut = outN > 0 && outN < crew.length;
             }
-            return { open, allOut, someOut };
+            return { date: d, open, allOut, someOut };
           });
           const pf = projFinish(dayArr, remaining);
           cabs.push({ order: c.order, family: c.family || "", line: l.name, noStd: false,
