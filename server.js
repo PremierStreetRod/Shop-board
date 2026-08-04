@@ -2669,8 +2669,15 @@ const warehouseIds = async () =>
 async function pacePatrol() {
   try {
     if (!DB_READY) return;
-    const [tog] = await db(`feature_toggle?select=enabled&key=eq.pace_warnings`);
-    if (tog && tog.enabled === false) return;             // monitor paused by admin
+    // Two monitors ride this one patrol: the pace warning (Q116, default ON)
+    // and the Q91 early-red standards guard (default OFF). If a cab crosses
+    // into red EARLY — little of the build actually done — that usually means
+    // the hour STANDARD is too tight, not that the crew is slow, so it pings
+    // the manager to "check the standard" INSTEAD of a normal red.
+    const togs = await db(`feature_toggle?select=key,enabled&key=in.(pace_warnings,early_red_standards_guard)`);
+    const paceWarnOn = !togs.some((t) => t.key === "pace_warnings" && t.enabled === false); // default on
+    const earlyRedOn = togs.some((t) => t.key === "early_red_standards_guard" && t.enabled === true); // default off
+    if (!paceWarnOn && !earlyRedOn) return;               // both paused
     const s = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
     if (!s || !s.lines) return;
     const active = await db(`build?select=id,order_number,pace_alert_color&state=in.(active,rework)`);
@@ -2682,9 +2689,16 @@ async function pacePatrol() {
       if (!c || !c.order || !(c.order in idOf)) continue;
       const cur = c.color, prev = prevOf[c.order];
       if (cur === "red" && prev !== "red") {              // crossed INTO red -> one push
-        await notify("pace.warn", recips, `${l.name}: ${c.order} needs help`,
-          `${c.status}${c.promised ? ` · promised ${c.promised}` : ""}.`, "/board");
-        logEvent("pace.warn", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, status: c.status });
+        const early = Number(c.pct) < 30;                 // red with <30% of the build done -> suspect the STANDARD
+        if (early && earlyRedOn) {
+          await notify("pace.standards", recips, `${l.name}: check the standard on ${c.order}`,
+            `${c.order} hit red at only ${Number(c.pct) || 0}% done (day ${c.day || "?"}). That usually means the hour target is off, not the crew.`, "/board");
+          logEvent("pace.standards", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, pct: c.pct, day: c.day });
+        } else if (paceWarnOn) {
+          await notify("pace.warn", recips, `${l.name}: ${c.order} needs help`,
+            `${c.status}${c.promised ? ` · promised ${c.promised}` : ""}.`, "/board");
+          logEvent("pace.warn", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, status: c.status });
+        }
       }
       if (cur !== prev)                                    // remember it either way
         await db(`build?id=eq.${idOf[c.order]}`, { method: "PATCH", body: JSON.stringify({ pace_alert_color: cur }) });
@@ -2723,6 +2737,63 @@ async function dayStartNudge() {
   } catch (e) { console.error("day-start nudge failed (will retry):", e.message); }
 }
 setInterval(dayStartNudge, 5 * 60 * 1000);   // check every 5 min; fires once per work day
+
+// Q91 (block 2): the two other TIME-BASED touches — morning pre-brief and
+// inspect-before-close — share one small scheduler with the day-start nudge:
+// toggle-gated, work-day only, fires once inside a 2-hour window, deduped via
+// notification_log so a redeploy can't double-send. Each builder returns the
+// message, or null to stay quiet (e.g. nothing waiting to inspect).
+async function dailyTouch(eventType, toggleKey, timeHHMM, buildMsg) {
+  try {
+    if (!DB_READY) return;
+    const [tog] = await db(`feature_toggle?select=enabled&key=eq.${toggleKey}`);
+    if (!tog || tog.enabled !== true) return;             // OFF unless explicitly on
+    const now = Date.now(), phx = new Date(now - PHX_OFFSET_MS), today = phxDate(now);
+    if (!(await isWorkDay(today))) return;                 // weekend / holiday
+    const [hh, mm] = timeHHMM.split(":").map(Number);
+    const target = hh * 60 + mm, nowMin = phx.getUTCHours() * 60 + phx.getUTCMinutes();
+    if (nowMin < target || nowMin > target + 120) return;  // before the time, or >2h late — skip
+    const phxMidReal = new Date(today + "T00:00:00Z").getTime() + PHX_OFFSET_MS;
+    const prior = await db(`notification_log?select=id&event_type=eq.${eventType}&created_at=gte.${new Date(phxMidReal).toISOString()}&limit=1`);
+    if (prior.length) return;                              // already fired today
+    const msg = await buildMsg();
+    if (!msg || !msg.recips || !msg.recips.length) return; // builder vetoed (nothing to say)
+    await notify(eventType, msg.recips, msg.title, msg.body, msg.link || "/home");
+    logEvent(eventType, null, msg.log || {});
+  } catch (e) { console.error(`${eventType} failed (will retry):`, e.message); }
+}
+// Morning pre-brief (~6:55): a one-line floor summary to managers before the day.
+async function morningPrebrief() {
+  return dailyTouch("touch.prebrief", "morning_prebrief", "06:55", async () => {
+    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    if (!recips.length) return null;
+    const live = await db(`build?select=state&state=in.(active,rework,awaiting_inspection)`);
+    const inProg = live.filter((b) => b.state === "active" || b.state === "rework").length;
+    const waiting = live.filter((b) => b.state === "awaiting_inspection").length;
+    const today = phxDate(Date.now());
+    const off = await db(`time_off_request?select=id&status=eq.approved&start_date=lte.${today}&end_date=gte.${today}`).catch(() => []);
+    const bits = [`${inProg} cab${inProg === 1 ? "" : "s"} in progress`];
+    if (waiting) bits.push(`${waiting} awaiting inspection`);
+    if (off.length) bits.push(`${off.length} out today`);
+    return { recips, title: "Morning pre-brief", body: bits.join(" · ") + ".", link: "/manager",
+      log: { in_progress: inProg, waiting, off: off.length } };
+  });
+}
+// Inspect-before-close (~3:45): clear any awaiting-inspection cab before the
+// shop closes so none sleeps overnight. Silent if none is waiting.
+async function inspectBeforeClose() {
+  return dailyTouch("touch.inspect", "inspect_before_close_nudge", "15:45", async () => {
+    const waiting = await db(`build?select=id&state=eq.awaiting_inspection`);
+    if (!waiting.length) return null;                     // nothing waiting -> no nudge
+    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    if (!recips.length) return null;
+    return { recips, title: "Sign off before close",
+      body: `${waiting.length} cab${waiting.length === 1 ? "" : "s"} still awaiting inspection — clear ${waiting.length === 1 ? "it" : "them"} before the shop closes.`, link: "/manager",
+      log: { waiting: waiting.length } };
+  });
+}
+setInterval(morningPrebrief, 5 * 60 * 1000);
+setInterval(inspectBeforeClose, 5 * 60 * 1000);
 
 // Q117: LIVE BOARD via server-sent events. Screens hold an EventSource; this
 // tick watches ONE cheap signal — the newest event_log id — and bumps every
@@ -3483,6 +3554,15 @@ http.createServer(async (req, res) => {
       notify("build.awaiting_inspection", await warehouseIds(),
         `${lnF ? lnF.name : "Line"} — pull the next kit`,
         `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection. The line frees soon.`, "/home");
+      // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
+      // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
+      // by default; delivery still obeys the Q106 sandbox.
+      const [lfsTog] = await db(`feature_toggle?select=enabled&key=eq.line_frees_soon_alert`);
+      if (lfsTog && lfsTog.enabled === true) {
+        const mgrs = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        if (mgrs.length) notify("touch.linefrees", mgrs, `${lnF ? lnF.name : "A line"} frees up soon`,
+          `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection — the line will be ready for the next cab shortly.`, "/manager");
+      }
       return json(200, { ok: true });
     }
 
