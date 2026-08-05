@@ -2324,6 +2324,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
     <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3001,6 +3002,144 @@ function integrityPage(d) {
   </div>
 
   <p class="muted" style="font-size:.85rem;text-align:center">Deferred to a later pass (they need pace snapshots the app doesn't store yet): holds placed right at a green→amber turn, and per-person rates scored against a shop baseline. This view covers what the audit log can prove today.</p>
+</div></body></html>`;
+}
+
+// ============================================================
+// COYOTE INTAKE INBOX (Track A) — admin-only, READ-ONLY review of the orders
+// Coyote's push has landed, BEFORE the mapping job turns them into builds.
+// Collapses the fresh set to the LATEST record per order # (the change-history
+// "latest wins" rule), previews which production LINE each cab routes to
+// (product.lines), and flags the exceptions a human should look at (unknown /
+// needs-setup part, multi-cab order to split, an unusual status like Hold, an
+// outsourced Blazer top). Writes NOTHING — the staging view the mapper builds on.
+async function intakeInboxData() {
+  const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
+  const prods = await db(`product?select=part_number,family,lines`);
+  const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
+  const lns = await db(`line?select=id,name`);
+  const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
+  const allow = new Set(Object.keys(prodByPart)); // the product catalog IS the 16-part allowlist
+  const seen = new Set();
+  const orders = [];
+  let raw = 0, dupes = 0;
+  for (const r of rows) {
+    raw++;
+    const p = r.payload || {};
+    const o = (p.order && typeof p.order === "object") ? p.order : {};
+    const ordNo = String(o.order_number ?? p["Order #"] ?? p.order_number ?? "").trim();
+    const key = ordNo || ("__row_" + raw);
+    if (seen.has(key)) { dupes++; continue; }   // rows are newest-first -> first seen wins
+    seen.add(key);
+    const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
+    const custName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "");
+    const items = Array.isArray(p.line_items) ? p.line_items : [];
+    const cabParts = [], lineSet = new Set();
+    let blazerTop = false;
+    for (const it of items) {
+      const num = String((it && it.item_number) ?? "").trim();
+      if (!num) continue;
+      const up = num.toUpperCase();
+      if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
+      if (allow.has(up)) { cabParts.push(num); for (const lid of (prodByPart[up].lines || [])) lineSet.add(lid); }
+    }
+    const status = String(o.status ?? p.status ?? "").trim() || "—";
+    const flags = [];
+    if (cabParts.length === 0) flags.push("needs-setup");
+    if (cabParts.length > 1) flags.push("multi-cab");
+    if (status !== "Queued" && status !== "Processed" && status !== "—") flags.push("status");
+    if (blazerTop) flags.push("blazer-top");
+    orders.push({ order: ordNo || "—", customer: custName, status,
+      date: String(o.date ?? "").slice(0, 10), ship: String(o.ship_date ?? "").slice(0, 10),
+      cabParts, blazerTop, routed: [...lineSet].sort((a, b) => a - b).map((lid) => lineName[lid] || ("Line " + lid)), flags });
+  }
+  orders.sort((a, b) => ((a.status === "Queued" ? 0 : 1) - (b.status === "Queued" ? 0 : 1)) || String(a.order).localeCompare(String(b.order)));
+  const queued = orders.filter((o) => o.status === "Queued").length;
+  const processed = orders.filter((o) => o.status === "Processed").length;
+  const needsSetup = orders.filter((o) => o.flags.includes("needs-setup")).length;
+  const multiCab = orders.filter((o) => o.flags.includes("multi-cab")).length;
+  const oddStatus = orders.filter((o) => o.flags.includes("status")).length;
+  const rmap = {};
+  for (const p of prods) {
+    const ls = (p.lines || []).map((lid) => lineName[lid] || ("Line " + lid)).join(", ") || "—";
+    (rmap[p.family] = rmap[p.family] || new Set()).add(ls);
+  }
+  const routing = Object.entries(rmap).map(([family, set]) => ({ family, lines: [...set].join(" / ") })).sort((a, b) => a.family.localeCompare(b.family));
+  return { orders, raw, distinct: orders.length, dupes, queued, processed, needsSetup, multiCab, oddStatus, routing };
+}
+function intakeInboxPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const chip = (f) => f === "needs-setup" ? `<span class="flag red">needs setup</span>`
+    : f === "multi-cab" ? `<span class="flag blue">multi-cab — split</span>`
+    : f === "status" ? `<span class="flag amber">check status</span>`
+    : f === "blazer-top" ? `<span class="flag grey">+ blazer top (outsourced)</span>` : "";
+  const row = (o) => `<tr>
+    <td><b>${esc(o.order)}</b></td>
+    <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
+    <td>${o.status === "Queued" ? `<span class="st q">Queued</span>` : o.status === "Processed" ? `<span class="st p">Processed</span>` : `<span class="st o">${esc(o.status)}</span>`}</td>
+    <td class="muted">${esc(o.date) || "—"}</td>
+    <td>${o.cabParts.length ? o.cabParts.map(esc).join("<br>") : '<span class="flag red">no cab part</span>'}</td>
+    <td>${o.routed.length ? o.routed.map(esc).join(", ") : '<span class="muted">—</span>'}</td>
+    <td>${o.flags.map(chip).join(" ") || '<span class="muted">ok</span>'}</td>
+  </tr>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Intake</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .muted{opacity:.6}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block}
+  .flag.red{background:#3a1510;color:#ff6b5e}
+  .flag.amber{background:#3a2f10;color:#ffd60a}
+  .flag.blue{background:#10233a;color:#5eaeff}
+  .flag.grey{background:#2c2c2e;color:#aeaeb2}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}
+  .st.p{background:#12331c;color:#5edb84}
+  .st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:92px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}
+  .kpi span{opacity:.6;font-size:.8rem}
+  @media print{ a{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/integrity" style="color:#8e8e93;margin-right:18px">Integrity</a>
+    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Intake — orders from Coyote</h2>
+  <p class="muted" style="margin-top:-8px">The fresh orders Coyote has pushed, collapsed to the <b>latest record per order</b>. This is a review view — <b>nothing here is on the board yet</b>; the mapping job turns these into cabs once the push is finalized. Blazer tops are outsourced and never enter the app.</p>
+  <div style="margin:14px 0">
+    <div class="kpi"><b>${d.distinct}</b><span>fresh orders</span></div>
+    <div class="kpi"><b>${d.queued}</b><span>queued</span></div>
+    <div class="kpi"><b>${d.processed}</b><span>processed</span></div>
+    <div class="kpi"><b>${d.needsSetup}</b><span>needs setup</span></div>
+    <div class="kpi"><b>${d.multiCab}</b><span>multi-cab</span></div>
+    <div class="kpi"><b>${d.oddStatus}</b><span>odd status</span></div>
+  </div>
+  ${d.dupes ? `<p class="muted" style="font-size:.85rem">${d.raw} raw records received · ${d.dupes} older duplicate${d.dupes === 1 ? "" : "s"} collapsed (latest wins).</p>` : ""}
+  <div class="lane">
+    ${d.orders.length ? `<table>
+      <tr><th>Order #</th><th>Customer</th><th>Status</th><th>Ordered</th><th>Cab part(s)</th><th>&rarr; Line</th><th>Flags</th></tr>
+      ${d.orders.map(row).join("")}
+    </table>` : `<div class="muted">No fresh orders right now — the intake queue is clear. New pushes will appear here automatically.</div>`}
+  </div>
+  <div class="lane">
+    <h3>Routing map <span class="muted" style="font-weight:400;font-size:.85rem">(product family &rarr; line)</span></h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">How a cab's part number routes to a production line — the mapping job uses this. Change a product's line in the catalog to change it.</p>
+    <table><tr><th>Family</th><th>Line</th></tr>
+      ${d.routing.map((r) => `<tr><td>${esc(r.family)}</td><td>${esc(r.lines)}</td></tr>`).join("")}
+    </table>
+  </div>
+  <p class="muted" style="font-size:.85rem;text-align:center">Read-only. When the push contract is final, the mapping job will read this same fresh set, split multi-cab orders, assign cab numbers, and place cabs on the board — stamping each order handled so it's never re-mapped.</p>
 </div></body></html>`;
 }
 
@@ -4136,6 +4275,18 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", integrityPage(data));
     }
 
+    // COYOTE INTAKE INBOX (Track A) — admin-only, read-only review of the
+    // orders Coyote has pushed, before the mapping job builds them into cabs.
+    if (url.pathname === "/intake") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await intakeInboxData();
+      return send(200, "text/html; charset=utf-8", intakeInboxPage(data));
+    }
+
     // TECH FINISH (file 11, builder half): every non-background step complete
     // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
     // (Q104); the paused clock there is management's bottleneck (Q53/C11).
@@ -5232,8 +5383,17 @@ self.addEventListener("notificationclick", (e) => {
       try { parsed = JSON.parse(raw || "{}"); } catch { parseOk = false; }
       // Best-effort Order # pull for at-a-glance queries — Coyote's own field
       // name first (packet §4: sent as TEXT, exactly as stored, never reformatted).
-      const orderNo = parseOk && parsed && typeof parsed === "object"
-        ? String(parsed["Order #"] ?? parsed.order_number ?? parsed.OrderNumber ?? parsed.order ?? "") : "";
+      // Aaron's REAL payload nests the order under `order` (order.order_number);
+      // the old bare `parsed.order` fallback stringified that OBJECT -> stored
+      // "[object Object]". Read the nested number; only accept `order` if SCALAR.
+      const _oo = parseOk && parsed && typeof parsed === "object" ? parsed : null;
+      const _ord = _oo && _oo.order && typeof _oo.order === "object" ? _oo.order : null;
+      const _orderNoRaw = _oo ? (
+        _oo["Order #"] ?? _oo.order_number ?? _oo.OrderNumber ??
+        (_ord ? (_ord.order_number ?? _ord["Order #"] ?? _ord.OrderNumber) : undefined) ??
+        (typeof _oo.order === "string" || typeof _oo.order === "number" ? _oo.order : undefined)
+      ) : undefined;
+      const orderNo = (_orderNoRaw == null) ? "" : String(_orderNoRaw);
       const [row] = await db("coyote_intake", { method: "POST",
         body: JSON.stringify({ order_number: orderNo || null, payload: parseOk ? parsed : null,
           raw_text: parseOk ? null : raw, parse_ok: parseOk }) });
