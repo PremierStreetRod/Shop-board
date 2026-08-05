@@ -2802,7 +2802,32 @@ async function reportData(startMs, endMs) {
     row.hrs += hrs; row.n++; dtTotal += hrs; dtCount++;
   }
   const downtime = { total: dtTotal, count: dtCount, byReason: Object.values(dtMap).sort((a, b) => b.hrs - a.hrs) };
-  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime };
+  // ON-TIME TREND (Q26): the last 6 Phoenix months, INDEPENDENT of the window
+  // picker above — throughput (cabs shipped) + on-time % + avg days late per
+  // month, so the owner can see if the shop is trending better. Reuses the
+  // completion + promise data already loaded; no extra queries.
+  const MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthKey = (ms) => phxDate(ms).slice(0, 7);
+  const nowMonth = monthKey(nowMs);
+  const months = [];
+  { let y = +nowMonth.slice(0, 4), m = +nowMonth.slice(5, 7);
+    for (let i = 0; i < 6; i++) { months.unshift(`${y}-${String(m).padStart(2, "0")}`); m--; if (m === 0) { m = 12; y--; } } }
+  const tMap = {}; for (const k of months) tMap[k] = { done: 0, onT: 0, rated: 0, lateSum: 0 };
+  for (const b of builds) {
+    if (b.state !== "production_complete" || !doneAt[b.id]) continue;
+    const k = monthKey(doneAt[b.id]); const row = tMap[k]; if (!row) continue;
+    row.done++;
+    const prom = b.promised_finish || ""; if (!prom) continue;
+    row.rated++;
+    const compDate = phxDate(doneAt[b.id]);
+    if (compDate <= prom) row.onT++;
+    else row.lateSum += Math.round((Date.parse(compDate + "T00:00:00Z") - Date.parse(prom + "T00:00:00Z")) / 86400000);
+  }
+  const trend = months.map((k) => { const r = tMap[k]; const lateN = r.rated - r.onT; return {
+    month: k, label: MON[+k.slice(5, 7)] + " " + k.slice(0, 4), done: r.done, rated: r.rated,
+    pct: r.rated ? Math.round(100 * r.onT / r.rated) : null,
+    avgLate: lateN ? Math.round(r.lateSum / lateN * 10) / 10 : 0 }; });
+  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime, trend };
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
@@ -2850,6 +2875,16 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
       ${d.onTime.lateList.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th>Promised</th><th>Finished</th><th class="num">Days late</th></tr>
         ${d.onTime.lateList.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td style="opacity:.7">${c.promised}</td><td style="opacity:.7">${c.completed}</td><td class="num way">+${c.daysLate}</td></tr>`).join("")}</table>` : ""}`
     : `<div style="opacity:.6">No cabs with a promised date finished in this period.</div>`}
+  </div>
+  <div class="lane">
+    <h3>On-time trend <span style="opacity:.55;font-weight:400;font-size:.85rem">— last 6 months</span></h3>
+    <table><tr><th>Month</th><th class="num">Shipped</th><th class="num">On-time</th><th style="width:38%"></th><th class="num">Avg late</th></tr>
+      ${d.trend.map((m) => `<tr><td>${m.label}</td><td class="num">${m.done}</td>
+        <td class="num">${m.pct === null ? "—" : m.pct + "%"}</td>
+        <td>${m.pct === null ? `<span style="opacity:.4">no promised cabs</span>` : `<div style="background:#2c2c2e;border-radius:6px;height:10px"><div style="height:10px;border-radius:6px;width:${m.pct}%;background:${m.pct >= 90 ? "#30d158" : m.pct >= 75 ? "#ff9f0a" : "var(--red)"}"></div></div>`}</td>
+        <td class="num">${m.avgLate ? m.avgLate + " d" : "—"}</td></tr>`).join("")}
+    </table>
+    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Shipped = cabs signed off that month (throughput). On-time % is of that month's cabs that had a promised date. The bar climbing means the shop is getting more predictable.</div>
   </div>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=products&${d.qs}">⬇ CSV</a>
