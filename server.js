@@ -2755,7 +2755,54 @@ async function reportData(startMs, endMs) {
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
-  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes };
+  // ON-TIME DELIVERY (Q26): of the cabs signed off in the window, how many
+  // finished on or before their PROMISED date. promised_finish is a Phoenix
+  // calendar date (YYYY-MM-DD, fixed per Q103-6); compare it to the sign-off's
+  // Phoenix date. Cabs with no promise on file are counted separately, not scored.
+  const completedInWin = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && doneAt[b.id] <= winEnd);
+  let onT = 0, lateN = 0, noProm = 0, lateDaysSum = 0;
+  const lateList = [];
+  for (const b of completedInWin) {
+    const prom = b.promised_finish || "";
+    if (!prom) { noProm++; continue; }
+    const compDate = phxDate(doneAt[b.id]);
+    if (compDate <= prom) { onT++; }
+    else {
+      lateN++;
+      const dl = Math.round((Date.parse(compDate + "T00:00:00Z") - Date.parse(prom + "T00:00:00Z")) / 86400000);
+      lateDaysSum += dl;
+      lateList.push({ order: b.order_number, cab: b.cab_number || "", part: b.part_number || "?", line: lineName[b.line_id] || "?", promised: prom, completed: compDate, daysLate: dl });
+    }
+  }
+  const ratedN = onT + lateN;
+  lateList.sort((a, b) => b.daysLate - a.daysLate);
+  const onTime = { onTime: onT, late: lateN, noPromise: noProm, rated: ratedN,
+    pct: ratedN ? Math.round(100 * onT / ratedN) : null,
+    avgDaysLate: lateN ? Math.round(lateDaysSum / lateN * 10) / 10 : 0, lateList };
+  // DOWNTIME BY REASON (Q26): where "down for today" holds cost production time.
+  // Each hold runs from when it was placed until a clock-in RESUMED that line the
+  // SAME day, or — if it stayed down — the shop's close that day (holds auto-clear
+  // at day end, block 33). Summed by reason so the biggest loss is obvious.
+  const downEv = await db(`event_log?select=at,event_type,payload&event_type=in.(line.down,line.down_resumed)&order=at.asc&limit=4000`);
+  const downs = [], resumes = [];
+  for (const e of downEv) {
+    const t = new Date(e.at).getTime(), lid = e.payload && e.payload.line_id;
+    if (e.event_type === "line.down") downs.push({ t, lid, reason: (e.payload && e.payload.reason) || "(no reason)" });
+    else resumes.push({ t, lid });
+  }
+  const shD = await shopHours();
+  const dtMap = {}; let dtTotal = 0, dtCount = 0;
+  for (const hld of downs) {
+    if (hld.t < sinceMs || hld.t > winEnd) continue;
+    const hDay = phxDate(hld.t);
+    let end = dayEndOf(hld.t, shD.close);
+    for (const r of resumes) { if (r.lid === hld.lid && r.t > hld.t && phxDate(r.t) === hDay && r.t < end) end = r.t; }
+    const hrs = Math.max(0, (end - hld.t) / 3600000);
+    const row = dtMap[hld.reason] || (dtMap[hld.reason] = { reason: hld.reason, hrs: 0, n: 0 });
+    row.hrs += hrs; row.n++; dtTotal += hrs; dtCount++;
+  }
+  const downtime = { total: dtTotal, count: dtCount, byReason: Object.values(dtMap).sort((a, b) => b.hrs - a.hrs) };
+  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime };
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
@@ -2797,6 +2844,13 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <p style="margin:8px 0 2px"><b>${d.label}</b> · showing <b>${d.rangeText}</b> <span style="opacity:.55">(Phoenix dates)</span></p>
   </div>
   <script>function rpGo(){var f=document.getElementById("rp-from").value,t=document.getElementById("rp-to").value;if(!f||!t){return;}location.href="/reports?from="+f+"&to="+t;}</script>
+  <div class="lane">
+    <h3>On-time delivery${d.onTime.pct === null ? "" : ` — <span style="color:${d.onTime.pct >= 90 ? "#30d158" : d.onTime.pct >= 75 ? "#ff9f0a" : "var(--red)"}">${d.onTime.pct}%</span>`}</h3>
+    ${d.onTime.rated ? `<p style="margin:-4px 0 10px;opacity:.85"><b>${d.onTime.onTime}</b> of <b>${d.onTime.rated}</b> cab${d.onTime.rated === 1 ? "" : "s"} finished on or before the promised date${d.onTime.late ? ` · <b>${d.onTime.late}</b> late (avg <b>${d.onTime.avgDaysLate}</b> day${d.onTime.avgDaysLate === 1 ? "" : "s"} over)` : ""}.${d.onTime.noPromise ? ` <span style="opacity:.55">${d.onTime.noPromise} more had no promised date on file — not scored.</span>` : ""}</p>
+      ${d.onTime.lateList.length ? `<table><tr><th>Order</th><th>Cab #</th><th>Product</th><th>Line</th><th>Promised</th><th>Finished</th><th class="num">Days late</th></tr>
+        ${d.onTime.lateList.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.part}</td><td>${c.line}</td><td style="opacity:.7">${c.promised}</td><td style="opacity:.7">${c.completed}</td><td class="num way">+${c.daysLate}</td></tr>`).join("")}</table>` : ""}`
+    : `<div style="opacity:.6">No cabs with a promised date finished in this period.</div>`}
+  </div>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=products&${d.qs}">⬇ CSV</a>
     <h3>Actual vs standard — by product (${d.cabs.length} cab${d.cabs.length === 1 ? "" : "s"} signed off)</h3>
@@ -2841,6 +2895,13 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <h3>Rework (${d.rework.n} in period)</h3>
     ${d.rework.n ? Object.entries(d.rework.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.85">${r} — ${n}</div>`).join("")
     : `<div style="opacity:.6">No rework assigned in this period. Good.</div>`}
+  </div>
+  <div class="lane">
+    <h3>Downtime by reason${d.downtime.count ? ` — <span style="opacity:.85">${h1(d.downtime.total)} h across ${d.downtime.count} hold${d.downtime.count === 1 ? "" : "s"}</span>` : ""}</h3>
+    ${d.downtime.count ? `<table><tr><th>Reason</th><th class="num">Hours lost</th><th class="num">Holds</th><th class="num">Share</th></tr>
+      ${d.downtime.byReason.map((r) => `<tr><td>${r.reason}</td><td class="num">${h1(r.hrs)} h</td><td class="num">${r.n}</td><td class="num" style="opacity:.6">${d.downtime.total ? Math.round(100 * r.hrs / d.downtime.total) : 0}%</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">A "down for today" hold runs until a clock-in resumed the line that day, or the shop's close if it stayed down. This is production time lost to stoppages — where to look first to protect the schedule.</div>`
+    : `<div style="opacity:.6">No line-down holds in this period.</div>`}
   </div>
   <!-- Q85 suite 5: SIGN-OFF ESCAPES — cabs that came BACK after manager sign-off
        (Body Shop kickbacks + customer returns). The number the inspection gate
