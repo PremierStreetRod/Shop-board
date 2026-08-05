@@ -2845,6 +2845,10 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
   .over{color:#ff9f0a}.way{color:var(--red)}.under{color:#30d158}
   .csv{float:right;font-size:.8rem;color:#8e8e93}
   .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
+  .drow{cursor:pointer}.drow:hover{background:rgba(255,255,255,.04)}
+  .drill{display:none}.drill>td{padding:0 8px 12px}
+  .drill table{margin:4px 0 2px;font-size:.88rem;background:rgba(255,255,255,.02);border-radius:8px}
+  .drill th{opacity:.4}
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
@@ -2890,8 +2894,10 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <a class="csv" href="/reports.csv?which=products&${d.qs}">⬇ CSV</a>
     <h3>Actual vs standard — by product (${d.cabs.length} cab${d.cabs.length === 1 ? "" : "s"} signed off)</h3>
     ${d.products.length ? `<table><tr><th>Product</th><th class="num">Cabs</th><th class="num">Avg standard</th><th class="num">Avg actual</th><th class="num">Variance</th></tr>
-      ${d.products.map((p) => `<tr><td>${p.part}</td><td class="num">${p.n}</td><td class="num">${h1(p.avgStd)} h</td><td class="num">${h1(p.avgActual)} h</td>
-        <td class="num ${p.varPct === null ? "" : p.varPct > 25 ? "way" : p.varPct > 0 ? "over" : "under"}">${p.varPct === null ? "—" : (p.varPct > 0 ? "+" : "") + p.varPct + "%"}</td></tr>`).join("")}</table>
+      ${d.products.map((p, i) => { const kids = d.cabs.filter((c) => c.part === p.part); return `<tr class="drow" onclick="dtoggle('dp${i}')"><td>▸ ${p.part}</td><td class="num">${p.n}</td><td class="num">${h1(p.avgStd)} h</td><td class="num">${h1(p.avgActual)} h</td>
+        <td class="num ${p.varPct === null ? "" : p.varPct > 25 ? "way" : p.varPct > 0 ? "over" : "under"}">${p.varPct === null ? "—" : (p.varPct > 0 ? "+" : "") + p.varPct + "%"}</td></tr>
+      <tr id="dp${i}" class="drill"><td colspan="5"><table><tr><th>Order</th><th>Cab #</th><th>Line</th><th class="num">Std</th><th class="num">Actual</th><th class="num">Var</th><th>Completed</th><th>Signed off by</th></tr>
+        ${kids.map((c) => `<tr><td><b>${c.order}</b></td><td>${c.cab || "—"}</td><td>${c.line}</td><td class="num">${h1(c.std)}</td><td class="num">${h1(c.actual)}</td><td class="num ${c.varPct === null ? "" : c.varPct > 25 ? "way" : c.varPct > 0 ? "over" : "under"}">${c.varPct === null ? "—" : (c.varPct > 0 ? "+" : "") + c.varPct + "%"}</td><td style="opacity:.7">${c.completed}</td><td>${c.by}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Actual = clocked man-hours on the cab's line from start to sign-off — never task timers. This table is what trues the standards up over time.</div>`
     : `<div style="opacity:.6">No cabs signed off in this period.</div>`}
   </div>
@@ -2914,7 +2920,9 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <a class="csv" href="/reports.csv?which=labor&${d.qs}">⬇ CSV</a>
     <h3>Labor — clocked hours per person</h3>
     ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
-      ${d.labor.map((r) => `<tr><td>${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>`).join("")}</table>
+      ${d.labor.map((r, i) => { const days = d.timecards.filter((t) => t.name === r.name); return `<tr class="drow" onclick="dtoggle('dl${i}')"><td>▸ ${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>
+      <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Paid</th><th class="num">Shop</th><th>Notes</th></tr>
+        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Coaching and coverage view — never shown on the floor board (file 12 privacy rule).</div>`
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
@@ -2948,6 +2956,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
          ${Object.entries(d.escapes.reasons).map(([r, n]) => `<div style="padding:3px 0;opacity:.75">${r} — ${n}</div>`).join("")}`
       : `<div style="opacity:.6">No cabs came back after sign-off in this period. That's the goal.</div>`}
   </div>
+  <script>function dtoggle(id){var e=document.getElementById(id);if(!e)return;e.style.display=(e.style.display==="table-row")?"none":"table-row";}</script>
 </div></body></html>`;
 
 // CSV export (file 12 universal controls) — same numbers as the page,
