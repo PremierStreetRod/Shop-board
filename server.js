@@ -3196,6 +3196,7 @@ function intakeInboxPage(d) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Intake</title>${style}
 <style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
   .lane h3{margin:0 0 10px}
   table{width:100%;border-collapse:collapse;font-size:.92rem}
@@ -3343,6 +3344,7 @@ function mapperPreviewPage(d) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Mapper preview</title>${style}
 <style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
   .lane h3{margin:0 0 10px}
   table{width:100%;border-collapse:collapse;font-size:.92rem}
@@ -3451,6 +3453,7 @@ function pushDiffPage(d) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Latest push</title>${style}
 <style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
   .lane h3{margin:0 0 10px}
   table{width:100%;border-collapse:collapse;font-size:.92rem}
@@ -3562,7 +3565,7 @@ function feedMonitorPage(d) {
   const ago = (m) => m == null ? "—" : m < 60 ? m + " min ago" : m < 1440 ? Math.floor(m / 60) + "h " + (m % 60) + "m ago" : Math.floor(m / 1440) + "d ago";
   const health = d.sinceMin == null ? { cls: "muted", txt: "No pushes received yet." }
     : d.sinceMin <= 90 ? { cls: "ok", txt: "Live — last push " + ago(d.sinceMin) + "." }
-    : d.inWindow ? { cls: "warn", txt: "No push in " + ago(d.sinceMin) + " during work hours — most likely a quiet stretch on the change-only feed, but worth a glance if it stays quiet." }
+    : d.inWindow ? { cls: "warn", txt: "Last push " + ago(d.sinceMin) + " during work hours — most likely a quiet stretch on the change-only feed, but worth a glance if it stays quiet." }
     : { cls: "muted", txt: "Last push " + ago(d.sinceMin) + ". Outside the 6 AM–6 PM window — pushes resume in the morning." };
   const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
   const batchBlock = (b) => `<details><summary><b>${esc(b.time)}</b> · ${b.n} order${b.n === 1 ? "" : "s"} <span class="muted">· ${b.q} queued · ${b.pr} processed${b.other ? ` · ${b.other} other` : ""}</span></summary>
@@ -3575,6 +3578,7 @@ function feedMonitorPage(d) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Coyote feed</title>${style}
 <style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
   .lane h3{margin:0 0 10px}
   table{width:100%;border-collapse:collapse;font-size:.92rem}
