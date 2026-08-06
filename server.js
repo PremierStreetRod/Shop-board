@@ -2328,6 +2328,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
     <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
     <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
+    <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3488,6 +3489,134 @@ function pushDiffPage(d) {
     + sect("✏️ Changed", changedRows, "<th>Order #</th><th>Customer</th><th>What changed</th>", "Orders present in both pushes with an edited field. A status change (e.g. Queued → Hold) shows here when the push carries it as a row.")
     + sect("🚪 Fell off (was Queued, gone now)", goneRows, "<th>Order #</th><th>Customer</th><th>Last status</th>", "Were Queued in the previous push and absent from this one. On a full-snapshot push that means the order left the active set — a Hold, a ship, or a cancel. Check Coyote to confirm which.")
     + `<p class="muted" style="font-size:.85rem;text-align:center">Read-only. This is the standing version of the manual push-to-push diff — it answers "what moved" every time a push lands, no queries needed.</p>
+</div></body></html>`;
+}
+
+// ============================================================
+// COYOTE FEED MONITOR (Track A, admin-only, READ-ONLY). Eyes on the intake:
+// data-health stats (how much data, fresh vs handled, growth, rough size) plus
+// a push-activity log (every push batch received, newest first, expandable to
+// its orders). Robust to any push shape — it just reports what landed, no
+// full-snapshot/fall-off assumptions. Serves the "is the data piling up" worry
+// and lets us watch the hourly pushes land. Writes nothing.
+async function feedMonitorData() {
+  // health from small columns (all rows)
+  const meta = await db(`coyote_intake?select=order_number,received_at,processed_at&limit=100000`);
+  const total = meta.length;
+  let fresh = 0, handled = 0; const byOrder = {}, perDay = {}; let oldest = null, newest = null;
+  for (const r of meta) {
+    if (r.processed_at) handled++; else fresh++;
+    const on = String(r.order_number ?? "").trim(); if (on) byOrder[on] = (byOrder[on] || 0) + 1;
+    const day = String(r.received_at).slice(0, 10); perDay[day] = (perDay[day] || 0) + 1;
+    if (!oldest || r.received_at < oldest) oldest = r.received_at;
+    if (!newest || r.received_at > newest) newest = r.received_at;
+  }
+  const distinct = Object.keys(byOrder).length;
+  const dupeRows = total - distinct, dupeOrders = Object.values(byOrder).filter((n) => n > 1).length;
+  const days = Object.keys(perDay).sort().reverse().slice(0, 14).map((day) => ({ day, n: perDay[day] }));
+  // recent payloads for the push log + a storage sample
+  const rows = await db(`coyote_intake?select=payload,received_at&order=received_at.desc&limit=1000`);
+  let sampleBytes = 0;
+  const recs = rows.map((r) => {
+    const s = JSON.stringify(r.payload || {}); sampleBytes += s.length;
+    const p = r.payload || {}, o = (p.order && typeof p.order === "object") ? p.order : {};
+    const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
+    return { t: new Date(r.received_at).getTime(), received: r.received_at,
+      ord: String(o.order_number ?? p.order_number ?? "").trim() || "—",
+      status: String(o.status ?? "").trim() || "—",
+      customer: [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "") };
+  });
+  const avgBytes = rows.length ? Math.round(sampleBytes / rows.length) : 0, estBytes = avgBytes * total;
+  // group recent rows into push batches (gap > 30 min = a new push)
+  const batches = [];
+  if (recs.length) {
+    let cur = [recs[0]];
+    for (let i = 1; i < recs.length; i++) { if (cur[cur.length - 1].t - recs[i].t > 30 * 60 * 1000) { batches.push(cur); cur = [recs[i]]; } else cur.push(recs[i]); }
+    batches.push(cur);
+  }
+  const stamp = (iso) => { const dt = new Date(new Date(iso).getTime() - 7 * 3600 * 1000); return dt.toISOString().slice(0, 16).replace("T", " "); };
+  const log = batches.slice(0, 20).map((b) => {
+    const q = b.filter((x) => x.status === "Queued").length, pr = b.filter((x) => x.status === "Processed").length;
+    return { time: stamp(b[0].received), n: b.length, q, pr, other: b.length - q - pr,
+      orders: b.map((x) => ({ ord: x.ord, status: x.status, customer: x.customer })) };
+  });
+  return { total, fresh, handled, distinct, dupeRows, dupeOrders, days,
+    oldest: oldest ? stamp(oldest) : "—", newest: newest ? stamp(newest) : "—",
+    avgBytes, estBytes, batchCount: batches.length, sampled: rows.length, log };
+}
+function feedMonitorPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const fmtB = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB";
+  const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
+  const batchBlock = (b) => `<details><summary><b>${esc(b.time)}</b> · ${b.n} order${b.n === 1 ? "" : "s"} <span class="muted">· ${b.q} queued · ${b.pr} processed${b.other ? ` · ${b.other} other` : ""}</span></summary>
+    <table style="margin-top:8px"><tr><th>Order #</th><th>Status</th><th>Customer</th></tr>
+    ${b.orders.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${stat(o.status)}</td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td></tr>`).join("")}
+    </table></details>`;
+  const maxDay = Math.max(1, ...d.days.map((x) => x.n));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Coyote feed</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:6px 8px;border-top:1px solid var(--line)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{opacity:.6}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}.st.p{background:#12331c;color:#5edb84}.st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:96px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  details{border-top:1px solid var(--line);padding:8px 0}
+  summary{cursor:pointer;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary:before{content:"▸ ";opacity:.5}
+  details[open] summary:before{content:"▾ "}
+  .bar{display:inline-block;height:8px;background:#5eaeff;border-radius:4px;vertical-align:middle;margin-left:8px}
+  @media print{ a{display:none} details{border:none} details>*:not(summary){display:block} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
+    <a href="/changes" style="color:#8e8e93;margin-right:18px">Changes</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Coyote feed <span class="muted" style="font-size:.6em;font-weight:400">— activity &amp; data health</span></h2>
+  <p class="muted" style="margin-top:-8px">A live look at the intake: how much data we're holding and every push as it lands. Read-only — nothing here changes the board or the data.</p>
+  <div style="margin:14px 0">
+    <div class="kpi"><b>${d.total}</b><span>rows total</span></div>
+    <div class="kpi"><b>${d.fresh}</b><span>fresh</span></div>
+    <div class="kpi"><b>${d.handled}</b><span>handled</span></div>
+    <div class="kpi"><b>${d.distinct}</b><span>distinct orders</span></div>
+    <div class="kpi"><b>${d.dupeRows}</b><span>extra rows</span></div>
+  </div>
+  <div class="lane">
+    <h3>Data health</h3>
+    <table>
+      <tr><td>Oldest row</td><td class="num">${esc(d.oldest)}</td></tr>
+      <tr><td>Newest row</td><td class="num">${esc(d.newest)}</td></tr>
+      <tr><td>Fresh (not yet acted on) / Handled</td><td class="num">${d.fresh} / ${d.handled}</td></tr>
+      <tr><td>Distinct orders / extra (change-history) rows</td><td class="num">${d.distinct} / ${d.dupeRows}${d.dupeOrders ? ` (${d.dupeOrders} orders w/ history)` : ""}</td></tr>
+      <tr><td>Avg payload size <span class="muted">(sampled ${d.sampled})</span></td><td class="num">${fmtB(d.avgBytes)}</td></tr>
+      <tr><td>Estimated payload data held</td><td class="num">${fmtB(d.estBytes)}</td></tr>
+    </table>
+    <p class="muted" style="font-size:.82rem;margin:8px 0 0">Payload-size figures are estimates from a live sample; the table on disk runs somewhat larger with indexes. At this size storage is not a concern — archiving is a future housekeeping step, not an urgent one.</p>
+  </div>
+  <div class="lane">
+    <h3>Rows received per day <span class="muted" style="font-weight:400;font-size:.82em">(days with pushes, newest first)</span></h3>
+    ${d.days.length ? `<table>${d.days.map((x) => `<tr><td>${esc(x.day)}</td><td class="num">${x.n}<span class="bar" style="width:${Math.round((x.n / maxDay) * 160)}px"></span></td></tr>`).join("")}</table>` : `<div class="muted">No rows yet.</div>`}
+  </div>
+  <div class="lane">
+    <h3>Push activity <span class="muted" style="font-weight:400;font-size:.82em">(each push, newest first — click to expand)</span></h3>
+    <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">Every push burst that landed, grouped by arrival time (Phoenix). A quiet hour on a change-only feed sends nothing, so gaps between pushes are normal — this shows what actually arrived.</p>
+    ${d.log.length ? d.log.map(batchBlock).join("") : `<div class="muted">No pushes yet.</div>`}
+    ${d.batchCount > d.log.length ? `<p class="muted" style="font-size:.82rem;margin-top:10px">Showing the ${d.log.length} most recent pushes of ${d.batchCount} in the sample.</p>` : ""}
+  </div>
+  <p class="muted" style="font-size:.85rem;text-align:center">Read-only monitor. Fresh rows are what the mapper will act on; handled rows are done or set aside (never deleted — reversible).</p>
 </div></body></html>`;
 }
 
@@ -4816,6 +4945,17 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await pushDiffData();
       return send(200, "text/html; charset=utf-8", pushDiffPage(data));
+    }
+
+    // COYOTE FEED MONITOR (admin-only, read-only). Data health + push log.
+    if (url.pathname === "/feed") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await feedMonitorData();
+      return send(200, "text/html; charset=utf-8", feedMonitorPage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
