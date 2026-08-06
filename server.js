@@ -3708,8 +3708,8 @@ async function orderHistoryData(n) {
   const routed = [...new Set(recParts.flatMap((x) => (prodByPart[x.toUpperCase()].lines || []).map((lid) => lineName[lid] || ("Line " + lid))))].sort();
   const family = [...new Set(recParts.map((x) => prodByPart[x.toUpperCase()].family))].join(", ");
   return { order: ord, asked: true, found: true, customer: cur.customer, current: cur,
-    mapping: { group: cls.group, state: cls.state, reason: cls.reason, routed, family,
-      unknownParts: cur.parts.filter((x) => !allow.has(x.toUpperCase()) && x.toUpperCase() !== "PSR-BLZR-TOP") },
+    mapping: { group: cls.group, state: cls.state, reason: cls.reason, routed, family, recParts,
+      otherItems: cur.parts.filter((x) => !allow.has(x.toUpperCase()) && x.toUpperCase() !== "PSR-BLZR-TOP") },
     history, pushCount: history.length, changed: history.filter((h) => h.changes.length).length,
     firstSeen: history[0].stamp, lastSeen: history[history.length - 1].stamp };
 }
@@ -3735,7 +3735,7 @@ function orderHistoryPage(d) {
       <table>
         <tr><td>Status</td><td class="num">${stChip(cur.status)}</td></tr>
         <tr><td>Customer</td><td class="num">${esc(cur.customer) || "—"}</td></tr>
-        <tr><td>Cab part(s)</td><td class="num">${cur.parts.length ? cur.parts.map(esc).join(", ") : '<span class="muted">—</span>'}${m.unknownParts.length ? ` <span class="flag red">unknown: ${m.unknownParts.map(esc).join(", ")}</span>` : ""}${cur.blazerTop ? ' <span class="flag grey">+ blazer top</span>' : ""}</td></tr>
+        <tr><td>Cab part(s)</td><td class="num">${m.recParts.length ? m.recParts.map(esc).join(", ") : (cur.blazerTop ? '<span class="muted">blazer top only (outsourced)</span>' : '<span class="flag red">no recognized cab part</span>')}${m.recParts.length && m.otherItems.length ? ` <span class="muted">· +${m.otherItems.length} option${m.otherItems.length === 1 ? "" : "s"}/labor</span>` : ""}${!m.recParts.length && !cur.blazerTop && m.otherItems.length ? ` <span class="muted" style="font-size:.85em">(${m.otherItems.map(esc).join(", ")})</span>` : ""}${cur.blazerTop && m.recParts.length ? ' <span class="flag grey">+ blazer top</span>' : ""}</td></tr>
         <tr><td>Family → line</td><td class="num">${esc(m.family) || "—"}${m.routed.length ? " → " + m.routed.map(esc).join(", ") : ""}</td></tr>
         <tr><td>Ordered / ship</td><td class="num">${esc(cur.date) || "—"} / ${esc(cur.ship) || "—"}</td></tr>
         <tr><td>Would map to</td><td class="num"><b>${esc(m.state)}</b></td></tr>
