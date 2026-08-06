@@ -3183,7 +3183,7 @@ function intakeInboxPage(d) {
     : f === "status" ? `<span class="flag amber">check status</span>`
     : f === "blazer-top" ? `<span class="flag grey">+ blazer top (outsourced)</span>` : "";
   const row = (o) => `<tr>
-    <td><b>${esc(o.order)}</b></td>
+    <td><b><a href="/order?n=${encodeURIComponent(o.order)}" style="color:inherit;text-decoration:underline dotted">${esc(o.order)}</a></b></td>
     <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
     <td>${o.status === "Queued" ? `<span class="st q">Queued</span>` : o.status === "Processed" ? `<span class="st p">Processed</span>` : `<span class="st o">${esc(o.status)}</span>`}</td>
     <td class="muted">${esc(o.date) || "—"}</td>
@@ -3321,7 +3321,7 @@ function mapperPreviewPage(d) {
   const clip = (s, n) => s.length > n ? esc(s.slice(0, n)) + "…" : esc(s);
   const g = (name) => d.orders.filter((o) => o.group === name);
   const placeRow = (o) => `<tr>
-    <td><b>${esc(o.order)}</b></td>
+    <td><b><a href="/order?n=${encodeURIComponent(o.order)}" style="color:inherit;text-decoration:underline dotted">${esc(o.order)}</a></b></td>
     <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
     <td>${o.parts.map((p) => esc(p.part)).join("<br>") || '<span class="muted">—</span>'}</td>
     <td>${esc(o.family) || '<span class="muted">—</span>'}</td>
@@ -3331,7 +3331,7 @@ function mapperPreviewPage(d) {
     <td>${o.hasNote ? '<span class="flag amber">note → review</span>' : '<span class="muted">—</span>'}</td>
   </tr>${o.splits.length ? `<tr class="sub"><td></td><td colspan="7"><span class="muted">splits into:</span> ${o.splits.map((s) => `<b>${esc(s.sub)}</b> ${esc(s.part)} → ${esc(s.line)}`).join(" · ")}</td></tr>` : ""}${o.hasNote ? `<tr class="sub"><td></td><td colspan="7"><span class="muted">invoice note:</span> ${clip(o.note, 220)}</td></tr>` : ""}`;
   const simpleRow = (o) => `<tr>
-    <td><b>${esc(o.order)}</b></td>
+    <td><b><a href="/order?n=${encodeURIComponent(o.order)}" style="color:inherit;text-decoration:underline dotted">${esc(o.order)}</a></b></td>
     <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
     <td>${o.parts.map((p) => esc(p.part)).join("<br>") || (o.blazerTop ? '<span class="muted">blazer top</span>' : '<span class="flag red">no cab part</span>')}</td>
     <td>${o.status === "Queued" ? '<span class="st q">Queued</span>' : o.status === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(o.status)}</span>`}</td>
@@ -3483,9 +3483,9 @@ function pushDiffPage(d) {
     <div class="kpi"><b>${d.gone.length}</b><span>fell off</span></div>
     <div class="kpi"><b>${d.unchanged}</b><span>unchanged</span></div>
   </div>`;
-  const addedRows = d.added.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)}</td><td>${esc(o.parts) || '<span class="muted">—</span>'}</td></tr>`).join("");
-  const changedRows = d.changed.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td class="chg">${o.changes.map((c) => `${esc(c.field)}: <b>${clip(c.before, 50)}</b> → <b>${clip(c.after, 50)}</b>`).join("<br>")}</td></tr>`).join("");
-  const goneRows = d.gone.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)} <span class="muted">last seen</span></td></tr>`).join("");
+  const addedRows = d.added.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)}</td><td>${esc(o.parts) || '<span class="muted">—</span>'}</td></tr>`).join("");
+  const changedRows = d.changed.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td class="chg">${o.changes.map((c) => `${esc(c.field)}: <b>${clip(c.before, 50)}</b> → <b>${clip(c.after, 50)}</b>`).join("<br>")}</td></tr>`).join("");
+  const goneRows = d.gone.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)} <span class="muted">last seen</span></td></tr>`).join("");
   const sect = (title, rows, headcols, sub) => `<div class="lane"><h3>${title} <span class="muted" style="font-weight:400;font-size:.8em">(${rows ? rows.split("</tr>").length - 1 : 0})</span></h3>${sub ? `<p class="muted" style="margin:-4px 0 8px;font-size:.85rem">${sub}</p>` : ""}${rows ? `<table><tr>${headcols}</tr>${rows}</table>` : `<div class="muted">None.</div>`}</div>`;
   return head + intro + kpis
     + sect("🆕 New in this push", addedRows, "<th>Order #</th><th>Customer</th><th>Status</th><th>Cab part(s)</th>", "Orders Queued in this push that weren't in the previous one.")
@@ -3570,7 +3570,7 @@ function feedMonitorPage(d) {
   const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
   const batchBlock = (b) => `<details><summary><b>${esc(b.time)}</b> · ${b.n} order${b.n === 1 ? "" : "s"} <span class="muted">· ${b.q} queued · ${b.pr} processed${b.other ? ` · ${b.other} other` : ""}</span></summary>
     <table style="margin-top:8px"><tr><th>Order #</th><th>Status</th><th>Customer</th></tr>
-    ${b.orders.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${stat(o.status)}</td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td></tr>`).join("")}
+    ${b.orders.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${stat(o.status)}</td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td></tr>`).join("")}
     </table></details>`;
   const maxDay = Math.max(1, ...d.days.map((x) => x.n));
   return `<!doctype html>
@@ -3654,6 +3654,153 @@ function feedMonitorPage(d) {
     ${d.batchCount > d.log.length ? `<p class="muted" style="font-size:.82rem;margin-top:10px">Showing the ${d.log.length} most recent pushes of ${d.batchCount} in the sample.</p>` : ""}
   </div>
   <p class="muted" style="font-size:.85rem;text-align:center">Read-only monitor. Fresh rows are what the mapper will act on; handled rows are done or set aside (never deleted — reversible).</p>
+</div></body></html>`;
+}
+
+// ============================================================
+// ORDER HISTORY — one order's full Coyote push history (admin-only, READ-ONLY).
+// Companion to /changes (all orders in the latest push) and /intake (all orders,
+// latest state): this is ONE order, EVERY push over time — the first snapshot
+// plus a row per change, with field-by-field diffs, plus how the order currently
+// maps to the board. Reachable by clicking any order # on the Coyote pages, or by
+// typing a number in the lookup box. Writes NOTHING. Keys on the
+// coyote_intake.order_number column; n is user-supplied, so it is shape-guarded
+// and URL-encoded before the query (no PostgREST filter injection).
+async function orderHistoryData(n) {
+  const ord = String(n == null ? "" : n).trim();
+  if (!ord) return { order: "", asked: false, found: false, history: [] };
+  if (!/^[A-Za-z0-9._-]{1,32}$/.test(ord)) return { order: ord, asked: true, found: false, badKey: true, history: [] };
+  const prods = await db(`product?select=part_number,family,lines`);
+  const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
+  const lns = await db(`line?select=id,name`);
+  const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
+  const allow = new Set(Object.keys(prodByPart));
+  const rows = await db(`coyote_intake?select=payload,received_at,processed_at&order_number=eq.${encodeURIComponent(ord)}&order=received_at.asc&limit=5000`);
+  const stamp = (iso) => { try { return new Date(new Date(iso).getTime() - 7 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " "); } catch (e) { return "—"; } };
+  const snap = (p) => {
+    const o = (p && p.order && typeof p.order === "object") ? p.order : {};
+    const c = (p && p.customer && typeof p.customer === "object") ? p.customer : {};
+    const custName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "");
+    const items = Array.isArray(p && p.line_items) ? p.line_items : [];
+    const parts = []; let blazerTop = false;
+    for (const it of items) {
+      const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
+      if (num.toUpperCase() === "PSR-BLZR-TOP") { blazerTop = true; continue; }
+      parts.push(num);
+    }
+    return { status: String(o.status ?? p.status ?? "").trim() || "—", date: String(o.date ?? "").slice(0, 10),
+      ship: String(o.ship_date ?? "").slice(0, 10), note: String(o.invoice_note ?? "").trim(), customer: custName, parts, blazerTop };
+  };
+  const FIELDS = [["status", "Status"], ["date", "Ordered"], ["ship", "Ship date"], ["note", "Invoice note"], ["parts", "Cab part(s)"]];
+  const val = (s, f) => f === "parts" ? s.parts.join(", ") : String(s[f] || "");
+  const history = []; let prev = null;
+  for (const r of rows) {
+    const s = snap(r.payload || {});
+    const changes = [];
+    if (prev) for (const [f, label] of FIELDS) { if (val(s, f) !== val(prev, f)) changes.push({ field: label, before: val(prev, f) || "—", after: val(s, f) || "—" }); }
+    history.push({ stamp: stamp(r.received_at), processed: r.processed_at != null, snap: s, changes, first: prev == null });
+    prev = s;
+  }
+  if (!history.length) return { order: ord, asked: true, found: false, history: [] };
+  const cur = history[history.length - 1].snap;
+  const recParts = cur.parts.filter((x) => allow.has(x.toUpperCase()));
+  const cls = classifyOrder({ status: cur.status, cabPartsCount: recParts.length, hasBlazerTop: cur.blazerTop });
+  const routed = [...new Set(recParts.flatMap((x) => (prodByPart[x.toUpperCase()].lines || []).map((lid) => lineName[lid] || ("Line " + lid))))].sort();
+  const family = [...new Set(recParts.map((x) => prodByPart[x.toUpperCase()].family))].join(", ");
+  return { order: ord, asked: true, found: true, customer: cur.customer, current: cur,
+    mapping: { group: cls.group, state: cls.state, reason: cls.reason, routed, family,
+      unknownParts: cur.parts.filter((x) => !allow.has(x.toUpperCase()) && x.toUpperCase() !== "PSR-BLZR-TOP") },
+    history, pushCount: history.length, changed: history.filter((h) => h.changes.length).length,
+    firstSeen: history[0].stamp, lastSeen: history[history.length - 1].stamp };
+}
+function orderHistoryPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const clip = (s, n) => { s = String(s == null ? "" : s); return s.length > n ? esc(s.slice(0, n)) + "…" : esc(s); };
+  const stChip = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
+  const grpChip = (g) => ({ place: '<span class="flag blue">will place</span>', review: '<span class="flag amber">needs attention</span>', "needs-setup": '<span class="flag red">needs setup</span>', shipped: '<span class="flag grey">shipped — history</span>', excluded: '<span class="flag grey">excluded</span>' }[g] || "");
+  const lookup = `<form method="get" action="/order" style="margin:12px 0">
+    <input name="n" value="${esc(d.order)}" placeholder="Order # (e.g. 23305)" style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:inherit;font-size:1rem;width:220px;max-width:60%">
+    <button style="background:#0a84ff;border:0;border-radius:10px;padding:9px 16px;color:#fff;font-weight:600;cursor:pointer;margin-left:6px">Look up</button></form>`;
+  let body;
+  if (!d.asked) {
+    body = `<div class="lane"><div class="muted">Type an order number above to see its full Coyote history — every push over time, what changed on each, and how it maps to the board.</div></div>`;
+  } else if (d.badKey) {
+    body = `<div class="lane"><div class="muted">"${esc(d.order)}" doesn't look like an order number. Order numbers are letters, digits, dots or dashes — e.g. <b>23305</b> or <b>W115954</b>.</div></div>`;
+  } else if (!d.found) {
+    body = `<div class="lane"><div class="muted">No Coyote records for order <b>${esc(d.order)}</b>. Double-check the number, or browse the <a href="/intake" style="color:#5eaeff">Intake</a> page. Blazer tops (outsourced) and orders never pushed won't appear here.</div></div>`;
+  } else {
+    const m = d.mapping, cur = d.current;
+    const mapLane = `<div class="lane">
+      <h3>Current state &amp; mapping ${grpChip(m.group)}</h3>
+      <table>
+        <tr><td>Status</td><td class="num">${stChip(cur.status)}</td></tr>
+        <tr><td>Customer</td><td class="num">${esc(cur.customer) || "—"}</td></tr>
+        <tr><td>Cab part(s)</td><td class="num">${cur.parts.length ? cur.parts.map(esc).join(", ") : '<span class="muted">—</span>'}${m.unknownParts.length ? ` <span class="flag red">unknown: ${m.unknownParts.map(esc).join(", ")}</span>` : ""}${cur.blazerTop ? ' <span class="flag grey">+ blazer top</span>' : ""}</td></tr>
+        <tr><td>Family → line</td><td class="num">${esc(m.family) || "—"}${m.routed.length ? " → " + m.routed.map(esc).join(", ") : ""}</td></tr>
+        <tr><td>Ordered / ship</td><td class="num">${esc(cur.date) || "—"} / ${esc(cur.ship) || "—"}</td></tr>
+        <tr><td>Would map to</td><td class="num"><b>${esc(m.state)}</b></td></tr>
+        ${cur.note ? `<tr><td>Invoice note</td><td class="num" style="max-width:420px;white-space:normal;text-align:left">${clip(cur.note, 400)} <span class="flag amber">→ review</span></td></tr>` : ""}
+      </table>
+      ${m.reason ? `<p class="muted" style="font-size:.85rem;margin:8px 0 0">${esc(m.reason)}</p>` : ""}
+    </div>`;
+    const histRows = d.history.map((h) => `<tr>
+      <td class="num">${esc(h.stamp)}</td>
+      <td>${stChip(h.snap.status)}</td>
+      <td style="white-space:normal">${h.first ? '<span class="flag blue">first seen</span>' : h.changes.length ? h.changes.map((c) => `<b>${esc(c.field)}</b>: ${clip(c.before, 60)} → ${clip(c.after, 60)}`).join("<br>") : '<span class="muted">no change</span>'}</td>
+      <td>${h.processed ? '<span class="st p">handled</span>' : '<span class="st q">fresh</span>'}</td>
+    </tr>`).join("");
+    const histLane = `<div class="lane">
+      <h3>Push history <span class="muted" style="font-weight:400;font-size:.82em">(${d.pushCount} push${d.pushCount === 1 ? "" : "es"}, oldest first · ${d.changed} with a change)</span></h3>
+      <p class="muted" style="margin:-4px 0 8px;font-size:.85rem">Every time Coyote sent this order — the first snapshot, then one row per change. The mapper reads the newest row as the current state; the older rows are the audit trail.</p>
+      <table><tr><th>Received (Phoenix)</th><th>Status</th><th>What changed</th><th></th></tr>${histRows}</table>
+    </div>`;
+    body = `<div style="margin:14px 0">
+        <div class="kpi"><b>${d.pushCount}</b><span>pushes</span></div>
+        <div class="kpi"><b>${d.changed}</b><span>changes</span></div>
+        <div class="kpi" style="min-width:150px"><b style="font-size:1rem">${esc(d.firstSeen)}</b><span>first seen</span></div>
+        <div class="kpi" style="min-width:150px"><b style="font-size:1rem">${esc(d.lastSeen)}</b><span>last seen</span></div>
+      </div>${mapLane}${histLane}`;
+  }
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Order history</title>${style}
+<style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{opacity:.6}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block}
+  .flag.red{background:#3a1510;color:#ff6b5e}
+  .flag.amber{background:#3a2f10;color:#ffd60a}
+  .flag.blue{background:#10233a;color:#5eaeff}
+  .flag.grey{background:#2c2c2e;color:#aeaeb2}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}
+  .st.p{background:#12331c;color:#5edb84}
+  .st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:96px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  @media print{ a{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:900px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
+    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
+    <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
+    <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Order history${d.found ? ` — <span style="color:#5eaeff">${esc(d.order)}</span>${d.customer ? ` <span class="muted" style="font-size:.6em;font-weight:400">· ${esc(d.customer)}</span>` : ""}` : ""}</h2>
+  <p class="muted" style="margin-top:-8px">One order's full history from Coyote — every push, every change, and how it maps to the board. Read-only.</p>
+  ${lookup}
+  ${body}
 </div></body></html>`;
 }
 
@@ -4993,6 +5140,18 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await feedMonitorData();
       return send(200, "text/html; charset=utf-8", feedMonitorPage(data));
+    }
+
+    // ORDER HISTORY (admin-only, read-only). One order's full Coyote push
+    // history + how it maps. n is shape-guarded + URL-encoded in the data fn.
+    if (url.pathname === "/order") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await orderHistoryData(url.searchParams.get("n"));
+      return send(200, "text/html; charset=utf-8", orderHistoryPage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
