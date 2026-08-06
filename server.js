@@ -2323,6 +2323,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <span style="opacity:.35">|</span>
     <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
     <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
+    <a href="/payroll" style="color:#8e8e93;margin-right:16px">Payroll</a>
     <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
@@ -3246,6 +3247,148 @@ function intakeInboxPage(d) {
   </div>
   <p class="muted" style="font-size:.85rem;text-align:center">Read-only. When the push contract is final, the mapping job will read this same fresh set, split multi-cab orders, assign cab numbers, and place cabs on the board — stamping each order handled so it's never re-mapped.</p>
 </div></body></html>`;
+}
+
+// ============================================================
+// PAY WORKSHEET (payroll hours export) — replaces the manual "Employee Pay
+// Worksheet" that is hand-tallied and emailed to the outsourced payroll company.
+// Shop Board already holds accurate clock hours, so it builds the sheet itself.
+// Owner-rep answers (2026-08-06): HOURS ONLY (no wage rates/pay in the app) ·
+// split Regular (<=8/day) vs Overtime (>8/day) · Sick from approved time-off
+// (reason "Sick") · Unpaid from approved time-off (reason "Unpaid") · round to
+// the nearest quarter-hour · semi-monthly, paid the 1st & 15th · both per-day
+// detail and per-period totals. Admin-only (payroll is sensitive; file 12).
+const roundQ = (h) => Math.round(h * 4) / 4;   // nearest quarter-hour (owner-rep)
+const PAY_STD_DAY = 8;                          // a full sick/unpaid day = 8 h
+function payPeriod(params) {
+  const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const from = params.get("from"), to = params.get("to");
+  if (isDate(from) && isDate(to)) {
+    let f = from, t = to; if (phxDayStart(f) > phxDayStart(t)) { const x = f; f = t; t = x; }
+    return { startMs: phxDayStart(f), endMs: phxDayStart(t) + 86400000, preset: "custom",
+      from: f, to: t, pay: "", label: "Custom range", rangeText: `${f} → ${t}`, qs: `from=${f}&to=${t}` };
+  }
+  const pad = (n) => String(n).padStart(2, "0"), mk = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
+  const shift = (y, m, dl) => { let mm = m + dl, yy = y; while (mm < 1) { mm += 12; yy--; } while (mm > 12) { mm -= 12; yy++; } return [yy, mm]; };
+  // Two periods a month: 11th–25th (paid the 1st of next month) and 26th–10th
+  // (paid the 15th). Cutoffs = owner-rep's best recollection; custom overrides.
+  const periodFor = (y, m, d) => {
+    if (d >= 11 && d <= 25) { const [ny, nm] = shift(y, m, 1); return { f: mk(y, m, 11), t: mk(y, m, 25), pay: mk(ny, nm, 1) }; }
+    if (d >= 26) { const [ny, nm] = shift(y, m, 1); return { f: mk(y, m, 26), t: mk(ny, nm, 10), pay: mk(ny, nm, 15) }; }
+    const [py, pm] = shift(y, m, -1); return { f: mk(py, pm, 26), t: mk(y, m, 10), pay: mk(y, m, 15) };
+  };
+  const today = phxDate(Date.now());
+  let cur = periodFor(+today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10));
+  const preset = params.get("preset") === "last" ? "last" : "this";
+  if (preset === "last") { const pd = phxDate(phxDayStart(cur.f) - 86400000); cur = periodFor(+pd.slice(0, 4), +pd.slice(5, 7), +pd.slice(8, 10)); }
+  return { startMs: phxDayStart(cur.f), endMs: phxDayStart(cur.t) + 86400000, preset, from: cur.f, to: cur.t, pay: cur.pay,
+    label: preset === "last" ? "Last pay period" : "Current pay period", rangeText: `${cur.f} → ${cur.t} · paid ${cur.pay}`, qs: `preset=${preset}` };
+}
+async function payrollData(startMs, endMs) {
+  const nowMs = Date.now();
+  const emps = await db(`employee?select=id,first_name,last_name,active&active=is.true&order=first_name,last_name`);
+  const events = await db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`);
+  const ivs = workIntervals(events, nowMs);
+  const dates = []; for (let ms = startMs; ms < endMs; ms += 86400000) dates.push(phxDate(ms));
+  const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
+  // worked hours per emp per day (dayed by interval start, clipped to window)
+  const worked = {};
+  for (const iv of ivs) {
+    const h = overlapHrs(iv, startMs, endMs); if (h <= 0) continue;
+    const d = phxDate(Math.max(iv.start, startMs));
+    (worked[iv.emp] = worked[iv.emp] || {}); worked[iv.emp][d] = (worked[iv.emp][d] || 0) + h;
+  }
+  // approved time off overlapping the window -> per emp per work-day, by reason
+  const off = {};
+  const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []);
+  for (const r of offRows) {
+    const rl = (r.reason || "").toLowerCase(), type = rl.includes("sick") ? "sick" : rl.includes("unpaid") ? "unpaid" : "other";
+    let ms = Math.max(phxDayStart(r.start_date), startMs); const end = Math.min(phxDayStart(r.end_date) + 86400000, endMs);
+    for (; ms < end; ms += 86400000) { const d = phxDate(ms); if (!workday[d]) continue; (off[r.employee_id] = off[r.employee_id] || {}); off[r.employee_id][d] = { type, reason: r.reason || "" }; }
+  }
+  const rows = emps.map((e) => {
+    const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0; const byDay = {};
+    for (const d of dates) {
+      const h = roundQ(wk[d] || 0), r = Math.min(h, 8), o = Math.max(0, h - 8); reg += r; ot += o;
+      let s = 0, u = 0, otherOff = null;
+      if (of[d]) { if (of[d].type === "sick") s = PAY_STD_DAY; else if (of[d].type === "unpaid") u = PAY_STD_DAY; else otherOff = of[d].reason; }
+      sick += s; unpaid += u;
+      if (h > 0 || s || u || otherOff) byDay[d] = { worked: h, reg: r, ot: o, sick: s, unpaid: u, otherOff };
+    }
+    return { id: e.id, name: `${e.first_name} ${e.last_name}`, reg, ot, sick, unpaid, total: reg + ot + sick + unpaid, byDay };
+  }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || Object.keys(r.byDay).length);
+  const totals = rows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, total: 0 });
+  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals };
+}
+function payrollPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
+  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; return `<td class="c">${t}${marks.length && day.worked ? ' ' + marks.join(' ') : ''}</td>`; };
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Pay Worksheet</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th{opacity:.55;text-align:left;padding:5px 7px;font-weight:600;border-bottom:1px solid var(--line)}
+  td{padding:5px 7px;border-bottom:1px solid var(--line)}
+  td.c,th.c{text-align:center;font-variant-numeric:tabular-nums}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{opacity:.55}.ot{color:#ff9f0a;font-size:.82em}.sk{color:#5eaeff;font-weight:600}.up{color:#ff6b5e;font-weight:600}
+  .csv{float:right;font-size:.82rem;color:#8e8e93}
+  .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
+  @media print{ a,.per{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1200px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Pay Worksheet</h2>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Regular (up to 8/day) and Overtime (over 8/day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. This replaces the hand-tallied worksheet; download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <div class="lane per" style="line-height:2.1">
+    <span style="opacity:.55">Pay period:</span>
+    <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
+    <a href="/payroll?preset=last" class="${d.preset === "last" ? "on" : ""}">Last</a>
+    <span style="opacity:.55;margin-left:10px">Custom:</span>
+    From <input type="date" id="pp-from" value="${esc(d.from)}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+    To <input type="date" id="pp-to" value="${esc(d.to)}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+    <button onclick="ppGo()" style="background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer;${d.preset === "custom" ? "outline:2px solid #30d158" : ""}">Show</button>
+    <p style="margin:8px 0 2px"><b>${esc(d.label)}</b> · <b>${esc(d.rangeText)}</b> <span style="opacity:.55">(Phoenix dates)</span></p>
+  </div>
+  <script>function ppGo(){var f=document.getElementById("pp-from").value,t=document.getElementById("pp-to").value;if(!f||!t)return;location.href="/payroll?from="+f+"&to="+t;}</script>
+  <div class="lane">
+    <a class="csv" href="/payroll.csv?${d.qs}">⬇ CSV for payroll</a>
+    <h3>Totals for the period</h3>
+    ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Unpaid</th><th class="num">Total</th></tr>
+      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
+      <tr style="border-top:2px solid var(--line)"><td><b>All (${d.rows.length})</b></td><td class="num"><b>${h1(d.totals.reg)}</b></td><td class="num"><b>${h1(d.totals.ot)}</b></td><td class="num"><b>${h1(d.totals.sick)}</b></td><td class="num"><b>${h1(d.totals.unpaid)}</b></td><td class="num"><b>${h1(d.totals.total)}</b></td></tr></table>`
+    : `<div class="muted">No hours in this pay period.</div>`}
+  </div>
+  ${d.rows.length ? `<div class="lane" style="overflow-x:auto">
+    <h3>Day by day <span class="muted" style="font-weight:400;font-size:.85rem">(work days only · OT = over 8h · S = sick · U = unpaid)</span></h3>
+    <table><tr><th>Employee</th>${wd.map((ds) => `<th class="c">${dow(ds)}<br><span class="muted" style="font-weight:400">${ds.slice(5)}</span></th>`).join("")}<th class="num">Total</th></tr>
+      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td>${wd.map((ds) => cell(r.byDay[ds])).join("")}<td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
+    </table>
+  </div>` : ""}
+  <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here.</p>
+</div></body></html>`;
+}
+function payrollCsv(d) {
+  const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const L = [];
+  L.push(["Shop Board — Pay Worksheet", d.label, d.rangeText].map(q).join(","));
+  L.push("");
+  L.push(["Employee", "Regular", "Overtime", "Sick", "Unpaid", "Total"].map(q).join(","));
+  for (const r of d.rows) L.push([r.name, h1(r.reg), h1(r.ot), h1(r.sick), h1(r.unpaid), h1(r.total)].map(q).join(","));
+  L.push(["ALL", h1(d.totals.reg), h1(d.totals.ot), h1(d.totals.sick), h1(d.totals.unpaid), h1(d.totals.total)].map(q).join(","));
+  L.push(""); L.push(""); L.push(q("Day-by-day detail"));
+  L.push(["Employee", "Date", "Weekday", "Worked", "Regular", "Overtime", "Sick", "Unpaid"].map(q).join(","));
+  const dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
+  for (const r of d.rows) for (const ds of d.workdays) { const c = r.byDay[ds]; if (!c) continue; L.push([r.name, ds, dow(ds), h1(c.worked), h1(c.reg), h1(c.ot), h1(c.sick), h1(c.unpaid)].map(q).join(",")); }
+  return L.join("\n");
 }
 
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
@@ -4335,6 +4478,24 @@ http.createServer(async (req, res) => {
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
     // Staff-level numbers never reach the floor (file 12 privacy rule).
+    // PAY WORKSHEET (payroll hours export) — admin-only (payroll is sensitive).
+    if (url.pathname === "/payroll" || url.pathname === "/payroll.csv") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const period = payPeriod(url.searchParams);
+      const data = await payrollData(period.startMs, period.endMs);
+      Object.assign(data, { preset: period.preset, from: period.from, to: period.to, pay: period.pay, qs: period.qs, label: period.label, rangeText: period.rangeText });
+      if (url.pathname === "/payroll.csv") {
+        const tag = period.preset === "custom" ? `${period.from}_to_${period.to}` : (period.to || period.preset);
+        res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="shopboard-payroll-${tag}.csv"` });
+        return res.end(payrollCsv(data));
+      }
+      return send(200, "text/html; charset=utf-8", payrollPage(data));
+    }
+
     if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
