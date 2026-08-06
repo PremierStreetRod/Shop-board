@@ -2326,6 +2326,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/payroll" style="color:#8e8e93;margin-right:16px">Payroll</a>
     <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
+    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3246,6 +3247,137 @@ function intakeInboxPage(d) {
     </table>
   </div>
   <p class="muted" style="font-size:.85rem;text-align:center">Read-only. When the push contract is final, the mapping job will read this same fresh set, split multi-cab orders, assign cab numbers, and place cabs on the board — stamping each order handled so it's never re-mapped.</p>
+</div></body></html>`;
+}
+
+// ============================================================
+// COYOTE -> BOARD MAPPER — DRY-RUN PREVIEW (Track A, admin-only, READ-ONLY).
+// Shows exactly what the mapping job WOULD create for every fresh Coyote order
+// BEFORE anything is written to the board, so it can be checked against the
+// physical whiteboard first. Writes NOTHING. Cadence-independent: it reads the
+// same latest-per-order fresh set the mapper will, so whatever cadence the
+// developer settles on (change-only vs full-record) does not change this view.
+// Cab # is deliberately NOT invented here — the floor/whiteboard owns the cab
+// counter until cutover and the app mirrors it; match rows to the board by
+// ORDER # (the canonical key). We map order #, cab part -> product -> line,
+// status -> board placement, the invoice note (-> manager review), and
+// multi-cab splits — the build-record shape a Queued order becomes.
+function classifyOrder(o) {
+  const st = o.status, hasCab = o.cabPartsCount > 0;
+  if (!hasCab) {
+    if (o.hasBlazerTop) return { group: "excluded", state: "—", reason: "Blazer top only — outsourced, never built here." };
+    return { group: "needs-setup", state: "—", reason: "No recognized cab part — add the part to the catalog, or the order isn't a cab." };
+  }
+  if (st === "Queued") return { group: "place", state: o.cabPartsCount > 1 ? "upcoming · split" : "upcoming", reason: "" };
+  if (st === "Processed") return { group: "shipped", state: "shipped", reason: "Already shipped — kept as history, not placed on the live board." };
+  return { group: "review", state: "held", reason: st === "—" ? "No status on the order — check Coyote before mapping." : `Status "${st}" is outside Queued/Processed (e.g. Hold) — not placed until it is back to Queued.` };
+}
+async function mapperPreviewData() {
+  const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
+  const prods = await db(`product?select=part_number,family,lines`);
+  const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
+  const lns = await db(`line?select=id,name`);
+  const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
+  const allow = new Set(Object.keys(prodByPart));
+  const seen = new Set(); const orders = []; let raw = 0, dupes = 0;
+  for (const r of rows) {
+    raw++;
+    const p = r.payload || {};
+    const o = (p.order && typeof p.order === "object") ? p.order : {};
+    const ordNo = String(o.order_number ?? p.order_number ?? "").trim();
+    const key = ordNo || ("__row_" + raw);
+    if (seen.has(key)) { dupes++; continue; }   // newest-first -> first seen wins
+    seen.add(key);
+    const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
+    const custName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "");
+    const items = Array.isArray(p.line_items) ? p.line_items : [];
+    const cabParts = []; let blazerTop = false;
+    for (const it of items) {
+      const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
+      const up = num.toUpperCase();
+      if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
+      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)) }); }
+    }
+    const status = String(o.status ?? "").trim() || "—";
+    const note = String(o.invoice_note ?? "").trim();
+    const cls = classifyOrder({ status, cabPartsCount: cabParts.length, hasBlazerTop: blazerTop });
+    const splits = cabParts.length > 1 ? cabParts.map((cp, i) => ({ sub: `${ordNo}.${i + 1}`, part: cp.part, line: cp.lines.join(", ") })) : [];
+    orders.push({ order: ordNo || "—", customer: custName, status, group: cls.group, propState: cls.state, reason: cls.reason,
+      date: String(o.date ?? "").slice(0, 10), ship: String(o.ship_date ?? "").slice(0, 10),
+      parts: cabParts, lines: [...new Set(cabParts.flatMap((cp) => cp.lines))], family: [...new Set(cabParts.map((cp) => cp.family))].join(", "),
+      note, hasNote: !!note, blazerTop, splits });
+  }
+  const rank = { place: 0, review: 1, "needs-setup": 2, shipped: 3, excluded: 4 };
+  orders.sort((a, b) => (rank[a.group] - rank[b.group]) || String(a.order).localeCompare(String(b.order)));
+  const counts = { place: 0, review: 0, "needs-setup": 0, shipped: 0, excluded: 0, note: 0, split: 0 };
+  for (const o of orders) { counts[o.group] = (counts[o.group] || 0) + 1; if (o.group === "place" && o.hasNote) counts.note++; if (o.group === "place" && o.splits.length) counts.split++; }
+  return { orders, raw, distinct: orders.length, dupes, counts };
+}
+function mapperPreviewPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const clip = (s, n) => s.length > n ? esc(s.slice(0, n)) + "…" : esc(s);
+  const g = (name) => d.orders.filter((o) => o.group === name);
+  const placeRow = (o) => `<tr>
+    <td><b>${esc(o.order)}</b></td>
+    <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
+    <td>${o.parts.map((p) => esc(p.part)).join("<br>") || '<span class="muted">—</span>'}</td>
+    <td>${esc(o.family) || '<span class="muted">—</span>'}</td>
+    <td>${o.lines.length ? o.lines.map(esc).join(", ") : '<span class="flag amber">no line</span>'}</td>
+    <td><span class="st q">${esc(o.propState)}</span></td>
+    <td class="muted">${esc(o.ship || o.date) || "—"}</td>
+    <td>${o.hasNote ? '<span class="flag amber">note → review</span>' : '<span class="muted">—</span>'}</td>
+  </tr>${o.splits.length ? `<tr class="sub"><td></td><td colspan="7"><span class="muted">splits into:</span> ${o.splits.map((s) => `<b>${esc(s.sub)}</b> ${esc(s.part)} → ${esc(s.line)}`).join(" · ")}</td></tr>` : ""}${o.hasNote ? `<tr class="sub"><td></td><td colspan="7"><span class="muted">invoice note:</span> ${clip(o.note, 220)}</td></tr>` : ""}`;
+  const simpleRow = (o) => `<tr>
+    <td><b>${esc(o.order)}</b></td>
+    <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
+    <td>${o.parts.map((p) => esc(p.part)).join("<br>") || (o.blazerTop ? '<span class="muted">blazer top</span>' : '<span class="flag red">no cab part</span>')}</td>
+    <td>${o.status === "Queued" ? '<span class="st q">Queued</span>' : o.status === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(o.status)}</span>`}</td>
+    <td class="muted">${esc(o.reason)}</td>
+  </tr>`;
+  const section = (title, rows, head, sub) => `<div class="lane"><h3>${title} <span class="muted" style="font-weight:400;font-size:.8em">(${rows.length})</span></h3>${sub ? `<p class="muted" style="margin:-4px 0 8px;font-size:.85rem">${sub}</p>` : ""}${rows.length ? `<table><tr>${head}</tr>${rows.join("")}</table>` : `<div class="muted">None.</div>`}</div>`;
+  const place = g("place"), review = g("review"), needs = g("needs-setup"), shipped = g("shipped"), excluded = g("excluded");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Mapper preview</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
+  tr.sub td{border-top:none;padding-top:0;font-size:.85rem}
+  .muted{opacity:.6}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block}
+  .flag.red{background:#3a1510;color:#ff6b5e}.flag.amber{background:#3a2f10;color:#ffd60a}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}.st.p{background:#12331c;color:#5edb84}.st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:92px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  @media print{ a{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1050px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Mapper preview <span class="muted" style="font-size:.6em;font-weight:400">— dry run, nothing is written</span></h2>
+  <p class="muted" style="margin-top:-8px">Exactly what the mapping job <b>would</b> put on the board for each fresh Coyote order, so you can check it against the whiteboard first. This writes <b>nothing</b> — no cab is placed and no order is marked handled. <b>Cab #s aren't shown</b> on purpose: the floor assigns those and the app mirrors the wall, so match rows to the board by <b>order #</b>. When the push contract is final, the write step promotes these — and the mapping is already correct no matter how often the developer pushes.</p>
+  <div style="margin:14px 0">
+    <div class="kpi"><b>${place.length}</b><span>will place</span></div>
+    <div class="kpi"><b>${d.counts.split}</b><span>multi-cab</span></div>
+    <div class="kpi"><b>${d.counts.note}</b><span>note → review</span></div>
+    <div class="kpi"><b>${review.length + needs.length}</b><span>need attention</span></div>
+    <div class="kpi"><b>${shipped.length}</b><span>shipped (skip)</span></div>
+  </div>
+  ${d.dupes ? `<p class="muted" style="font-size:.85rem">${d.raw} raw records · ${d.dupes} older duplicate${d.dupes === 1 ? "" : "s"} collapsed (latest per order wins).</p>` : ""}
+  ${section("✅ Will be placed on the board", place.map(placeRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Family</th><th>→ Line</th><th>Board state</th><th>Target ship</th><th>Note</th>', "Queued orders with a recognized cab part. Each becomes an upcoming cab on its routed line; a multi-cab order splits into dotted sub-orders; an invoice note rides onto the cab and raises a manager-review flag.")}
+  ${(review.length || needs.length) ? section("⚠️ Need attention before mapping", [...review, ...needs].map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Why it is held back</th>', "Not placed automatically — an unusual status (e.g. Hold), or a part the catalog does not recognize. Resolve it in Coyote or the catalog and it flows through on the next look.") : ""}
+  ${shipped.length ? section("🚚 Already shipped — kept as history, not placed", shipped.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Note</th>', "Processed = shipped. These stay in the record but do not clutter the live board.") : ""}
+  ${excluded.length ? section("⛔ Excluded", excluded.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Why</th>', "Blazer tops are outsourced and never enter the app.") : ""}
+  <p class="muted" style="font-size:.85rem;text-align:center">Read-only preview. The write step — promote an order to a real cab on the board, idempotent and keyed on order # — is the small follow-on once the push cadence is confirmed. The mapping shown here does not change either way.</p>
 </div></body></html>`;
 }
 
@@ -4551,6 +4683,18 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await intakeInboxData();
       return send(200, "text/html; charset=utf-8", intakeInboxPage(data));
+    }
+
+    // COYOTE -> BOARD MAPPER — dry-run preview (admin-only, read-only). Shows
+    // what the mapping job WOULD create for each fresh order; writes nothing.
+    if (url.pathname === "/mapper") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await mapperPreviewData();
+      return send(200, "text/html; charset=utf-8", mapperPreviewPage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
