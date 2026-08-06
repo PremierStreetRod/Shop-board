@@ -2327,6 +2327,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
     <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
+    <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3378,6 +3379,115 @@ function mapperPreviewPage(d) {
   ${shipped.length ? section("🚚 Already shipped — kept as history, not placed", shipped.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Note</th>', "Processed = shipped. These stay in the record but do not clutter the live board.") : ""}
   ${excluded.length ? section("⛔ Excluded", excluded.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Why</th>', "Blazer tops are outsourced and never enter the app.") : ""}
   <p class="muted" style="font-size:.85rem;text-align:center">Read-only preview. The write step — promote an order to a real cab on the board, idempotent and keyed on order # — is the small follow-on once the push cadence is confirmed. The mapping shown here does not change either way.</p>
+</div></body></html>`;
+}
+
+// ============================================================
+// LATEST PUSH — WHAT CHANGED (Track A, admin-only, READ-ONLY). Productizes the
+// hand-run push-to-push diff: compares the most recent Coyote push against the
+// one before it and reports what's NEW, what CHANGED (status/ship/note/parts,
+// with before->after), and what FELL OFF (was Queued in the prior push, absent
+// now — the tell for a status change like Queued->Hold when the push filters to
+// Queued/Processed). Writes nothing. Compares the ACTIVE (Queued) set, so
+// terminal Processed/shipped orders don't show up as false "fell off".
+function diffFields(a, b) {   // a = newer, b = older; returns list of changes
+  const out = [];
+  if (a.status !== b.status) out.push({ field: "status", before: b.status, after: a.status });
+  if (a.ship !== b.ship) out.push({ field: "ship date", before: b.ship || "—", after: a.ship || "—" });
+  if (a.note !== b.note) out.push({ field: "invoice note", before: b.note || "(blank)", after: a.note || "(blank)" });
+  if (a.parts !== b.parts) out.push({ field: "cab part(s)", before: b.parts || "—", after: a.parts || "—" });
+  return out;
+}
+async function pushDiffData() {
+  const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
+  const recs = rows.map((r) => {
+    const p = r.payload || {}, o = (p.order && typeof p.order === "object") ? p.order : {};
+    const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
+    const items = Array.isArray(p.line_items) ? p.line_items : [];
+    const parts = items.map((it) => String((it && it.item_number) ?? "").trim()).filter(Boolean).sort().join(", ");
+    return { t: new Date(r.received_at).getTime(), ord: String(o.order_number ?? p.order_number ?? "").trim(),
+      status: String(o.status ?? "").trim() || "—", ship: String(o.ship_date ?? "").slice(0, 10),
+      note: String(o.invoice_note ?? "").trim(), parts,
+      customer: [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || ""), received: r.received_at };
+  }).filter((r) => r.ord);
+  if (!recs.length) return { empty: true };
+  // split into push batches: a burst is seconds, pushes are hours/days apart
+  const GAP = 30 * 60 * 1000, batches = []; let cur = [recs[0]];
+  for (let i = 1; i < recs.length; i++) {
+    if (cur[cur.length - 1].t - recs[i].t > GAP) { batches.push(cur); cur = [recs[i]]; } else cur.push(recs[i]);
+  }
+  batches.push(cur);
+  const latest = batches[0], prev = batches[1] || [];
+  const mapOf = (b) => { const m = {}; for (const r of b) if (!(r.ord in m)) m[r.ord] = r; return m; }; // desc -> first = newest
+  const A = mapOf(latest), B = mapOf(prev);
+  const stamp = (iso) => { const d = new Date(new Date(iso).getTime() - 7 * 3600 * 1000); return d.toISOString().slice(0, 16).replace("T", " "); };
+  const added = [], changed = []; let unchanged = 0;
+  for (const k of Object.keys(A)) {
+    if (!(k in B)) { if (A[k].status === "Queued") added.push(A[k]); continue; }
+    const fx = diffFields(A[k], B[k]);
+    if (fx.length) changed.push({ ...A[k], changes: fx }); else unchanged++;
+  }
+  const gone = Object.keys(B).filter((k) => B[k].status === "Queued" && !(k in A)).map((k) => B[k]);
+  const bo = (x, y) => String(x.ord).localeCompare(String(y.ord));
+  added.sort(bo); changed.sort(bo); gone.sort(bo);
+  return { hasPrev: !!batches[1], latestTime: stamp(latest[0].received), latestCount: Object.keys(A).length,
+    prevTime: prev.length ? stamp(prev[0].received) : null, prevCount: Object.keys(B).length,
+    added, changed, gone, unchanged, batchCount: batches.length };
+}
+function pushDiffPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const clip = (s, n) => { s = String(s == null ? "" : s); return s.length > n ? esc(s.slice(0, n)) + "…" : esc(s); };
+  const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
+  const nav = `<div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
+    <a href="/mapper" style="color:#8e8e93;margin-right:18px">Mapper</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>`;
+  const head = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Latest push</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .muted{opacity:.6}
+  .chg{color:#ffd60a}.chg b{color:#fff}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}.st.p{background:#12331c;color:#5edb84}.st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:96px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  @media print{ a{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  ${nav}
+  <h2>Latest push <span class="muted" style="font-size:.6em;font-weight:400">— what changed since the one before</span></h2>`;
+  if (d.empty) return head + `<div class="lane"><div class="muted">No pushes have landed yet. When Coyote sends one, this page shows what's new, changed, or gone versus the previous push.</div></div></div></body></html>`;
+  const intro = `<p class="muted" style="margin-top:-8px">Compares the most recent Coyote push against the one before it — new orders, field edits (status · ship date · invoice note · cab part), and Queued orders that <b>fell off</b> (were Queued last time, absent now — a Hold, a ship, or a cancel). Read-only; nothing is written. Compares the active <b>Queued</b> set, so shipped/Processed orders don't show as false drop-offs.</p>
+  <div class="lane" style="padding:12px 16px">
+    <b>Latest push:</b> ${esc(d.latestTime)} <span class="muted">· ${d.latestCount} order${d.latestCount === 1 ? "" : "s"} in the batch</span><br>
+    <b>Previous push:</b> ${d.prevTime ? esc(d.prevTime) + ` <span class="muted">· ${d.prevCount} order${d.prevCount === 1 ? "" : "s"}</span>` : '<span class="muted">— none earlier to compare against</span>'}
+  </div>`;
+  if (!d.hasPrev) return head + intro + `<div class="lane"><div class="muted">This is the first push on record — there's nothing earlier to diff against yet. The next push will compare against this one.</div></div></div></body></html>`;
+  const kpis = `<div style="margin:14px 0">
+    <div class="kpi"><b>${d.added.length}</b><span>new</span></div>
+    <div class="kpi"><b>${d.changed.length}</b><span>changed</span></div>
+    <div class="kpi"><b>${d.gone.length}</b><span>fell off</span></div>
+    <div class="kpi"><b>${d.unchanged}</b><span>unchanged</span></div>
+  </div>`;
+  const addedRows = d.added.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)}</td><td>${esc(o.parts) || '<span class="muted">—</span>'}</td></tr>`).join("");
+  const changedRows = d.changed.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td class="chg">${o.changes.map((c) => `${esc(c.field)}: <b>${clip(c.before, 50)}</b> → <b>${clip(c.after, 50)}</b>`).join("<br>")}</td></tr>`).join("");
+  const goneRows = d.gone.map((o) => `<tr><td><b>${esc(o.ord)}</b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)} <span class="muted">last seen</span></td></tr>`).join("");
+  const sect = (title, rows, headcols, sub) => `<div class="lane"><h3>${title} <span class="muted" style="font-weight:400;font-size:.8em">(${rows ? rows.split("</tr>").length - 1 : 0})</span></h3>${sub ? `<p class="muted" style="margin:-4px 0 8px;font-size:.85rem">${sub}</p>` : ""}${rows ? `<table><tr>${headcols}</tr>${rows}</table>` : `<div class="muted">None.</div>`}</div>`;
+  return head + intro + kpis
+    + sect("🆕 New in this push", addedRows, "<th>Order #</th><th>Customer</th><th>Status</th><th>Cab part(s)</th>", "Orders Queued in this push that weren't in the previous one.")
+    + sect("✏️ Changed", changedRows, "<th>Order #</th><th>Customer</th><th>What changed</th>", "Orders present in both pushes with an edited field. A status change (e.g. Queued → Hold) shows here when the push carries it as a row.")
+    + sect("🚪 Fell off (was Queued, gone now)", goneRows, "<th>Order #</th><th>Customer</th><th>Last status</th>", "Were Queued in the previous push and absent from this one. On a full-snapshot push that means the order left the active set — a Hold, a ship, or a cancel. Check Coyote to confirm which.")
+    + `<p class="muted" style="font-size:.85rem;text-align:center">Read-only. This is the standing version of the manual push-to-push diff — it answers "what moved" every time a push lands, no queries needed.</p>
 </div></body></html>`;
 }
 
@@ -4695,6 +4805,17 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await mapperPreviewData();
       return send(200, "text/html; charset=utf-8", mapperPreviewPage(data));
+    }
+
+    // LATEST PUSH — WHAT CHANGED (admin-only, read-only). Push-to-push diff.
+    if (url.pathname === "/changes") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await pushDiffData();
+      return send(200, "text/html; charset=utf-8", pushDiffPage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
