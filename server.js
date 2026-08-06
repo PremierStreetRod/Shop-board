@@ -3540,13 +3540,30 @@ async function feedMonitorData() {
     return { time: stamp(b[0].received), n: b.length, q, pr, other: b.length - q - pr,
       orders: b.map((x) => ({ ord: x.ord, status: x.status, customer: x.customer })) };
   });
+  // feed health + growth outlook
+  const nowMs = Date.now();
+  const newestMs = newest ? new Date(newest).getTime() : null, oldestMs = oldest ? new Date(oldest).getTime() : null;
+  const sinceMin = newestMs ? Math.max(0, Math.round((nowMs - newestMs) / 60000)) : null;
+  const phxHr = new Date(nowMs - 7 * 3600 * 1000).getUTCHours();
+  const inWindow = phxHr >= 6 && phxHr < 18;   // Aaron's stated 6 AM–6 PM active window
+  const spanDays = (newestMs && oldestMs) ? Math.max(1, (newestMs - oldestMs) / 86400000) : 1;
+  const rowsPerDay = total / spanDays, bytesPerDay = rowsPerDay * avgBytes;
+  const projMB6 = bytesPerDay * 182 / 1048576, projMB12 = bytesPerDay * 365 / 1048576;
+  const yearsTo1GB = bytesPerDay > 0 ? (1073741824 / bytesPerDay) / 365 : null;
   return { total, fresh, handled, distinct, dupeRows, dupeOrders, days,
     oldest: oldest ? stamp(oldest) : "—", newest: newest ? stamp(newest) : "—",
-    avgBytes, estBytes, batchCount: batches.length, sampled: rows.length, log };
+    avgBytes, estBytes, batchCount: batches.length, sampled: rows.length, log,
+    sinceMin, inWindow, rowsPerDay, spanDays, projMB6, projMB12, yearsTo1GB };
 }
 function feedMonitorPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const fmtB = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB";
+  const fmtMB = (mb) => mb < 1024 ? mb.toFixed(mb < 10 ? 1 : 0) + " MB" : (mb / 1024).toFixed(2) + " GB";
+  const ago = (m) => m == null ? "—" : m < 60 ? m + " min ago" : m < 1440 ? Math.floor(m / 60) + "h " + (m % 60) + "m ago" : Math.floor(m / 1440) + "d ago";
+  const health = d.sinceMin == null ? { cls: "muted", txt: "No pushes received yet." }
+    : d.sinceMin <= 90 ? { cls: "ok", txt: "Live — last push " + ago(d.sinceMin) + "." }
+    : d.inWindow ? { cls: "warn", txt: "No push in " + ago(d.sinceMin) + " during work hours — most likely a quiet stretch on the change-only feed, but worth a glance if it stays quiet." }
+    : { cls: "muted", txt: "Last push " + ago(d.sinceMin) + ". Outside the 6 AM–6 PM window — pushes resume in the morning." };
   const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
   const batchBlock = (b) => `<details><summary><b>${esc(b.time)}</b> · ${b.n} order${b.n === 1 ? "" : "s"} <span class="muted">· ${b.q} queued · ${b.pr} processed${b.other ? ` · ${b.other} other` : ""}</span></summary>
     <table style="margin-top:8px"><tr><th>Order #</th><th>Status</th><th>Customer</th></tr>
@@ -3575,6 +3592,9 @@ function feedMonitorPage(d) {
   summary:before{content:"▸ ";opacity:.5}
   details[open] summary:before{content:"▾ "}
   .bar{display:inline-block;height:8px;background:#5eaeff;border-radius:4px;vertical-align:middle;margin-left:8px}
+  .dot{width:10px;height:10px;border-radius:50%;flex:none;display:inline-block}
+  .dot.ok{background:#30d158}.dot.warn{background:#ffd60a}.dot.muted{background:#8e8e93}
+  .lane.ok{border-color:#1f5133}.lane.warn{border-color:#5a4a10}
   @media print{ a{display:none} details{border:none} details>*:not(summary){display:block} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
@@ -3587,6 +3607,10 @@ function feedMonitorPage(d) {
   </p>
   <h2>Coyote feed <span class="muted" style="font-size:.6em;font-weight:400">— activity &amp; data health</span></h2>
   <p class="muted" style="margin-top:-8px">A live look at the intake: how much data we're holding and every push as it lands. Read-only — nothing here changes the board or the data.</p>
+  <div class="lane ${health.cls}" style="padding:12px 16px;display:flex;align-items:center;gap:10px">
+    <span class="dot ${health.cls}"></span>
+    <div><b>Feed status:</b> ${health.txt}</div>
+  </div>
   <div style="margin:14px 0">
     <div class="kpi"><b>${d.total}</b><span>rows total</span></div>
     <div class="kpi"><b>${d.fresh}</b><span>fresh</span></div>
@@ -3605,6 +3629,15 @@ function feedMonitorPage(d) {
       <tr><td>Estimated payload data held</td><td class="num">${fmtB(d.estBytes)}</td></tr>
     </table>
     <p class="muted" style="font-size:.82rem;margin:8px 0 0">Payload-size figures are estimates from a live sample; the table on disk runs somewhat larger with indexes. At this size storage is not a concern — archiving is a future housekeeping step, not an urgent one.</p>
+  </div>
+  <div class="lane">
+    <h3>Growth outlook</h3>
+    <table>
+      <tr><td>Recent rate</td><td class="num">~${d.rowsPerDay.toFixed(d.rowsPerDay < 10 ? 1 : 0)} rows/day <span class="muted">(over ${d.spanDays.toFixed(0)} day${d.spanDays >= 1.5 ? "s" : ""})</span></td></tr>
+      <tr><td>Projected data in 6 months / 12 months</td><td class="num">~${fmtMB(d.projMB6)} / ~${fmtMB(d.projMB12)}</td></tr>
+      <tr><td>Time to reach 1 GB at this rate</td><td class="num">${d.yearsTo1GB ? "~" + d.yearsTo1GB.toFixed(d.yearsTo1GB < 10 ? 1 : 0) + " years" : "—"}</td></tr>
+    </table>
+    <p class="muted" style="font-size:.82rem;margin:8px 0 0">Rough projection from recent volume, which is currently inflated by one-time backfills — the change-only hourly feed going forward will be much lighter, so treat these as an upper bound. Even so, reaching a size where archiving matters is years out.</p>
   </div>
   <div class="lane">
     <h3>Rows received per day <span class="muted" style="font-weight:400;font-size:.82em">(days with pushes, newest first)</span></h3>
