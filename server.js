@@ -1622,7 +1622,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     if (allowSet && allowSet.has(up)) { if (!cabTaken && !pn) { cabDesc = desc; cabTaken = true; } continue; }
     if (desc) addons.push({ num, desc });
   }
-  const lines = cabDesc.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const lines = cabDesc.split(/[\r\n\u2028\u2029]+/).map((s) => s.trim()).filter(Boolean);
   let model = ""; const features = [];
   if (lines.length) {
     model = lines[0];
