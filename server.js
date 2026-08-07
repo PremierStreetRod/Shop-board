@@ -3283,6 +3283,7 @@ async function mapperPreviewData() {
   const lns = await db(`line?select=id,name`);
   const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
   const allow = new Set(Object.keys(prodByPart));
+  const tmplReady = {}; for (const t of await db(`build_template?select=family,ready`)) tmplReady[t.family] = t.ready;
   const seen = new Set(); const orders = []; let raw = 0, dupes = 0;
   for (const r of rows) {
     raw++;
@@ -3305,8 +3306,13 @@ async function mapperPreviewData() {
     const status = String(o.status ?? "").trim() || "—";
     const note = String(o.invoice_note ?? "").trim();
     const cls = classifyOrder({ status, cabPartsCount: cabParts.length, hasBlazerTop: blazerTop });
+    let group = cls.group, propState = cls.state, reason = cls.reason;
+    if (group === "place" && cabParts.some((cp) => tmplReady[cp.family] === false)) {
+      group = "review"; propState = "held";
+      reason = "New cab — its build steps aren't finished, so it's held off the board until the template is marked ready.";
+    }
     const splits = cabParts.length > 1 ? cabParts.map((cp, i) => ({ sub: `${ordNo}.${i + 1}`, part: cp.part, line: cp.lines.join(", ") })) : [];
-    orders.push({ order: ordNo || "—", customer: custName, status, group: cls.group, propState: cls.state, reason: cls.reason,
+    orders.push({ order: ordNo || "—", customer: custName, status, group, propState, reason,
       date: String(o.date ?? "").slice(0, 10), ship: String(o.ship_date ?? "").slice(0, 10),
       parts: cabParts, lines: [...new Set(cabParts.flatMap((cp) => cp.lines))], family: [...new Set(cabParts.map((cp) => cp.family))].join(", "),
       note, hasNote: !!note, blazerTop, splits });
@@ -3816,8 +3822,8 @@ function orderHistoryPage(d) {
 async function linesManagerData() {
   const lines = await db(`line?select=id,name,enabled&order=id`);
   const prods = await db(`product?select=part_number,family,lines,is_smk&order=family,part_number`);
-  const tmpls = await db(`build_template?select=family`);
-  const famHasTmpl = new Set(tmpls.map((t) => t.family));
+  const tmpls = await db(`build_template?select=id,family,ready`);
+  const tmplByFam = {}; for (const t of tmpls) tmplByFam[t.family] = t;
   const famMap = {};
   for (const p of prods) {
     const f = (famMap[p.family] = famMap[p.family] || { family: p.family, parts: [], lineSet: new Set() });
@@ -3825,7 +3831,8 @@ async function linesManagerData() {
     for (const lid of (p.lines || [])) f.lineSet.add(lid);
   }
   const families = Object.values(famMap).map((f) => ({
-    family: f.family, parts: f.parts, lines: [...f.lineSet].sort((a, b) => a - b), hasTemplate: famHasTmpl.has(f.family),
+    family: f.family, parts: f.parts, lines: [...f.lineSet].sort((a, b) => a - b),
+    hasTemplate: !!tmplByFam[f.family], templateId: tmplByFam[f.family] ? tmplByFam[f.family].id : null, ready: tmplByFam[f.family] ? tmplByFam[f.family].ready : false,
   })).sort((a, b) => a.family.localeCompare(b.family));
   const usage = {}; for (const l of lines) usage[l.id] = [];
   for (const f of families) for (const lid of f.lines) if (usage[lid]) usage[lid].push(f.family);
@@ -3846,7 +3853,7 @@ function linesManagerPage(d) {
       <button class="b" onclick="toggleLine(${l.id},${l.enabled ? "false" : "true"},this)">${l.enabled ? "Disable" : "Enable"}</button>
     </td></tr>`;
   const famCard = (f, i) => `<div class="lane">
-    <h3 style="margin-bottom:4px">${esc(f.family)} ${f.hasTemplate ? "" : '<span class="flag amber">no build steps yet</span>'}</h3>
+    <h3 style="margin-bottom:4px">${esc(f.family)} ${!f.hasTemplate ? '<span class="flag amber">no template</span>' : f.ready ? '<span class="st p">Ready</span>' : '<span class="flag amber">Draft — held off the board</span>'}</h3>
     <p class="muted" style="margin:0 0 8px;font-size:.85rem">Part${f.parts.length === 1 ? "" : "s"}: ${f.parts.map((p) => `<code>${esc(p.part_number)}</code>${p.is_smk ? '<span class="muted">·smk</span>' : ""}`).join(" &nbsp; ")}</p>
     <div class="checks">${lineChecks("rt-" + i, f.lines)}</div>
     <div style="margin-top:8px">
@@ -3855,6 +3862,13 @@ function linesManagerPage(d) {
       <input id="pn-${i}" placeholder="add a part #" style="${inp};width:190px">
       <button class="b" onclick="addPart(${i},this)">Add part &rarr; accepted</button>
     </div>
+    ${f.templateId ? `<div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:.85rem">
+      <a href="/admin?tpl=${f.templateId}" style="color:#5eaeff">Edit build steps</a>
+      <span style="margin:0 8px;opacity:.3">|</span>
+      ${f.ready
+        ? `<button class="b" onclick="tmplReady('${f.templateId}',false,this)">Set back to draft</button>`
+        : `<button class="b grn" onclick="tmplReady('${f.templateId}',true,this)">Mark ready</button> <span class="muted">— add the build steps first</span>`}
+    </div>` : ""}
   </div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -3936,6 +3950,7 @@ function linesManagerPage(d) {
   function routeFam(i,b){ var L=ckl("rt-"+i); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"route",family:FAM[i],lines:L},b); }
   function addPart(i,b){ if(!v("pn-"+i).trim())return alert("Enter a part number"); var L=ckl("rt-"+i); if(!L.length)return alert("Check the line(s) it routes to, above"); post("/api/admin/catalog",{action:"add-part",part_number:v("pn-"+i),family:FAM[i],lines:L},b); }
   function addCab(b){ if(!v("nc-pn").trim()||!v("nc-fam").trim())return alert("Part number and cab/family both needed"); var L=ckl("nc-lines"); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"add-part",part_number:v("nc-pn"),family:v("nc-fam"),lines:L},b); }
+  function tmplReady(id,to,b){ post("/api/admin/template",{action:to?"mark-ready":"mark-draft",template_id:id},b); }
 </script>
 </body></html>`;
 }
@@ -6158,12 +6173,47 @@ self.addEventListener("notificationclick", (e) => {
         if (!wantLines.length) return json(400, { ok: false, error: "Pick at least one active line" });
         const [exist] = await db(`product?select=part_number&part_number=eq.${encodeURIComponent(pn)}`);
         if (exist) return json(400, { ok: false, error: `${pn} is already in the catalog` });
-        const [tmpl] = await db(`build_template?select=id&family=eq.${encodeURIComponent(family)}`);
+        let [tmpl] = await db(`build_template?select=id&family=eq.${encodeURIComponent(family)}`);
+        let newFamily = false;
+        if (!tmpl) {
+          // Brand-new family: create a DRAFT build template (no steps yet, ready=false).
+          // The cab is accepted + routed, but held off the live board until an admin
+          // fills in its build steps/hours and marks it ready (migration 0028).
+          [tmpl] = await db("build_template", { method: "POST", body: JSON.stringify({ family, total_man_hours: 0, total_days: 0, ready: false }) });
+          newFamily = true;
+          logEvent("template.created_draft", adminId, { template_id: tmpl ? tmpl.id : null, family });
+        }
         await db("product", { method: "POST", body: JSON.stringify({ part_number: pn, family, lines: wantLines, template_id: tmpl ? tmpl.id : null, is_smk: /SMK/.test(pn) }) });
-        logEvent("catalog.part_added", adminId, { part_number: pn, family, lines: wantLines, has_template: !!tmpl });
-        return json(200, { ok: true, has_template: !!tmpl });
+        logEvent("catalog.part_added", adminId, { part_number: pn, family, lines: wantLines, new_family: newFamily });
+        return json(200, { ok: true, new_family: newFamily });
       }
       return json(400, { ok: false, error: "Unknown catalog action" });
+    }
+
+    // TEMPLATE ready-gate (admin): mark a cab's build template ready — allowed
+    // only once it has real steps that add up to > 0 hours — or set it back to
+    // draft. A draft template's cab is accepted + routed but held off the board.
+    if (url.pathname === "/api/admin/template" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      if (!isUuid(p.template_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [t] = await db(`build_template?select=id,family,ready&id=eq.${p.template_id}`);
+      if (!t) return json(404, { ok: false, error: "Cab template not found" });
+      if (p.action === "mark-ready") {
+        const steps = await db(`step_template?select=man_hours&template_id=eq.${t.id}&retired=is.false`);
+        if (!steps.length) return json(400, { ok: false, error: "Add the build steps before marking this cab ready" });
+        const totalHrs = steps.reduce((s, x) => s + (Number(x.man_hours) || 0), 0);
+        if (totalHrs <= 0) return json(400, { ok: false, error: "The build steps add up to 0 hours — set real hours before marking ready" });
+        await db(`build_template?id=eq.${t.id}`, { method: "PATCH", body: JSON.stringify({ ready: true }) });
+        logEvent("template.marked_ready", adminId, { template_id: t.id, family: t.family, steps: steps.length, total_hours: totalHrs });
+        return json(200, { ok: true });
+      }
+      if (p.action === "mark-draft") {
+        await db(`build_template?id=eq.${t.id}`, { method: "PATCH", body: JSON.stringify({ ready: false }) });
+        logEvent("template.set_draft", adminId, { template_id: t.id, family: t.family });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown template action" });
     }
 
     // BUILD STEPS: the Q97 editor. Template edits shape FUTURE cabs only —
