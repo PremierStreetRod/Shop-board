@@ -4126,6 +4126,14 @@ function syncPage(d) {
   <div style="margin:14px 0">
     ${kpi(s.placed, "place")}${kpi(s.updated, "update")}${kpi(s.completed, "shipped")}${kpi(s.cancelled, "cancel")}${kpi(s.parked, "parked")}${kpi(s.excluded, "excluded")}${s.flagged ? kpi(s.flagged, "flagged") : ""}
   </div>
+  ${d.preview ? `<div class="lane" style="text-align:center;padding:16px">
+    <button id="runsync" onclick="runSyncNow()" style="background:#0a84ff;color:#fff;border:none;border-radius:12px;padding:12px 24px;font-size:1.05rem;font-weight:600;cursor:pointer">Run sync now</button>
+    <div id="syncres" style="margin-top:12px;font-size:.95rem"></div>
+    <p class="muted" style="margin:10px 0 0;font-size:.78rem">Runs the engine once, right now — places and updates the board exactly as previewed above. Safe to press again anytime (it's idempotent).</p>
+  </div>
+  <script>
+  function runSyncNow(){var b=document.getElementById('runsync'),o=document.getElementById('syncres');b.disabled=true;b.textContent='Running…';o.textContent='';fetch('/api/admin/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'apply'})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){o.innerHTML='<span style="color:#ff6b5e">Did not run: '+((j&&j.error)||'not authorized')+'</span>';b.textContent='Run sync now';b.disabled=false;return;}var s=j.summary||{};o.innerHTML='<b style="color:#5edb84">Done.</b> placed '+(s.placed||0)+' · updated '+(s.updated||0)+' · shipped '+(s.completed||0)+' · cancelled '+(s.cancelled||0)+' · parked '+(s.parked||0)+'. <a href="/board" style="color:#5eaeff">Open the board &rarr;</a>';b.textContent='Run again';b.disabled=false;}).catch(function(e){o.innerHTML='<span style="color:#ff6b5e">Error: '+e+'</span>';b.textContent='Run sync now';b.disabled=false;});}
+  </script>` : ""}
   <p class="muted" style="margin-top:-6px;font-size:.85rem"><b>Parked</b> = an order the engine won't place because it can't map it cleanly (unrecognized part, or a cab whose build steps aren't finished). It's never guessed onto a line — add the part / finish the steps in <a href="/lines" style="color:#5eaeff">Lines &amp; parts</a> and it places itself on the next run.</p>
   <div class="lane">
     ${s.actions.length ? `<table><tr><th>Order #</th><th>Action</th><th>Detail</th></tr>${rows}</table>` : `<div class="muted">Nothing to do — the fresh intake is clear.</div>`}
