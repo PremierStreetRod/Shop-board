@@ -2329,6 +2329,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
     <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
     <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
+    <a href="/lines" style="color:#8e8e93;margin-right:16px">Lines &amp; parts</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3805,6 +3806,141 @@ function orderHistoryPage(d) {
 }
 
 // ============================================================
+// LINES & PARTS MANAGER — admin config for the production lines and the cab
+// part numbers Coyote routes to them (owner-rep 2026-08-07). WRITES to the
+// `line` and `product` config tables (audited). Coyote stays the source of
+// truth for ORDERS; this only controls which part numbers are RECOGNIZED
+// (the product catalog IS the accept-list classifyOrder gates on) and which
+// line each cab family routes to. Changes take effect on the next push and on
+// new placements; cabs already on the board are not moved by a reroute.
+async function linesManagerData() {
+  const lines = await db(`line?select=id,name,enabled&order=id`);
+  const prods = await db(`product?select=part_number,family,lines,is_smk&order=family,part_number`);
+  const tmpls = await db(`build_template?select=family`);
+  const famHasTmpl = new Set(tmpls.map((t) => t.family));
+  const famMap = {};
+  for (const p of prods) {
+    const f = (famMap[p.family] = famMap[p.family] || { family: p.family, parts: [], lineSet: new Set() });
+    f.parts.push({ part_number: p.part_number, lines: (p.lines || []).slice().sort((a, b) => a - b), is_smk: !!p.is_smk });
+    for (const lid of (p.lines || [])) f.lineSet.add(lid);
+  }
+  const families = Object.values(famMap).map((f) => ({
+    family: f.family, parts: f.parts, lines: [...f.lineSet].sort((a, b) => a - b), hasTemplate: famHasTmpl.has(f.family),
+  })).sort((a, b) => a.family.localeCompare(b.family));
+  const usage = {}; for (const l of lines) usage[l.id] = [];
+  for (const f of families) for (const lid of f.lines) if (usage[lid]) usage[lid].push(f.family);
+  return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [] })), families };
+}
+function linesManagerPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const inp = "background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:inherit;font-size:.95rem";
+  const activeLines = d.lines.filter((l) => l.enabled);
+  const lineChecks = (name, current) => activeLines.map((l) => `<label class="ck"><input type="checkbox" name="${name}" value="${l.id}"${current.includes(l.id) ? " checked" : ""}> ${esc(l.name)}</label>`).join("");
+  const lineRow = (l) => `<tr>
+    <td class="num">${l.id}</td>
+    <td><input id="ln-${l.id}" value="${esc(l.name)}" style="${inp};width:100%;max-width:340px"></td>
+    <td>${l.enabled ? '<span class="st p">On</span>' : '<span class="st o">Off</span>'}</td>
+    <td>${l.families.length ? l.families.map(esc).join(", ") : '<span class="muted">—</span>'}</td>
+    <td style="white-space:nowrap">
+      <button class="b" onclick="renameLine(${l.id},this)">Save name</button>
+      <button class="b" onclick="toggleLine(${l.id},${l.enabled ? "false" : "true"},this)">${l.enabled ? "Disable" : "Enable"}</button>
+    </td></tr>`;
+  const famCard = (f, i) => `<div class="lane">
+    <h3 style="margin-bottom:4px">${esc(f.family)} ${f.hasTemplate ? "" : '<span class="flag amber">no build steps yet</span>'}</h3>
+    <p class="muted" style="margin:0 0 8px;font-size:.85rem">Part${f.parts.length === 1 ? "" : "s"}: ${f.parts.map((p) => `<code>${esc(p.part_number)}</code>${p.is_smk ? '<span class="muted">·smk</span>' : ""}`).join(" &nbsp; ")}</p>
+    <div class="checks">${lineChecks("rt-" + i, f.lines)}</div>
+    <div style="margin-top:8px">
+      <button class="b grn" onclick="routeFam(${i},this)">Save routing</button>
+      <span style="margin:0 6px;opacity:.3">|</span>
+      <input id="pn-${i}" placeholder="add a part #" style="${inp};width:190px">
+      <button class="b" onclick="addPart(${i},this)">Add part &rarr; accepted</button>
+    </div>
+  </div>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Lines & parts</title>${style}
+<style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .lane h3{margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:middle}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{opacity:.6}
+  code{background:#0d0d0f;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.9em}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block}
+  .flag.amber{background:#3a2f10;color:#ffd60a}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.p{background:#12331c;color:#5edb84}.st.o{background:#3a2f10;color:#ffd60a}
+  .b{background:#1c1c1e;border:1px solid var(--line);border-radius:8px;padding:6px 12px;color:#eaeaea;font-size:.85rem;cursor:pointer;margin-right:4px}
+  .b.grn{background:#12331c;border-color:#1e5233;color:#5edb84}
+  .checks{display:flex;flex-wrap:wrap;gap:6px 12px}
+  .ck{display:inline-flex;align-items:center;gap:5px;font-size:.88rem;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 10px;cursor:pointer}
+  @media print{ a,.b{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
+    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Lines &amp; parts <span class="muted" style="font-size:.6em;font-weight:400">— production lines &amp; the cab part numbers Coyote routes to them</span></h2>
+  <p class="muted" style="margin-top:-8px">Add or rename a line, move a cab family to a different line, and register the part numbers a cab is built from. Every part number here is <b>accepted Coyote push data</b> — a number not in this catalog is ignored when a push lands. Changes apply to the next push and to new placements; cabs already on the board don't move.</p>
+
+  <div class="lane">
+    <h3>Production lines</h3>
+    <table><tr><th>#</th><th>Name</th><th>Status</th><th>Cabs routing here</th><th></th></tr>
+      ${d.lines.map(lineRow).join("")}
+    </table>
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+      <input id="newline" placeholder="New line name (e.g. Line 7 — 47-53)" style="${inp};width:340px;max-width:70%">
+      <button class="b grn" onclick="addLine(this)">Add line</button>
+      <span class="muted" style="font-size:.8rem">a new line starts On and appears on the board</span>
+    </div>
+  </div>
+
+  <h2 style="margin-top:26px">Cabs &amp; part numbers</h2>
+  <p class="muted" style="margin-top:-8px">Check the line(s) a cab builds on and Save routing. Add a part number to make it accepted push data (it inherits the cab's build steps).</p>
+  ${d.families.map(famCard).join("")}
+
+  <div class="lane" style="border-style:dashed">
+    <h3>Add a new cab</h3>
+    <p class="muted" style="margin:-4px 0 10px;font-size:.85rem">A brand-new cab: part number, family name, and the line(s) it builds on. The part number is accepted immediately. A new family has <b>no build steps</b> until a template is made (a separate step) — it stays flagged until then.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <input id="nc-pn" placeholder="Part number (e.g. PSR-7387)" style="${inp};width:210px">
+      <input id="nc-fam" placeholder="Cab / family (e.g. 73-87 Squarebody)" style="${inp};width:260px">
+    </div>
+    <div class="checks">${lineChecks("nc-lines", [])}</div>
+    <button class="b grn" style="margin-top:8px" onclick="addCab(this)">Add cab &rarr; accepted</button>
+  </div>
+
+  <p class="muted" style="font-size:.8rem;text-align:center">Admin-only; every change is written to the audit log. Coyote stays the source of truth for orders — this only controls which parts are recognized and where they route.</p>
+</div>
+<script>
+  var FAM = ${JSON.stringify(d.families.map((f) => f.family))};
+  async function post(url, obj, btn){ var t=btn?btn.textContent:""; if(btn){btn.disabled=true;btn.textContent="…";}
+    try{ var r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(obj)});
+      var j=await r.json().catch(function(){return {};});
+      if(!r.ok||!j.ok){ alert((j&&j.error)||("Error "+r.status)); if(btn){btn.disabled=false;btn.textContent=t;} return; }
+      location.reload();
+    }catch(e){ alert(e.message); if(btn){btn.disabled=false;btn.textContent=t;} } }
+  function v(id){ var el=document.getElementById(id); return el?el.value:""; }
+  function ckl(name){ return [].slice.call(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(c){return Number(c.value);}); }
+  function addLine(b){ if(!v("newline").trim())return alert("Name the line"); post("/api/admin/line",{action:"add",name:v("newline")},b); }
+  function renameLine(id,b){ if(!v("ln-"+id).trim())return alert("Name can't be empty"); post("/api/admin/line",{action:"rename",id:id,name:v("ln-"+id)},b); }
+  function toggleLine(id,to,b){ post("/api/admin/line",{action:"toggle",id:id,enabled:to},b); }
+  function routeFam(i,b){ var L=ckl("rt-"+i); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"route",family:FAM[i],lines:L},b); }
+  function addPart(i,b){ if(!v("pn-"+i).trim())return alert("Enter a part number"); var L=ckl("rt-"+i); if(!L.length)return alert("Check the line(s) it routes to, above"); post("/api/admin/catalog",{action:"add-part",part_number:v("pn-"+i),family:FAM[i],lines:L},b); }
+  function addCab(b){ if(!v("nc-pn").trim()||!v("nc-fam").trim())return alert("Part number and cab/family both needed"); var L=ckl("nc-lines"); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"add-part",part_number:v("nc-pn"),family:v("nc-fam"),lines:L},b); }
+</script>
+</body></html>`;
+}
+
+// ============================================================
 // PAY WORKSHEET (payroll hours export) — replaces the manual "Employee Pay
 // Worksheet" that is hand-tallied and emailed to the outsourced payroll company.
 // Shop Board already holds accurate clock hours, so it builds the sheet itself.
@@ -5154,6 +5290,19 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", orderHistoryPage(data));
     }
 
+    // LINES & PARTS MANAGER (admin-only). Config for production lines + the cab
+    // part numbers Coyote routes to them. Read here; write via /api/admin/line
+    // and /api/admin/catalog below.
+    if (url.pathname === "/lines") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await linesManagerData();
+      return send(200, "text/html; charset=utf-8", linesManagerPage(data));
+    }
+
     // TECH FINISH (file 11, builder half): every non-background step complete
     // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
     // (Q104); the paused clock there is management's bottleneck (Q53/C11).
@@ -5934,6 +6083,87 @@ self.addEventListener("notificationclick", (e) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ cab_number: clean || null }) });
       logEvent("build.cab_number_set", adminId, { build_id, order_number: b.order_number, from: b.cab_number || null, to: clean || null });
       return json(200, { ok: true });
+    }
+
+    // LINES manager (admin): add / rename / enable-disable a production line.
+    if (url.pathname === "/api/admin/line" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const act = String(p.action || "");
+      if (act === "add") {
+        const name = String(p.name || "").trim();
+        if (!name) return json(400, { ok: false, error: "Give the line a name" });
+        if (name.length > 80) return json(400, { ok: false, error: "That name is too long" });
+        const existing = await db(`line?select=id`);
+        const nextId = Math.max(0, ...existing.map((l) => Number(l.id))) + 1;
+        await db("line", { method: "POST", body: JSON.stringify({ id: nextId, name, enabled: true }) });
+        logEvent("line.added", adminId, { id: nextId, name });
+        return json(200, { ok: true, id: nextId });
+      }
+      if (act === "rename") {
+        const id = Number(p.id), name = String(p.name || "").trim();
+        if (!Number.isInteger(id)) return json(400, { ok: false, error: "Bad line reference" });
+        if (!name) return json(400, { ok: false, error: "Give the line a name" });
+        if (name.length > 80) return json(400, { ok: false, error: "That name is too long" });
+        const [ln] = await db(`line?select=id,name&id=eq.${id}`);
+        if (!ln) return json(404, { ok: false, error: "Line not found" });
+        await db(`line?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+        logEvent("line.renamed", adminId, { id, from: ln.name, to: name });
+        return json(200, { ok: true });
+      }
+      if (act === "toggle") {
+        const id = Number(p.id), enabled = p.enabled === true || p.enabled === "true";
+        if (!Number.isInteger(id)) return json(400, { ok: false, error: "Bad line reference" });
+        const [ln] = await db(`line?select=id,name,enabled&id=eq.${id}`);
+        if (!ln) return json(404, { ok: false, error: "Line not found" });
+        if (!enabled) {
+          const routed = await db(`product?select=part_number&lines=cs.{${id}}`);
+          if (routed.length) return json(400, { ok: false, error: `Line ${id} still has ${routed.length} part${routed.length === 1 ? "" : "s"} routing to it — move those to another line first` });
+        }
+        await db(`line?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+        logEvent("line.toggled", adminId, { id, name: ln.name, enabled });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown line action" });
+    }
+
+    // CATALOG manager (admin): reroute a cab family, or add a part number that
+    // becomes accepted Coyote push data. The product catalog IS the accept-list.
+    if (url.pathname === "/api/admin/catalog" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const act = String(p.action || "");
+      const allLines = await db(`line?select=id,enabled`);
+      const okLine = new Set(allLines.filter((l) => l.enabled).map((l) => Number(l.id)));
+      const wantLines = Array.isArray(p.lines)
+        ? [...new Set(p.lines.map(Number).filter((n) => Number.isInteger(n) && okLine.has(n)))]
+        : [];
+      if (act === "route") {
+        const family = String(p.family || "").trim();
+        if (!family) return json(400, { ok: false, error: "Missing cab" });
+        if (!wantLines.length) return json(400, { ok: false, error: "Pick at least one active line" });
+        const parts = await db(`product?select=part_number&family=eq.${encodeURIComponent(family)}`);
+        if (!parts.length) return json(404, { ok: false, error: "No parts found for that cab" });
+        await db(`product?family=eq.${encodeURIComponent(family)}`, { method: "PATCH", body: JSON.stringify({ lines: wantLines }) });
+        logEvent("catalog.family_routed", adminId, { family, lines: wantLines, parts: parts.length });
+        return json(200, { ok: true });
+      }
+      if (act === "add-part") {
+        const pn = String(p.part_number || "").trim().toUpperCase();
+        const family = String(p.family || "").trim();
+        if (!pn) return json(400, { ok: false, error: "Enter a part number" });
+        if (!/^[A-Z0-9][A-Z0-9._-]{1,39}$/.test(pn)) return json(400, { ok: false, error: "That part number has unexpected characters" });
+        if (!family) return json(400, { ok: false, error: "Enter a cab / family" });
+        if (family.length > 60) return json(400, { ok: false, error: "That family name is too long" });
+        if (!wantLines.length) return json(400, { ok: false, error: "Pick at least one active line" });
+        const [exist] = await db(`product?select=part_number&part_number=eq.${encodeURIComponent(pn)}`);
+        if (exist) return json(400, { ok: false, error: `${pn} is already in the catalog` });
+        const [tmpl] = await db(`build_template?select=id&family=eq.${encodeURIComponent(family)}`);
+        await db("product", { method: "POST", body: JSON.stringify({ part_number: pn, family, lines: wantLines, template_id: tmpl ? tmpl.id : null, is_smk: /SMK/.test(pn) }) });
+        logEvent("catalog.part_added", adminId, { part_number: pn, family, lines: wantLines, has_template: !!tmpl });
+        return json(200, { ok: true, has_template: !!tmpl });
+      }
+      return json(400, { ok: false, error: "Unknown catalog action" });
     }
 
     // BUILD STEPS: the Q97 editor. Template edits shape FUTURE cabs only —
