@@ -6775,3 +6775,42 @@ self.addEventListener("notificationclick", (e) => {
     return json(500, { ok: false, error: "Server error" });
   }
 }).listen(PORT, () => console.log(`Shop Board v25 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"}, notifications ${NOTIFY_LIVE ? "LIVE" : "SANDBOXED (Q106)"})`));
+
+// ============================================================
+// AUTO-SYNC SCHEDULER (block 80) — the hands-off engine.
+// A self-rescheduling server-side timer inside the always-on Railway
+// process runs syncRun(true) at :45 past each hour across the ARIZONA
+// work window (catches Aaron's 6 AM-6 PM on-the-hour pushes; our :45 read
+// lets his :00 push land first). No browser, no Claude session, no
+// create_trigger, so it never touches the write-classifier and is truly
+// hands-off. Idempotent + change-only (a quiet hour writes nothing) and
+// fully audited (sync.run per apply + a sync.auto heartbeat).
+// KILL SWITCH: set env AUTO_SYNC=off on Railway to pause it (default on).
+const AUTO_SYNC = String(process.env.AUTO_SYNC || "on").toLowerCase() !== "off";
+function azNow() { return new Date(Date.now() - 7 * 3600 * 1000); } // Arizona = UTC-7 all year (no DST)
+function msToNextSync() {
+  const a = azNow(), min = a.getUTCMinutes(), sec = a.getUTCSeconds(), ms = a.getUTCMilliseconds();
+  let delay = ((45 - min + 60) % 60) * 60000 - sec * 1000 - ms;
+  if (delay <= 0) delay += 3600000;
+  return delay;
+}
+let __autoSyncBusy = false;
+async function autoSyncTick() {
+  try {
+    const hr = azNow().getUTCHours(); // Arizona wall-clock hour
+    if (hr >= 6 && hr <= 18 && !__autoSyncBusy) {
+      __autoSyncBusy = true;
+      const sum = await syncRun(true, null);
+      logEvent("sync.auto", null, { hour_az: hr, placed: sum.placed, updated: sum.updated, parked: sum.parked, completed: sum.completed, cancelled: sum.cancelled, flagged: sum.flagged });
+      console.log(`[auto-sync] ${hr}:45 AZ - placed ${sum.placed}, updated ${sum.updated}, parked ${sum.parked}, shipped ${sum.completed}, cancelled ${sum.cancelled}`);
+    }
+  } catch (e) {
+    console.error("[auto-sync] error:", e && e.message);
+    logEvent("sync.auto_error", null, { error: String((e && e.message) || e) });
+  } finally {
+    __autoSyncBusy = false;
+    setTimeout(autoSyncTick, msToNextSync());
+  }
+}
+if (AUTO_SYNC) { console.log("[auto-sync] scheduler ON - next run at :45 past the hour (6 AM-6 PM Arizona)"); setTimeout(autoSyncTick, msToNextSync()); }
+else console.log("[auto-sync] scheduler OFF (env AUTO_SYNC=off)");
