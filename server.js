@@ -1356,6 +1356,14 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   function clockIn(btn){ post("/api/clock/in", { line_id: 9 }, btn); }
   function clockOut(reason, btn){ post("/api/clock/out", { reason }, btn); }
   setTimeout(() => location.reload(), 60000); // the board keeps itself fresh
+  // Block 84: fast queue-freshness. When admin OR another warehouse screen
+  // reorders a line (queue_pos) or a cab changes state, reflect it here within
+  // seconds instead of waiting for the 60s catch-all above. Polls the SAME
+  // /api/queue/state version hash the White Board polls, so the two screens
+  // never fork. Skips a cycle while a field is focused (60s backstop covers it).
+  var QVER=null;
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){location.reload();}}}).catch(function(){});}
+  qpoll();setInterval(qpoll,6000);
 </script></body></html>`;
 
 const watcherPage = (emp) => `<!doctype html>
