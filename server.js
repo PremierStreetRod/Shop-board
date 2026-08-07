@@ -1602,7 +1602,44 @@ const boardPage = `<!doctype html>
 // (2026-07-31): whoever can see the board can look an order up. (The Q65
 // customer-names toggle governs the TV tiles, not this deliberate look-up.)
 const escH = (s) => String(s == null ? "" : s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-const orderPage = (b, family, lineName, tasks) => {
+// Block 86: parse a Coyote intake payload into the cab card's owner / order /
+// configuration / add-on pieces. The cab line-item description is a clean
+// newline-delimited "Label: Value" list; other non-cab, non-blazer-top line
+// items are add-ons. Addresses are pre-formatted to strings here.
+function parseCoyoteDetail(payload, partNumber, allowSet) {
+  if (!payload || typeof payload !== "object") return null;
+  const c = (payload.customer && typeof payload.customer === "object") ? payload.customer : {};
+  const o = (payload.order && typeof payload.order === "object") ? payload.order : {};
+  const items = Array.isArray(payload.line_items) ? payload.line_items : [];
+  const pn = String(partNumber || "").toUpperCase();
+  const fmtAddr = (a) => { if (!a || typeof a !== "object") return ""; return [a.street, a.street2, [a.city, a.state, a.zip].filter(Boolean).join(", "), (a.country && a.country !== "USA") ? a.country : ""].filter(Boolean).join(", "); };
+  let cabDesc = "", cabTaken = false; const addons = [];
+  for (const it of items) {
+    const num = String((it && it.item_number) || "").trim(); if (!num) continue;
+    const up = num.toUpperCase(); if (up === "PSR-BLZR-TOP") continue;
+    const desc = String((it && it.description) || "").trim();
+    if (pn && up === pn && !cabTaken) { cabDesc = desc; cabTaken = true; continue; }
+    if (allowSet && allowSet.has(up)) { if (!cabTaken && !pn) { cabDesc = desc; cabTaken = true; } continue; }
+    if (desc) addons.push({ num, desc });
+  }
+  const lines = cabDesc.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  let model = ""; const features = [];
+  if (lines.length) {
+    model = lines[0];
+    for (let i = 1; i < lines.length; i++) {
+      const idx = lines[i].indexOf(":");
+      if (idx > 0) { const label = lines[i].slice(0, idx).trim(); const value = lines[i].slice(idx + 1).trim(); features.push({ label, value, stock: /^(stock|none|n\/a)\b/i.test(value) || value === "" }); }
+      else features.push({ label: "", value: lines[i], stock: false });
+    }
+  }
+  const ship = (c.ship_to && typeof c.ship_to === "object") ? c.ship_to : null;
+  return {
+    customer: { name: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(), company: String(c.company || "").trim(), email: String(c.email || "").trim(), phone: String(c.phone_primary || c.phone || "").trim(), billStr: fmtAddr(c.bill_to), shipStr: fmtAddr(ship), shipState: ship ? String(ship.state || "").trim() : "" },
+    order: { status: String(o.status || payload.status || "").trim(), date: String(o.date || "").slice(0, 10), ship: String(o.ship_date || "").slice(0, 10), note: String(o.invoice_note || "").trim() },
+    model, features, addons,
+  };
+}
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false) => {
   const real = tasks.filter((t) => !t.is_background);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -1631,6 +1668,24 @@ const orderPage = (b, family, lineName, tasks) => {
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
     ${b.invoice_note ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
   </div>
+  ${detail ? `<div class="lane">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">OWNER</div>
+    <div class="kv"><b>Name</b>${escH(detail.customer.name || b.customer_name || "—")}</div>
+    ${detail.customer.company ? `<div class="kv"><b>Company</b>${escH(detail.customer.company)}</div>` : ""}
+    ${canFull
+      ? `${detail.customer.email ? `<div class="kv"><b>Email</b>${escH(detail.customer.email)}</div>` : ""}${detail.customer.phone ? `<div class="kv"><b>Phone</b>${escH(detail.customer.phone)}</div>` : ""}${detail.customer.billStr ? `<div class="kv"><b>Billing</b>${escH(detail.customer.billStr)}</div>` : ""}${detail.customer.shipStr ? `<div class="kv"><b>Shipping</b>${escH(detail.customer.shipStr)}</div>` : ""}`
+      : `${detail.customer.shipState ? `<div class="kv"><b>Ship to</b>${escH(detail.customer.shipState)}</div>` : ""}`}
+    ${(detail.order.status || detail.order.date || detail.order.ship) ? `<div class="kv"><b>Order</b>${escH(detail.order.status || "—")}${detail.order.date ? ` &middot; ordered ${escH(detail.order.date)}` : ""}${detail.order.ship ? ` &middot; ship ${escH(detail.order.ship)}` : ""}</div>` : ""}
+    ${detail.order.note ? `<div class="kv"><b>Coyote note</b><span style="white-space:normal">${escH(detail.order.note)}</span></div>` : ""}
+    ${canFull ? `<div style="margin-top:6px"><a href="/order?n=${encodeURIComponent(b.coyote_root || String(b.order_number || "").split(".")[0])}" style="color:#8e8e93;font-size:.85rem">View Coyote push history &rarr;</a></div>` : ""}
+  </div>
+  <div class="lane" style="border-color:#C8102E">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">CAB CONFIGURATION${detail.model ? ` &mdash; ${escH(detail.model)}` : ""}</div>
+    ${detail.features.length
+      ? detail.features.map((f) => `<div class="kv"><b>${escH(f.label || "—")}</b><span style="opacity:${f.stock ? ".55" : "1"}">${escH(f.value)}${f.stock ? "" : ` <span style="color:#5eaeff;font-size:.72em;font-weight:800;letter-spacing:.04em">UPGRADE</span>`}</span></div>`).join("")
+      : `<div class="muted" style="font-size:1.02rem">No configuration detail on file for this cab yet.</div>`}
+  </div>
+  ${detail.addons.length ? `<div class="lane"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD-ONS &amp; EXTRAS</div>${detail.addons.map((a) => `<div style="padding:3px 0;font-size:1.03rem">&#9656; ${escH(a.desc)}</div>`).join("")}</div>` : ""}` : ""}
   <!-- v25.2 (owner-rep): UPGRADES & OPTIONS, prominent under the owner box —
        THIS is what production needs to see to know what they're building.
        Reads the cab's option tasks, so the moment the Coyote link goes live
@@ -4220,7 +4275,7 @@ function reconcilePage(d, role) {
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
   const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
     <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}` : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
-    <td><b><a href="/order?n=${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
+    <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
     <td class="muted">${esc(c.customer) || "—"}</td>
     <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
     <td class="muted">${esc(c.state)}</td>
@@ -5103,7 +5158,15 @@ http.createServer(async (req, res) => {
       const [prodO] = bO.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
       const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
       const tasksO = await db(`task?select=display_no,name,day_no,man_hours,state,is_background,source&build_id=eq.${bO.id}&order=day_no,sort_order`);
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO));
+      const prodAll86 = await db(`product?select=part_number`);
+      const allowSet86 = new Set(prodAll86.map((p) => String(p.part_number).toUpperCase()));
+      const coyOrd86 = bO.coyote_root || String(bO.order_number || "").split(".")[0];
+      let coyDetail86 = null;
+      if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
+      let canFull86 = false;
+      const empId86 = await liveSession(req);
+      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Admin" || me86.department === "Owner"; }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
