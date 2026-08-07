@@ -2331,6 +2331,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
     <a href="/lines" style="color:#8e8e93;margin-right:16px">Lines &amp; parts</a>
     <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
+    <a href="/reconcile" style="color:#8e8e93;margin-right:16px">Reconcile</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -4141,6 +4142,109 @@ function syncPage(d) {
   <p class="muted" style="font-size:.8rem;text-align:center">Idempotent (keyed on the unique order #) · cab numbers stay wall-owned · every run audited · nothing hard-deleted.</p>
 </div></body></html>`;
 }
+// ============================================================
+// BOARD ↔ WALL RECONCILIATION (block 81) — the trust bridge to cutover.
+// The write engine now auto-places Coyote cabs on the board with cab_number
+// NULL (the wall still owns the counter, Q110). This admin page lists every
+// open board cab grouped by line, with its Coyote context (customer, promised,
+// order #) + the family's next-up number as a hint, so an admin can walk the
+// wall line-by-line and type each cab its REAL wall number. Reuses the audited,
+// dup-guarded /api/admin/cab-number endpoint — no new write path, no migration.
+// Anything left UNNUMBERED = not yet found on the wall → the thing to investigate
+// (a Coyote-Queued order with no matching physical cab, the file-38 red flag).
+const RECON_FAM_SUFFIX = { "47-53": "A", "55-59": "T", "64-66": "D", "67-72 Chevy": "C", "67-72 Ford": "F", "69-72 Blazer": "B" };
+function reconcileShape(open, famOf, lineName, hi) {
+  const cabs = open.map((b) => {
+    const fam = famOf[String(b.part_number || "").toUpperCase()] || "";
+    const suffix = RECON_FAM_SUFFIX[fam] || "";
+    const hint = suffix ? `${(hi[suffix] || 0) + 1}${suffix}` : "";
+    return {
+      id: b.id, order: b.order_number || "—", part: b.part_number || "", family: fam, suffix,
+      cab: b.cab_number || "", lineId: b.line_id, line: lineName[b.line_id] || (b.line_id ? "Line " + b.line_id : "— unrouted"),
+      state: String(b.state || "").replace(/_/g, " "), customer: b.customer_name || "", dest: b.destination || "",
+      promised: b.promised_finish || "", noteFlag: !!b.note_flagged, hint,
+      numbered: !!b.cab_number, fromCoyote: !!b.coyote_root,
+    };
+  });
+  const byLine = {};
+  for (const c of cabs) { (byLine[c.lineId] || (byLine[c.lineId] = { lineId: c.lineId, line: c.line, cabs: [] })).cabs.push(c); }
+  const groups = Object.values(byLine).sort((a, b) => (a.lineId || 999) - (b.lineId || 999));
+  const total = cabs.length;
+  const numbered = cabs.filter((c) => c.numbered).length;
+  const toReconcile = cabs.filter((c) => !c.numbered && c.fromCoyote).length;
+  return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
+}
+async function reconcileData() {
+  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged&state=in.(upcoming,active,awaiting_inspection,rework)&order=line_id,created_at");
+  const prods = await db("product?select=part_number,family");
+  const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
+  const lines = await db("line?select=id,name&order=id");
+  const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
+  const allNums = await db("build?select=cab_number&cab_number=not.is.null");
+  const hi = {};
+  for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
+  return reconcileShape(open, famOf, lineName, hi);
+}
+function reconcilePage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
+  const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.numbered ? "done" : (c.fromCoyote ? "unrec" : "")}">
+    <td><b>${esc(c.order)}</b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
+    <td class="muted">${esc(c.customer) || "—"}</td>
+    <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
+    <td class="muted">${esc(c.promised) || "—"}</td>
+    <td class="muted">${esc(c.state)}</td>
+    <td><input class="cn" id="cn-${c.id}" value="${esc(c.cab)}" placeholder="${esc(c.hint) || "244T"}" autocomplete="off"></td>
+    <td><button class="b" onclick="saveCab('${c.id}',this)">Save</button> <span id="msg-${c.id}" class="msg">${c.numbered ? `<span style="color:#5edb84">✓</span>` : ""}</span></td>
+  </tr>`;
+  const groups = d.groups.map((g) => `<div class="lane"><h3 style="margin:0 0 8px">${esc(g.line)} <span class="muted" style="font-weight:400;font-size:.8em">— ${g.cabs.length} cab${g.cabs.length === 1 ? "" : "s"}</span></h3>
+    <table><tr><th>Order #</th><th>Customer</th><th>Family</th><th>Promised</th><th>State</th><th>Cab #</th><th></th></tr>
+    ${g.cabs.map(row).join("")}</table></div>`).join("");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Reconcile</title>${style}
+<style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:middle}
+  .muted{opacity:.6}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block;background:#3a2f10;color:#ffd60a}
+  .sfx{display:inline-block;background:#10233a;color:#5eaeff;border-radius:8px;padding:0 7px;font-size:.78em;font-weight:600}
+  .kpi{display:inline-block;min-width:96px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  input.cn{width:90px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;font-size:.95rem;text-transform:uppercase}
+  .b{background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:9px;padding:6px 12px;font-size:.85rem;cursor:pointer}
+  .b:hover{background:#3a3a3c}
+  tr.unrec td{background:rgba(255,214,10,.05)}
+  tr.unrec input.cn{border-color:#5c4a10}
+  tr.done input.cn{border-color:#1f4a2c}
+  .msg{font-size:.85rem;margin-left:4px}
+  @media print{ a,.b,input{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
+    <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
+    <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Reconcile <span class="muted" style="font-size:.6em;font-weight:400">— board vs the wall</span></h2>
+  <p class="muted" style="margin-top:-8px">Walk the whiteboard line by line and type each cab the <b>exact number the wall shows</b> (the wall owns the counter until cutover). The placeholder is the next number for that family — a hint, not a rule. <b>Anything left un-numbered is a cab the board has but you couldn't find on the wall</b> — those are the ones to investigate.</p>
+  <div style="margin:14px 0">
+    ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
+  </div>
+  ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
+  <p class="muted" style="font-size:.8rem;text-align:center">Numbers are never shared or reused (a cancelled cab's number stays burned). Every set is audited. A cab you can't place on the wall stays highlighted here until it's resolved.</p>
+  <script>
+  function recount(){var rows=document.querySelectorAll('tr[data-cab]');var done=0,tot=rows.length;rows.forEach(function(r){var inp=r.querySelector('input.cn');if(inp&&inp.value.trim())done++;});var a=document.getElementById('kpi-num');if(a)a.textContent=done;var b=document.getElementById('kpi-un');if(b)b.textContent=(tot-done);}
+  function saveCab(id,btn){var inp=document.getElementById('cn-'+id);var v=inp.value.trim();var msg=document.getElementById('msg-'+id);var row=document.getElementById('row-'+id);btn.disabled=true;var old=btn.textContent;btn.textContent='…';msg.innerHTML='';fetch('/api/admin/cab-number',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,cab_number:v})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){msg.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'error')+'</span>';btn.textContent=old;btn.disabled=false;return;}if(v){row.className='done';msg.innerHTML='<span style="color:#5edb84">✓ '+v.toUpperCase()+'</span>';}else{row.className='';msg.textContent='';}btn.textContent=old;btn.disabled=false;recount();}).catch(function(e){msg.innerHTML='<span style="color:#ff6b5e">'+e+'</span>';btn.textContent=old;btn.disabled=false;});}
+  </script>
+</div></body></html>`;
+}
 
 // ============================================================
 // PAY WORKSHEET (payroll hours export) — replaces the manual "Employee Pay
@@ -5516,6 +5620,20 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const sum = await syncRun(false, empId);
       return send(200, "text/html; charset=utf-8", syncPage({ sum, preview: true }));
+    }
+
+    // RECONCILE (admin-only): the board ↔ wall bridge. Lists every open board
+    // cab grouped by line with its Coyote context + the family's next-up number
+    // as a hint, so an admin walks the wall and types each its real cab number.
+    // Reuses /api/admin/cab-number for the (audited, dup-guarded) writes.
+    if (url.pathname === "/reconcile") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const data = await reconcileData();
+      return send(200, "text/html; charset=utf-8", reconcilePage(data));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
