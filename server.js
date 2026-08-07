@@ -4175,49 +4175,57 @@ function reconcileShape(open, famOf, lineName, hi) {
     return {
       id: b.id, order: b.order_number || "—", part: b.part_number || "", family: fam, suffix,
       cab: b.cab_number || "", lineId: b.line_id, line: lineName[b.line_id] || (b.line_id ? "Line " + b.line_id : "— unrouted"),
-      state: String(b.state || "").replace(/_/g, " "), customer: b.customer_name || "", dest: b.destination || "",
-      promised: b.promised_finish || "", noteFlag: !!b.note_flagged, hint,
-      numbered: !!b.cab_number, fromCoyote: !!b.coyote_root,
+      rawState: String(b.state || ""), state: String(b.state || "").replace(/_/g, " "),
+      customer: b.customer_name || "", dest: b.destination || "", promised: b.promised_finish || "",
+      noteFlag: !!b.note_flagged, hint, qp: (b.queue_pos == null ? null : Number(b.queue_pos)), createdAt: b.created_at || "",
+      numbered: !!b.cab_number, fromCoyote: !!b.coyote_root, reorderable: false, ondeck: false, isFirst: false, isLast: false,
     };
   });
+  const rank = (s) => (s === "upcoming" ? 1 : 0); // active / awaiting / rework rise to the top; upcoming = the queue
   const byLine = {};
   for (const c of cabs) { (byLine[c.lineId] || (byLine[c.lineId] = { lineId: c.lineId, line: c.line, cabs: [] })).cabs.push(c); }
   const groups = Object.values(byLine).sort((a, b) => (a.lineId || 999) - (b.lineId || 999));
+  for (const g of groups) {
+    g.cabs.sort((a, b) => rank(a.rawState) - rank(b.rawState) || (a.qp == null ? 1e9 : a.qp) - (b.qp == null ? 1e9 : b.qp) || (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    const up = g.cabs.filter((c) => c.rawState === "upcoming");
+    up.forEach((c, i) => { c.reorderable = true; c.isFirst = i === 0; c.isLast = i === up.length - 1; c.ondeck = i === 0; });
+  }
   const total = cabs.length;
   const numbered = cabs.filter((c) => c.numbered).length;
   const toReconcile = cabs.filter((c) => !c.numbered && c.fromCoyote).length;
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
 async function reconcileData() {
-  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged&state=in.(upcoming,active,awaiting_inspection,rework)&order=line_id,created_at");
+  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
   const lines = await db("line?select=id,name&order=id");
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
-  const allNums = await db("build?select=cab_number&cab_number=not.is.null");
+  const allNums = await db("build?select=cab_number&cab_number=not.is.null&limit=100000");
   const hi = {};
   for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
   return reconcileShape(open, famOf, lineName, hi);
 }
-function reconcilePage(d) {
+function reconcilePage(d, role) {
+  const admin = role === "admin";
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
-  const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.numbered ? "done" : (c.fromCoyote ? "unrec" : "")}">
-    <td><b>${esc(c.order)}</b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
+  const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
+    <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}` : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
+    <td><b><a href="/order?n=${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
     <td class="muted">${esc(c.customer) || "—"}</td>
     <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
-    <td class="muted">${esc(c.promised) || "—"}</td>
     <td class="muted">${esc(c.state)}</td>
-    <td><input class="cn" id="cn-${c.id}" value="${esc(c.cab)}" placeholder="${esc(c.hint) || "244T"}" autocomplete="off"></td>
-    <td><button class="b" onclick="saveCab('${c.id}',this)">Save</button> <span id="msg-${c.id}" class="msg">${c.numbered ? `<span style="color:#5edb84">✓</span>` : ""}</span></td>
+    <td>${admin ? `<input class="cn" id="cn-${c.id}" value="${esc(c.cab)}" placeholder="${esc(c.hint) || "244T"}" autocomplete="off">` : `<b>${esc(c.cab) || "—"}</b>`}</td>
+    ${admin ? `<td><button class="b" onclick="saveCab('${c.id}',this)">Save</button> <span id="msg-${c.id}" class="msg">${c.numbered ? '<span style="color:#5edb84">✓</span>' : ""}</span></td>` : "<td></td>"}
   </tr>`;
   const groups = d.groups.map((g) => `<div class="lane"><h3 style="margin:0 0 8px">${esc(g.line)} <span class="muted" style="font-weight:400;font-size:.8em">— ${g.cabs.length} cab${g.cabs.length === 1 ? "" : "s"}</span></h3>
-    <table><tr><th>Order #</th><th>Customer</th><th>Family</th><th>Promised</th><th>State</th><th>Cab #</th><th></th></tr>
+    <table><tr><th style="width:74px"></th><th>Order #</th><th>Customer</th><th>Family</th><th>State</th><th>Cab #</th><th></th></tr>
     ${g.cabs.map(row).join("")}</table></div>`).join("");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — Reconcile</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — White Board</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
@@ -4232,11 +4240,17 @@ function reconcilePage(d) {
   input.cn{width:90px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;font-size:.95rem;text-transform:uppercase}
   .b{background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:9px;padding:6px 12px;font-size:.85rem;cursor:pointer}
   .b:hover{background:#3a3a3c}
+  .mvc{white-space:nowrap}
+  .ar{background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:7px;padding:2px 7px;font-size:.8rem;cursor:pointer;line-height:1}
+  .ar:hover{background:#3a3a3c}.ar.dim{opacity:.2;cursor:default}
+  .deck{display:inline-block;background:#12331c;color:#5edb84;border-radius:8px;padding:1px 7px;font-size:.72em;font-weight:600;margin-left:4px;vertical-align:middle}
+  tr.ondeck td{background:rgba(94,219,132,.06)}
   tr.unrec td{background:rgba(255,214,10,.05)}
   tr.unrec input.cn{border-color:#5c4a10}
   tr.done input.cn{border-color:#1f4a2c}
   .msg{font-size:.85rem;margin-left:4px}
-  @media print{ a,.b,input{display:none} }
+  #freshnote{background:#10233a;color:#5eaeff;border:1px solid #204a6e;border-radius:10px;padding:8px 12px;margin:0 0 12px;font-size:.85rem;text-align:center}
+  @media print{ a,.b,.ar,input{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div>
@@ -4246,16 +4260,21 @@ function reconcilePage(d) {
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
-  <h2>Reconcile <span class="muted" style="font-size:.6em;font-weight:400">— board vs the wall</span></h2>
-  <p class="muted" style="margin-top:-8px">Walk the whiteboard line by line and type each cab the <b>exact number the wall shows</b> (the wall owns the counter until cutover). The placeholder is the next number for that family — a hint, not a rule. <b>Anything left un-numbered is a cab the board has but you couldn't find on the wall</b> — those are the ones to investigate.</p>
+  <h2>White Board <span class="muted" style="font-size:.6em;font-weight:400">— the production lines${admin ? "" : " (view only)"}</span></h2>
+  <p class="muted" style="margin-top:-8px">Each line lists its cabs oldest-first — the top upcoming cab is <b>on deck</b> next. ${admin ? "Use the &#9650;&#9660; arrows to move a cab up or down the queue; type a cab its wall number and Save." : "This is a live view — the warehouse and admin control the order; it refreshes here on its own."} Changes on another screen show up here within a few seconds.</p>
+  <div id="freshnote" style="display:none">The queue just changed on another screen — this page will refresh as soon as you're done typing.</div>
   <div style="margin:14px 0">
     ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
   </div>
   ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
-  <p class="muted" style="font-size:.8rem;text-align:center">Numbers are never shared or reused (a cancelled cab's number stays burned). Every set is audited. A cab you can't place on the wall stays highlighted here until it's resolved.</p>
+  <p class="muted" style="font-size:.8rem;text-align:center">Oldest-first by default; the order you set here (or the warehouse sets for kit-readiness) drives what's on deck. Every move is logged. Cab numbers are never shared or reused.</p>
   <script>
   function recount(){var rows=document.querySelectorAll('tr[data-cab]');var done=0,tot=rows.length;rows.forEach(function(r){var inp=r.querySelector('input.cn');if(inp&&inp.value.trim())done++;});var a=document.getElementById('kpi-num');if(a)a.textContent=done;var b=document.getElementById('kpi-un');if(b)b.textContent=(tot-done);}
-  function saveCab(id,btn){var inp=document.getElementById('cn-'+id);var v=inp.value.trim();var msg=document.getElementById('msg-'+id);var row=document.getElementById('row-'+id);btn.disabled=true;var old=btn.textContent;btn.textContent='…';msg.innerHTML='';fetch('/api/admin/cab-number',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,cab_number:v})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){msg.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'error')+'</span>';btn.textContent=old;btn.disabled=false;return;}if(v){row.className='done';msg.innerHTML='<span style="color:#5edb84">✓ '+v.toUpperCase()+'</span>';}else{row.className='';msg.textContent='';}btn.textContent=old;btn.disabled=false;recount();}).catch(function(e){msg.innerHTML='<span style="color:#ff6b5e">'+e+'</span>';btn.textContent=old;btn.disabled=false;});}
+  function saveCab(id,btn){var inp=document.getElementById('cn-'+id);var v=inp.value.trim();var msg=document.getElementById('msg-'+id);var row=document.getElementById('row-'+id);btn.disabled=true;var old=btn.textContent;btn.textContent='…';msg.innerHTML='';fetch('/api/admin/cab-number',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,cab_number:v})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){msg.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'error')+'</span>';btn.textContent=old;btn.disabled=false;return;}if(v){row.classList.add('done');msg.innerHTML='<span style="color:#5edb84">&#10003; '+v.toUpperCase()+'</span>';}else{row.classList.remove('done');msg.textContent='';}btn.textContent=old;btn.disabled=false;recount();}).catch(function(e){msg.innerHTML='<span style="color:#ff6b5e">'+e+'</span>';btn.textContent=old;btn.disabled=false;});}
+  function qmove(id,dir,btn){var all=document.querySelectorAll('.ar');all.forEach(function(x){x.disabled=true;});fetch('/api/queue/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,dir:dir})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){location.reload();}else{all.forEach(function(x){x.disabled=false;});var n=document.getElementById('freshnote');if(n){n.textContent=(j&&j.error)||'Move failed';n.style.display='';}}}).catch(function(){all.forEach(function(x){x.disabled=false;});});}
+  var QVER=null;
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){location.reload();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
+  qpoll();setInterval(qpoll,6000);
   </script>
 </div></body></html>`;
 }
@@ -5643,11 +5662,11 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/reconcile") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
+      if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return send(403, "text/plain", "Not allowed");
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await reconcileData();
-      return send(200, "text/html; charset=utf-8", reconcilePage(data));
+      return send(200, "text/html; charset=utf-8", reconcilePage(data, me.role));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
@@ -6430,6 +6449,40 @@ self.addEventListener("notificationclick", (e) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ cab_number: clean || null }) });
       logEvent("build.cab_number_set", adminId, { build_id, order_number: b.order_number, from: b.cab_number || null, to: clean || null });
       return json(200, { ok: true });
+    }
+
+    // QUEUE MOVE (White Board): admin reorders the UPCOMING queue on a line — the
+    // SAME one queue (queue_pos) the warehouse's kit-move uses, so the two surfaces
+    // never fork. Priority/display only; clocks untouched. Audited (queue.move).
+    if (url.pathname === "/api/queue/move" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const { build_id, dir } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number&id=eq.${build_id}`);
+      if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only upcoming cabs can be reordered" });
+      const q = await db(`build?select=id,queue_pos&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`);
+      const idx = q.findIndex((x) => x.id === b.id);
+      const swap = dir === "up" ? q[idx - 1] : q[idx + 1];
+      if (!swap) return json(400, { ok: false, error: dir === "up" ? "Already on deck" : "Already last" });
+      await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
+      await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
+      logEvent("queue.move", adminId, { build_id, order_number: b.order_number, dir });
+      return json(200, { ok: true });
+    }
+
+    // QUEUE STATE: a tiny version signature of the on-deck order across every line,
+    // so the White Board and Warehouse Board can poll and refresh whenever anyone
+    // (admin OR warehouse) reorders — nobody stares at a stale queue.
+    if (url.pathname === "/api/queue/state") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return json(403, { ok: false, error: "Not allowed" });
+      const rows = await db(`build?select=id,queue_pos,state&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000`);
+      rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      let seed = ""; for (const r of rows) seed += r.id + ":" + (r.queue_pos == null ? "" : r.queue_pos) + ":" + r.state + "|";
+      let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+      return json(200, { v: String(h) });
     }
 
     // LINES manager (admin): add / rename / enable-disable a production line.
