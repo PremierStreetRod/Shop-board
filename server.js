@@ -2330,6 +2330,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
     <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
     <a href="/lines" style="color:#8e8e93;margin-right:16px">Lines &amp; parts</a>
+    <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
     <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
@@ -3956,6 +3957,184 @@ function linesManagerPage(d) {
 }
 
 // ============================================================
+// COYOTE → BOARD WRITE ENGINE (owner-rep 2026-08-07; design = file 40). Turns
+// fresh Coyote intake into real `build` rows, FULLY AUTOMATICALLY. Idempotent on
+// the UNIQUE build.order_number. Two modes: PREVIEW (compute the plan, write
+// nothing) and APPLY (execute + stamp processed_at). NEVER guesses — an
+// unrecognized part or a draft template is PARKED (skipped, left fresh) so it
+// never lands on a wrong line; it auto-places once the catalog is made current.
+// cab # stays wall-owned (NULL, Q110). Status rules locked with owner-rep:
+// Queued->upcoming · Hold->on_hold (auto-resume) · Processed->complete(history) ·
+// Cancel->cancelled(kept) · odd/blank->park. Started cabs: info edits apply,
+// disruptive changes (part/line) are flagged not force-relocated.
+function classifyForBoard(o) {
+  if (!o.cabParts.length) {
+    if (o.blazerTop && !o.unknownParts.length) return { action: "exclude", stamp: true, reason: "Blazer top only — outsourced, never built here." };
+    return { action: "park", stamp: false, reason: o.unknownParts.length ? ("Unrecognized part(s): " + o.unknownParts.join(", ") + " — add them in Lines & Parts and it places automatically.") : "No cab part on the order." };
+  }
+  const draft = o.cabParts.filter((c) => !c.ready);
+  if (draft.length) return { action: "park", stamp: false, reason: "Cab template not finished (draft): " + [...new Set(draft.map((c) => c.family))].join(", ") + " — held until its build steps are marked ready." };
+  const st = o.status;
+  if (st === "Processed") return { action: "complete", stamp: true, reason: "Shipped — kept as history, not placed on the active board." };
+  if (st === "Cancel" || st === "Cancelled" || st === "-") return { action: "cancel", stamp: true, reason: "Cancelled — marked cancelled, kept for the record." };
+  if (st === "Hold") return { action: "place", state: "on_hold", stamp: true, reason: "On hold — placed and parked; resumes when it returns to Queued." };
+  if (st === "Queued") return { action: "place", state: "upcoming", stamp: true, reason: "" };
+  return { action: "park", stamp: false, reason: 'Unexpected status "' + (st || "—") + '" — held for a look rather than guessing.' };
+}
+async function syncContext() {
+  const rows = await db(`coyote_intake?select=id,payload,received_at&processed_at=is.null&order=received_at.desc&limit=8000`);
+  const prods = await db(`product?select=part_number,family,lines`);
+  const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
+  const lns = await db(`line?select=id,name,enabled`);
+  const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
+  const tmpls = await db(`build_template?select=family,ready`);
+  const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
+  const builds = await db(`build?select=order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination&limit=100000`);
+  const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
+  return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder };
+}
+function reduceFresh(ctx) {
+  const byKey = new Map();
+  for (const r of ctx.rows) {
+    const p = r.payload || {};
+    const o = (p.order && typeof p.order === "object") ? p.order : {};
+    const ordNo = String(o.order_number ?? p.order_number ?? "").trim();
+    const key = ordNo || ("__row_" + r.id);
+    if (byKey.has(key)) { byKey.get(key).rowIds.push(r.id); continue; }   // newest-first: first seen = latest
+    const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
+    const custName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "");
+    const dest = String(c.state ?? c.ship_state ?? "").trim() || null;
+    const items = Array.isArray(p.line_items) ? p.line_items : [];
+    const cabParts = [], unknownParts = []; let blazerTop = false;
+    for (const it of items) {
+      const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
+      const up = num.toUpperCase();
+      if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
+      const pr = ctx.prodByPart[up];
+      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true }); }
+      else unknownParts.push(num);
+    }
+    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts, unknownParts, blazerTop, rowIds: [r.id] });
+  }
+  return [...byKey.values()];
+}
+function buildSyncPlan(ctx) {
+  const items = [];
+  for (const o of reduceFresh(ctx)) {
+    const dec = classifyForBoard(o);
+    const targets = [];
+    if (dec.action === "place") {
+      const multi = o.cabParts.length > 1;
+      o.cabParts.forEach((cp, i) => targets.push({
+        order_number: multi ? `${o.orderNo}.${i + 1}` : o.orderNo, coyote_root: o.orderNo,
+        line_id: cp.line, part_number: cp.part, state: dec.state,
+        customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
+      }));
+    }
+    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts });
+  }
+  return items;
+}
+async function syncRun(apply, actorId) {
+  const ctx = await syncContext();
+  const plan = buildSyncPlan(ctx);
+  const now = new Date().toISOString();
+  const sum = { applied: !!apply, orders: plan.length, placed: 0, updated: 0, flagged: 0, completed: 0, cancelled: 0, parked: 0, excluded: 0, noop: 0, actions: [] };
+  const stampIds = [];
+  const A = (order, doWhat, extra) => sum.actions.push(Object.assign({ order, do: doWhat }, extra || {}));
+  for (const it of plan) {
+    if (it.action === "park") { sum.parked++; A(it.orderNo, "park", { reason: it.reason }); continue; }
+    if (it.action === "exclude") { sum.excluded++; if (it.stamp) stampIds.push(...it.rowIds); A(it.orderNo, "exclude", { reason: it.reason }); continue; }
+    if (it.action === "complete") {
+      const b = ctx.buildByOrder[it.orderNo];
+      if (b && b.state !== "production_complete" && b.state !== "cancelled") { if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) }); sum.completed++; A(it.orderNo, "mark shipped / complete"); }
+      else sum.noop++;
+      if (it.stamp) stampIds.push(...it.rowIds); continue;
+    }
+    if (it.action === "cancel") {
+      const b = ctx.buildByOrder[it.orderNo];
+      if (b && b.state !== "cancelled") { if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "cancelled" }) }); sum.cancelled++; A(it.orderNo, "mark cancelled"); }
+      else sum.noop++;
+      if (it.stamp) stampIds.push(...it.rowIds); continue;
+    }
+    if (it.action === "place") {
+      for (const t of it.targets) {
+        const b = ctx.buildByOrder[t.order_number];
+        if (!b) {
+          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: null, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged }) });
+          sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state });
+        } else if (b.started_at) {
+          const patch = {};
+          if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch.invoice_note = t.invoice_note; patch.note_flagged = t.note_flagged; }
+          if ((b.customer_name || "") !== (t.customer_name || "")) patch.customer_name = t.customer_name;
+          if ((b.destination || "") !== (t.destination || "")) patch.destination = t.destination;
+          if (t.state === "on_hold" && b.state !== "on_hold" && b.state !== "cancelled" && b.state !== "production_complete") patch.state = "on_hold";
+          const disruptive = (b.line_id !== t.line_id) || (String(b.part_number) !== String(t.part_number));
+          if (apply && Object.keys(patch).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
+          if (disruptive) { sum.flagged++; if (apply) logEvent("sync.started_cab_flag", actorId || null, { order_number: t.order_number, from_line: b.line_id, to_line: t.line_id, from_part: b.part_number, to_part: t.part_number }); A(t.order_number, "update started cab — line/part change FLAGGED, not relocated", { started: true }); }
+          else { sum.updated++; A(t.order_number, "update started cab (info only)", { started: true }); }
+        } else {
+          const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged };
+          if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
+          sum.updated++; A(t.order_number, "update", { line: t.line_id });
+        }
+      }
+      if (it.stamp) stampIds.push(...it.rowIds);
+    }
+  }
+  const uniq = [...new Set(stampIds)];
+  if (apply && uniq.length) for (let i = 0; i < uniq.length; i += 100) await db(`coyote_intake?id=in.(${uniq.slice(i, i + 100).join(",")})`, { method: "PATCH", body: JSON.stringify({ processed_at: now }) });
+  sum.stamped = apply ? uniq.length : 0; sum.wouldStamp = uniq.length;
+  if (apply) logEvent("sync.run", actorId || null, { placed: sum.placed, updated: sum.updated, flagged: sum.flagged, completed: sum.completed, cancelled: sum.cancelled, parked: sum.parked, stamped: sum.stamped });
+  return sum;
+}
+function syncPage(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const kpi = (n, label) => `<div class="kpi"><b>${n}</b><span>${label}</span></div>`;
+  const badge = (a) => a === "place" ? '<span class="st q">place</span>' : a === "update" ? '<span class="st p">update</span>' : a === "park" ? '<span class="flag amber">park</span>' : a === "exclude" ? '<span class="flag grey">exclude</span>' : a.indexOf("cancel") > -1 ? '<span class="flag red">cancel</span>' : a.indexOf("complete") > -1 || a.indexOf("shipped") > -1 ? '<span class="flag grey">shipped</span>' : a.indexOf("FLAG") > -1 ? '<span class="flag amber">flagged</span>' : `<span class="st o">${esc(a)}</span>`;
+  const s = d.sum;
+  const rows = s.actions.map((a) => `<tr><td><b>${esc(a.order)}</b></td><td>${badge(a.do)}</td><td class="muted" style="white-space:normal">${esc(a.do)}${a.line ? ` · line ${esc(a.line)}` : ""}${a.part ? ` · ${esc(a.part)}` : ""}${a.reason ? ` — ${esc(a.reason)}` : ""}</td></tr>`).join("");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Sync</title>${style}
+<style>
+  @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th{opacity:.55;text-align:left;padding:6px 8px;font-weight:600}
+  td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .muted{opacity:.6}
+  .flag{padding:1px 8px;border-radius:10px;font-size:.8em;white-space:nowrap;display:inline-block}
+  .flag.amber{background:#3a2f10;color:#ffd60a}.flag.red{background:#3a1510;color:#ff6b5e}.flag.grey{background:#2c2c2e;color:#aeaeb2}
+  .st{padding:1px 9px;border-radius:10px;font-size:.82em;font-weight:600}
+  .st.q{background:#10233a;color:#5eaeff}.st.p{background:#12331c;color:#5edb84}.st.o{background:#3a2f10;color:#ffd60a}
+  .kpi{display:inline-block;min-width:92px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 8px 8px 0}
+  .kpi b{display:block;font-size:1.5rem}.kpi span{opacity:.6;font-size:.8rem}
+  @media print{ a{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1000px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:-4px 0 12px">
+    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
+    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
+    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
+  </p>
+  <h2>Sync <span class="muted" style="font-size:.6em;font-weight:400">— Coyote → board, ${d.preview ? "PREVIEW (writes nothing)" : "last run"}</span></h2>
+  <p class="muted" style="margin-top:-8px">${d.preview ? "This is exactly what the automatic engine <b>would do</b> to the board right now — nothing is written here. Once it's turned on, it does this by itself every hour." : "The engine runs automatically every hour."}</p>
+  <div style="margin:14px 0">
+    ${kpi(s.placed, "place")}${kpi(s.updated, "update")}${kpi(s.completed, "shipped")}${kpi(s.cancelled, "cancel")}${kpi(s.parked, "parked")}${kpi(s.excluded, "excluded")}${s.flagged ? kpi(s.flagged, "flagged") : ""}
+  </div>
+  <p class="muted" style="margin-top:-6px;font-size:.85rem"><b>Parked</b> = an order the engine won't place because it can't map it cleanly (unrecognized part, or a cab whose build steps aren't finished). It's never guessed onto a line — add the part / finish the steps in <a href="/lines" style="color:#5eaeff">Lines &amp; parts</a> and it places itself on the next run.</p>
+  <div class="lane">
+    ${s.actions.length ? `<table><tr><th>Order #</th><th>Action</th><th>Detail</th></tr>${rows}</table>` : `<div class="muted">Nothing to do — the fresh intake is clear.</div>`}
+  </div>
+  <p class="muted" style="font-size:.8rem;text-align:center">Idempotent (keyed on the unique order #) · cab numbers stay wall-owned · every run audited · nothing hard-deleted.</p>
+</div></body></html>`;
+}
+
+// ============================================================
 // PAY WORKSHEET (payroll hours export) — replaces the manual "Employee Pay
 // Worksheet" that is hand-tallied and emailed to the outsourced payroll company.
 // Shop Board already holds accurate clock hours, so it builds the sheet itself.
@@ -5318,6 +5497,19 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", linesManagerPage(data));
     }
 
+    // SYNC (admin-only). GET = PREVIEW the Coyote→board write engine (writes
+    // NOTHING — shows exactly what it would place/hold/complete/cancel/park).
+    // The apply run is /api/admin/sync {mode:"apply"} (scheduler / on-demand).
+    if (url.pathname === "/sync") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const sum = await syncRun(false, empId);
+      return send(200, "text/html; charset=utf-8", syncPage({ sum, preview: true }));
+    }
+
     // TECH FINISH (file 11, builder half): every non-background step complete
     // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
     // (Q104); the paused clock there is management's bottleneck (Q53/C11).
@@ -6214,6 +6406,18 @@ self.addEventListener("notificationclick", (e) => {
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown template action" });
+    }
+
+    // SYNC RUN (admin / scheduler): the Coyote→board write engine.
+    // {mode:"preview"} computes the plan and writes nothing; {mode:"apply"}
+    // executes it (places/updates/completes/cancels cabs + stamps processed_at).
+    // Idempotent, audited. This is what the hourly scheduled task will call.
+    if (url.pathname === "/api/admin/sync" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const apply = p.mode === "apply";
+      const sum = await syncRun(apply, adminId);
+      return json(200, { ok: true, summary: sum });
     }
 
     // BUILD STEPS: the Q97 editor. Template edits shape FUTURE cabs only —
