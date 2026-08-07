@@ -749,7 +749,7 @@ const loginPage = (employees) => `<!doctype html>
 <meta name="robots" content="noindex, nofollow"><!-- Q48 -->
 <title>Sign in — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
 
   <!-- SCREEN 1: the name grid (Q90 — tap your name, zero typing).
        Inactive employees never appear here (Q70). -->
@@ -825,7 +825,7 @@ const changePinPage = (first) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>New PIN — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2 id="pinTitle">Hi ${first} — that code was temporary. Choose YOUR 4-digit PIN</h2>
   <div class="dots" id="dots"></div>
   <div class="msg" id="msg"></div>
@@ -874,7 +874,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2 id="hi">${state.clockedIn
     ? `${emp.first_name} — ON THE CLOCK · ${state.lineName}`
     : `Hi ${emp.first_name} — clock in to start`}</h2>
@@ -1051,7 +1051,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         margin:10px 0;font-size:.95rem}
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <div class="cabbar">
     <b>ORDER ${build.order_number}</b> · ${lineName}<br>
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
@@ -1297,7 +1297,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   .pull{border:1px solid #30d158;border-radius:10px;padding:10px;margin-top:8px}
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
     ${clockedIn
@@ -1371,7 +1371,7 @@ const watcherPage = (emp) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2>Welcome, ${emp.first_name}.</h2>
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
@@ -1439,7 +1439,7 @@ const inboxPage = (emp, notes) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2>Notifications</h2>
   ${notes.length ? notes.map((n) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
@@ -1462,7 +1462,7 @@ const inboxPage = (emp, notes) => `<!doctype html>
 // code-entry box. Plain concatenation (no nested template literals) for safety.
 function handoffPage(info) {
   const esc = (x) => String(x == null ? "" : x).replace(/</g, "&lt;");
-  const head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Send photos - Shop Board</title>' + style + '</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div>';
+  const head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Send photos - Shop Board</title>' + style + '</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>';
   const foot = '</div></body></html>';
   if (!info) {
     return head +
@@ -1617,7 +1617,7 @@ const orderPage = (b, family, lineName, tasks) => {
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
 .kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em}</style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
@@ -1683,7 +1683,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   .qrow{opacity:.8;padding:4px 0}
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <!-- Top nav (Sonnet UX escalation 2026-07-28, C16: there was no way BACK
        from Manager to Admin — nav now lives at the top of every console,
        same placement everywhere per file 22.4). -->
@@ -2050,7 +2050,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}) {
   @media print{ a{display:none} .mp{break-inside:avoid} }
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 14px">
     <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
     <a href="/coverage" style="color:#8e8e93;margin-right:18px">Coverage</a>
@@ -2202,7 +2202,7 @@ function coveragePage(now, days, builderCount, cabs) {
   @media print{ a{display:none} .mp{break-inside:avoid} }
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 14px">
     <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
     <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
@@ -2314,7 +2314,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   .tglrow small{display:block;opacity:.55}
 </style></head>
 <body><div class="wrap" style="max-width:980px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <!-- Sticky console nav (Sonnet UX escalation 2026-07-28, C17: the admin
        console was one long scroll with nav buried at the bottom). Tabs jump
        to sections; room to grow toward file 21's nine sections. Same top
@@ -2866,7 +2866,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
   .drill th{opacity:.4}
 </style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
     <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
@@ -3071,7 +3071,7 @@ function integrityPage(d) {
   @media print{ a.pb,.csv{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:960px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
@@ -3229,7 +3229,7 @@ function intakeInboxPage(d) {
   @media print{ a{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/integrity" style="color:#8e8e93;margin-right:18px">Integrity</a>
@@ -3378,7 +3378,7 @@ function mapperPreviewPage(d) {
   @media print{ a{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1050px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
@@ -3458,7 +3458,7 @@ function pushDiffPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const clip = (s, n) => { s = String(s == null ? "" : s); return s.length > n ? esc(s.slice(0, n)) + "…" : esc(s); };
   const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
-  const nav = `<div class="logo">SHOP <span>BOARD</span></div>
+  const nav = `<div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
@@ -3619,7 +3619,7 @@ function feedMonitorPage(d) {
   @media print{ a{display:none} details{border:none} details>*:not(summary){display:block} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
@@ -3805,7 +3805,7 @@ function orderHistoryPage(d) {
   @media print{ a{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:900px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
@@ -3905,7 +3905,7 @@ function linesManagerPage(d) {
   @media print{ a,.b{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
@@ -4137,7 +4137,7 @@ function syncPage(d) {
   @media print{ a{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
     <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
@@ -4261,7 +4261,7 @@ function reconcilePage(d, role) {
   @media print{ a,.b,.ar,input{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
     <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
@@ -4378,7 +4378,7 @@ function payrollPage(d) {
   @media print{ a,.per{display:none} }
 </style></head>
 <body><div class="wrap" style="max-width:1200px">
-  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 12px">
     <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
     <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
