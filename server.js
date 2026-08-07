@@ -3982,6 +3982,17 @@ function classifyForBoard(o) {
   if (st === "Queued") return { action: "place", state: "upcoming", stamp: true, reason: "" };
   return { action: "park", stamp: false, reason: 'Unexpected status "' + (st || "—") + '" — held for a look rather than guessing.' };
 }
+// AUTO-ASSIGN the next wall cab number for a newly-placed cab (Q110): number +
+// family letter (T/A/C/F/B/D), continuing from the highest number seen for that
+// family. Mutates ctx.hi so multiple same-family cabs in one run count up. Returns
+// null for a family with no letter mapping (left blank, surfaced on /reconcile).
+function nextCabNumber(ctx, part) {
+  const pr = ctx.prodByPart[String(part || "").toUpperCase()];
+  const suffix = RECON_FAM_SUFFIX[pr ? pr.family : ""] || "";
+  if (!suffix) return null;
+  ctx.hi[suffix] = (ctx.hi[suffix] || 0) + 1;
+  return `${ctx.hi[suffix]}${suffix}`;
+}
 async function syncContext() {
   const rows = await db(`coyote_intake?select=id,payload,received_at&processed_at=is.null&order=received_at.desc&limit=8000`);
   const prods = await db(`product?select=part_number,family,lines`);
@@ -3992,7 +4003,9 @@ async function syncContext() {
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
   const builds = await db(`build?select=order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination&limit=100000`);
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
-  return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder };
+  const allNums = await db(`build?select=cab_number&cab_number=not.is.null&limit=100000`);
+  const hi = {}; for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
+  return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder, hi };
 }
 function reduceFresh(ctx) {
   const byKey = new Map();
@@ -4062,8 +4075,9 @@ async function syncRun(apply, actorId) {
       for (const t of it.targets) {
         const b = ctx.buildByOrder[t.order_number];
         if (!b) {
-          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: null, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged }) });
-          sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state });
+          const cn = nextCabNumber(ctx, t.part_number);
+          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged }) });
+          sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state, cab: cn });
         } else if (b.started_at) {
           const patch = {};
           if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch.invoice_note = t.invoice_note; patch.note_flagged = t.note_flagged; }
