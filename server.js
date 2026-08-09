@@ -3191,7 +3191,7 @@ function integrityPage(d) {
 // outsourced Blazer top). Writes NOTHING — the staging view the mapper builds on.
 async function intakeInboxData() {
   const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
-  const prods = await db(`product?select=part_number,family,lines`);
+  const prods = await db(`product?select=part_number,family,lines&retired=is.false`);
   const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
   const lns = await db(`line?select=id,name`);
   const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
@@ -3344,7 +3344,7 @@ function classifyOrder(o) {
 }
 async function mapperPreviewData() {
   const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
-  const prods = await db(`product?select=part_number,family,lines`);
+  const prods = await db(`product?select=part_number,family,lines&retired=is.false`);
   const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
   const lns = await db(`line?select=id,name`);
   const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
@@ -3753,7 +3753,7 @@ async function orderHistoryData(n) {
   const ord = String(n == null ? "" : n).trim();
   if (!ord) return { order: "", asked: false, found: false, history: [] };
   if (!/^[A-Za-z0-9._-]{1,32}$/.test(ord)) return { order: ord, asked: true, found: false, badKey: true, history: [] };
-  const prods = await db(`product?select=part_number,family,lines`);
+  const prods = await db(`product?select=part_number,family,lines&retired=is.false`);
   const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
   const lns = await db(`line?select=id,name`);
   const lineName = {}; for (const l of lns) lineName[l.id] = l.name;
@@ -3897,7 +3897,7 @@ function orderHistoryPage(d) {
 // new placements; cabs already on the board are not moved by a reroute.
 async function linesManagerData() {
   const lines = await db(`line?select=id,name,enabled&order=id`);
-  const prods = await db(`product?select=part_number,family,lines,is_smk&order=family,part_number`);
+  const prods = await db(`product?select=part_number,family,lines,is_smk,retired&order=family,part_number`);
   const tmpls = await db(`build_template?select=id,family,ready`);
   const tmplByFam = {}; for (const t of tmpls) tmplByFam[t.family] = t;
   const famMap = {};
@@ -3930,7 +3930,7 @@ function linesManagerPage(d) {
     </td></tr>`;
   const famCard = (f, i) => `<div class="lane">
     <h3 style="margin-bottom:4px">${esc(f.family)} ${!f.hasTemplate ? '<span class="flag amber">no template</span>' : f.ready ? '<span class="st p">Ready</span>' : '<span class="flag amber">Draft — held off the board</span>'}</h3>
-    <p class="muted" style="margin:0 0 8px;font-size:.85rem">Part${f.parts.length === 1 ? "" : "s"}: ${f.parts.map((p) => `<code>${esc(p.part_number)}</code>${p.is_smk ? '<span class="muted">·smk</span>' : ""}`).join(" &nbsp; ")}</p>
+    <p class="muted" style="margin:0 0 8px;font-size:.85rem">Part${f.parts.length === 1 ? "" : "s"}: ${f.parts.map((p) => `<code${p.retired ? ' style="opacity:.45;text-decoration:line-through"' : ""}>${esc(p.part_number)}</code>${p.is_smk ? '<span class="muted">·smk</span>' : ""} <button class="b" style="padding:2px 8px;font-size:.75rem" onclick="post('/api/admin/catalog',{action:'${p.retired ? "restore" : "retire"}',part:'${esc(p.part_number)}'},this)">${p.retired ? "Restore" : "Retire"}</button>`).join(" &nbsp; ")}</p>
     <div class="checks">${lineChecks("rt-" + i, f.lines)}</div>
     <div style="margin-top:8px">
       <button class="b grn" onclick="routeFam(${i},this)">Save routing</button>
@@ -4069,7 +4069,7 @@ function nextCabNumber(ctx, part) {
 }
 async function syncContext() {
   const rows = await db(`coyote_intake?select=id,payload,received_at&processed_at=is.null&order=received_at.desc&limit=8000`);
-  const prods = await db(`product?select=part_number,family,lines`);
+  const prods = await db(`product?select=part_number,family,lines&retired=is.false`);
   const prodByPart = {}; for (const p of prods) prodByPart[String(p.part_number).toUpperCase()] = p;
   const lns = await db(`line?select=id,name,enabled`);
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
@@ -6656,6 +6656,18 @@ self.addEventListener("notificationclick", (e) => {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p = await body(req);
       const act = String(p.action || "");
+      // Block 91: retire-not-delete for part numbers. A retired part keeps its
+      // history and its cabs on the board, but drops off every accept-list —
+      // a NEW order carrying it parks ("unrecognized") until restored here.
+      if (act === "retire" || act === "restore") {
+        const part = String(p.part || "").trim().toUpperCase();
+        if (!/^[A-Z0-9-]{2,40}$/.test(part)) return json(400, { ok: false, error: "That part number doesn't look right" });
+        const [pr] = await db(`product?select=part_number,retired&part_number=eq.${encodeURIComponent(part)}`);
+        if (!pr) return json(404, { ok: false, error: "Part not found" });
+        await db(`product?part_number=eq.${encodeURIComponent(part)}`, { method: "PATCH", body: JSON.stringify({ retired: act === "retire" }) });
+        logEvent(act === "retire" ? "catalog.part_retired" : "catalog.part_restored", adminId, { part_number: part });
+        return json(200, { ok: true });
+      }
       const allLines = await db(`line?select=id,enabled`);
       const okLine = new Set(allLines.filter((l) => l.enabled).map((l) => Number(l.id)));
       const wantLines = Array.isArray(p.lines)
