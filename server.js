@@ -3903,7 +3903,7 @@ async function linesManagerData() {
   const famMap = {};
   for (const p of prods) {
     const f = (famMap[p.family] = famMap[p.family] || { family: p.family, parts: [], lineSet: new Set() });
-    f.parts.push({ part_number: p.part_number, lines: (p.lines || []).slice().sort((a, b) => a - b), is_smk: !!p.is_smk });
+    f.parts.push({ part_number: p.part_number, lines: (p.lines || []).slice().sort((a, b) => a - b), is_smk: !!p.is_smk, retired: !!p.retired });
     for (const lid of (p.lines || [])) f.lineSet.add(lid);
   }
   const families = Object.values(famMap).map((f) => ({
