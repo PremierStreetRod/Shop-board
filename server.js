@@ -1314,12 +1314,12 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
     ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
     ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
     ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
-      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}
+      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; HELD — front office</span>' : ""}
         ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
         ${q.kit_note ? `<span style="opacity:.6;font-size:.85rem"> · ${q.kit_note}</span>` : ""}
         <span style="float:right">
-          ${i > 0 ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
-          ${i < r.queue.length - 1 ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
+          ${i > 0 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
+          ${i < r.queue.length - 1 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
           ${q.kit_status !== "verified" ? `<button class="b grn" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts ✓</button>` : ""}
           ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
         </span>
@@ -4241,7 +4241,7 @@ function reconcileShape(open, famOf, lineName, hi) {
       cab: b.cab_number || "", lineId: b.line_id, line: lineName[b.line_id] || (b.line_id ? "Line " + b.line_id : "— unrouted"),
       rawState: String(b.state || ""), state: String(b.state || "").replace(/_/g, " "),
       customer: b.customer_name || "", dest: b.destination || "", promised: b.promised_finish || "",
-      noteFlag: !!b.note_flagged, hint, qp: (b.queue_pos == null ? null : Number(b.queue_pos)), createdAt: b.created_at || "",
+      noteFlag: !!b.note_flagged, hint, qp: (b.queue_pos == null ? null : Number(b.queue_pos)), createdAt: b.created_at || "", pinned: !!b.queue_pinned,
       numbered: !!b.cab_number, fromCoyote: !!b.coyote_root, reorderable: false, ondeck: false, isFirst: false, isLast: false,
     };
   });
@@ -4260,7 +4260,7 @@ function reconcileShape(open, famOf, lineName, hi) {
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
 async function reconcileData() {
-  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
+  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
   const lines = await db("line?select=id,name&order=id");
@@ -4275,7 +4275,7 @@ function reconcilePage(d, role) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
   const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
-    <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}` : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
+    <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
     <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
     <td class="muted">${esc(c.customer) || "—"}</td>
     <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
@@ -4336,6 +4336,7 @@ function reconcilePage(d, role) {
   function recount(){var rows=document.querySelectorAll('tr[data-cab]');var done=0,tot=rows.length;rows.forEach(function(r){var inp=r.querySelector('input.cn');if(inp&&inp.value.trim())done++;});var a=document.getElementById('kpi-num');if(a)a.textContent=done;var b=document.getElementById('kpi-un');if(b)b.textContent=(tot-done);}
   function saveCab(id,btn){var inp=document.getElementById('cn-'+id);var v=inp.value.trim();var msg=document.getElementById('msg-'+id);var row=document.getElementById('row-'+id);btn.disabled=true;var old=btn.textContent;btn.textContent='…';msg.innerHTML='';fetch('/api/admin/cab-number',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,cab_number:v})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){msg.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'error')+'</span>';btn.textContent=old;btn.disabled=false;return;}if(v){row.classList.add('done');msg.innerHTML='<span style="color:#5edb84">&#10003; '+v.toUpperCase()+'</span>';}else{row.classList.remove('done');msg.textContent='';}btn.textContent=old;btn.disabled=false;recount();}).catch(function(e){msg.innerHTML='<span style="color:#ff6b5e">'+e+'</span>';btn.textContent=old;btn.disabled=false;});}
   function qmove(id,dir,btn){var all=document.querySelectorAll('.ar');all.forEach(function(x){x.disabled=true;});fetch('/api/queue/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,dir:dir})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){location.reload();}else{all.forEach(function(x){x.disabled=false;});var n=document.getElementById('freshnote');if(n){n.textContent=(j&&j.error)||'Move failed';n.style.display='';}}}).catch(function(){all.forEach(function(x){x.disabled=false;});});}
+  function qpin(id,want,btn){btn.disabled=true;fetch('/api/queue/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,pinned:want})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){location.reload();}else{btn.disabled=false;var n=document.getElementById('freshnote');if(n){n.textContent=(j&&j.error)||'Pin failed';n.style.display='';}}}).catch(function(){btn.disabled=false;});}
   var QVER=null;
   function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){location.reload();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
@@ -4489,7 +4490,7 @@ function payrollCsv(d) {
 // tap (the normal way now) and the manager's manual override. Freezes the
 // template into the cab's own task list (Q97) and stamps the start.
 async function freezeAndStart(b, empId, startedAt) {
-  await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt }) });
+  await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt, queue_pinned: false }) });
   const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
   const steps = await db(`step_template?select=display_no,name,day_no,man_hours,is_background,sort_order&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
   for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
@@ -4879,7 +4880,7 @@ http.createServer(async (req, res) => {
         const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
         const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
         const linesW = await db(`line?select=id,name&enabled=is.true&order=id`);
-        const buildsW = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
+        const buildsW = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
           awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
@@ -5999,12 +6000,17 @@ http.createServer(async (req, res) => {
       const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
       const { build_id, dir } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number,queue_pinned&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only upcoming cabs can be reordered" });
-      const q = (await db(`build?select=id,queue_pos&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`));
+      // Block 89 (owner-pin): a pinned cab holds the spot the front office gave
+      // it — the warehouse can reorder above it and below it, but nothing moves
+      // it and nothing crosses it. Admin moves (/api/queue/move) stay free.
+      if (b.queue_pinned) return json(400, { ok: false, error: "That spot is held by the front office" });
+      const q = (await db(`build?select=id,queue_pos,queue_pinned&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`));
       const idx = q.findIndex((x) => x.id === b.id);
       const swap = dir === "up" ? q[idx - 1] : q[idx + 1];
       if (!swap) return json(400, { ok: false, error: "Already at the end" });
+      if (swap.queue_pinned) return json(400, { ok: false, error: "That spot is held by the front office" });
       // Re-stamp both positions explicitly so nulls can never make order ambiguous.
       await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
       await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
@@ -6553,6 +6559,23 @@ self.addEventListener("notificationclick", (e) => {
       return json(200, { ok: true });
     }
 
+    // QUEUE PIN (block 89, owner-pin authority): an admin pins an upcoming cab
+    // to its spot — the warehouse kit-slide can't move it or cross it (enforced
+    // in /api/kit/move); admin reorders stay unrestricted. The pin clears
+    // automatically when the build starts (freezeAndStart) or manually here.
+    if (url.pathname === "/api/queue/pin" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const build_id = p.build_id; const want = !!p.pinned;
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,queue_pinned&id=eq.${build_id}`);
+      if (!b) return json(404, { ok: false, error: "Cab not found" });
+      if (want && b.state !== "upcoming") return json(400, { ok: false, error: "Only an upcoming cab can be pinned" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ queue_pinned: want }) });
+      logEvent(want ? "queue.pinned" : "queue.unpinned", adminId, { build_id, order_number: b.order_number });
+      return json(200, { ok: true, pinned: want });
+    }
+
     // QUEUE STATE: a tiny version signature of the on-deck order across every line,
     // so the White Board and Warehouse Board can poll and refresh whenever anyone
     // (admin OR warehouse) reorders — nobody stares at a stale queue.
@@ -6561,9 +6584,9 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return json(403, { ok: false, error: "Not allowed" });
-      const rows = await db(`build?select=id,queue_pos,state&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000`);
+      const rows = await db(`build?select=id,queue_pos,state,queue_pinned&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000`);
       rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      let seed = ""; for (const r of rows) seed += r.id + ":" + (r.queue_pos == null ? "" : r.queue_pos) + ":" + r.state + "|";
+      let seed = ""; for (const r of rows) seed += r.id + ":" + (r.queue_pos == null ? "" : r.queue_pos) + ":" + r.state + ":" + (r.queue_pinned ? 1 : 0) + "|";
       let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
       return json(200, { v: String(h) });
     }
