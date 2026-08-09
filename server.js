@@ -722,7 +722,7 @@ const style = `<style>
 // PIN, or the inbox itself) a small clock-face links to /inbox and shows the
 // unread count, so a new notification is visible even with push/text/email off.
 (function(){
-  var skip = ["/board","/login","/","/change-pin","/inbox","/h"];
+  var skip = ["/tv","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
   document.addEventListener("DOMContentLoaded", function(){
     fetch("/api/inbox/unread").then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
@@ -950,7 +950,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
-    <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+    <a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1137,7 +1137,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <p style="text-align:center;margin:22px 0">
     <button class="back" id="clockout">Clock out</button> ·
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
-    <a href="/board" style="color:#8e8e93">TV board</a> ·
+    <a href="/board" style="color:#8e8e93">Shop board</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1333,7 +1333,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
       </div>`).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
   </div>`).join("")}
   <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -1387,10 +1387,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   <p style="text-align:center;margin-top:26px">
     <a href="/board" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
-  ${emp.role === "admin" ? `<p style="text-align:center;margin-top:6px">
-    <a href="/admin" style="color:#8e8e93">Admin console</a> ·
-    <a href="/manager" style="color:#8e8e93">Manager cockpit</a>
-  </p>` : ""}
+  ${emp.role === "admin" ? navBar95(true) : ""}
   <!-- Block 23: web-push opt-in — one tap on each device that should get
        pinged. While the Q106 sandbox is on, only the owner-rep RECEIVES
        anything, no matter who subscribes here. -->
@@ -1498,7 +1495,7 @@ function handoffPage(info) {
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
 // and pace arrive with the time engine (Stage 2). Refreshes itself every 30 s.
-const boardPage = `<!doctype html>
+const boardPage = (tv98 = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
@@ -1521,7 +1518,10 @@ const boardPage = `<!doctype html>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
-  <div class="board" id="board"></div>
+  <div style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
+    <div id="rail" style="padding:12px 4px 12px 16px"></div>
+    <div class="board" id="board"></div>
+  </div>
   <!-- Block 25 (owner-rep): the legend — every color the board can show,
        spelled out — plus the sign-out that was missing. -->
   <div style="position:fixed;bottom:12px;left:18px;font-size:.9rem;opacity:.75">
@@ -1529,9 +1529,9 @@ const boardPage = `<!doctype html>
     <span style="color:#ffd60a">■</span> running behind &nbsp;
     <span style="color:#ff453a">■</span> needs help &nbsp;
     <span style="color:#8e8e93">■</span> idle line &nbsp;
-    <span style="color:#ff9f0a">▧</span> rework &nbsp;·&nbsp;
+    <span style="color:#ff9f0a">▧</span> rework${tv98 ? "" : `&nbsp;·&nbsp;
     <a href="#" onclick="history.back();return false" style="color:#8e8e93">← Back</a> &nbsp;·&nbsp;
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>`}
   </div>
   <div class="stamp" id="stamp"></div>
   <!-- Q86: TV SLEEP overlay — a near-black dim screen shown outside working
@@ -1542,6 +1542,11 @@ const boardPage = `<!doctype html>
     <div style="position:fixed;bottom:26px;left:0;right:0;font-size:1.3vw;color:#232329">SHOP BOARD — asleep · tap to peek</div>
   </div>
 <script>
+  // Block 95: one page, two surfaces. TVMODE (the /tv URL) renders nothing
+  // clickable and keeps the sleep overlay; the staff board (/board) links
+  // every order number through to the cab card.
+  const TVMODE = ${tv98 ? "true" : "false"};
+  const ol = (o) => TVMODE ? o : '<a href="/order/' + encodeURIComponent(o) + '" style="color:inherit">' + o + "</a>";
   // Plain fetch-poll every 30 s — Realtime push replaces this in Stage 3.
   async function refresh(){
     try{
@@ -1561,7 +1566,7 @@ const boardPage = `<!doctype html>
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
-          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER <a href="/order/\${encodeURIComponent(l.cab.order)}" style="color:inherit">\${l.cab.order}</a></div>
+          \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${ol(l.cab.order)}</div>
             \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
@@ -1569,10 +1574,20 @@ const boardPage = `<!doctype html>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today — " + l.down.reason : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
-            ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\`
+            ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\`
             : "ON DECK: — nothing queued"}</div>
           <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
         </div>\`).join("");
+      // Block 95: the left-hand UPCOMING rail — every queued cab, grouped by
+      // line in White-Board order. TV shows the basics only; staff tap through.
+      const rl = document.getElementById("rail");
+      if (rl) {
+        const grp = s.lines.filter(l => l.upcoming && l.upcoming.length);
+        rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
+          (grp.length ? grp.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;opacity:.55;font-size:.95rem;margin-bottom:4px">' + l.name + '</div>' +
+            l.upcoming.map(u => '<div style="background:#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b><div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
+          : '<div style="opacity:.45">Nothing in the queue.</div>');
+      }
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
       lastState = s; applySleep(s);
     }catch(e){ /* board never crashes; next poll retries */ }
@@ -1583,7 +1598,7 @@ const boardPage = `<!doctype html>
   var lastState = null, peekUntil = 0;
   function applySleep(s){
     var el = document.getElementById("sleep"); if(!el) return;
-    var asleep = !!(s && s.tv && s.tv.asleep) && Date.now() > peekUntil;
+    var asleep = TVMODE && !!(s && s.tv && s.tv.asleep) && Date.now() > peekUntil;
     el.style.display = asleep ? "block" : "none";
     if(asleep){ var m = document.getElementById("sleepmsg"); if(m) m.textContent = (s.tv.message || ""); }
   }
@@ -1761,6 +1776,36 @@ const shellPage = `<!doctype html>
 // Per line: the active cab (sign-off completes it — the file 11 completion
 // gate's manager half; note/photo requirements join in a later block) and
 // the waiting queue (start = cab goes Active + its Q97 task list freezes).
+// ============================================================
+// Block 95 (owner-rep nav cleanup, 2026-08-09): ONE shared header
+// for every console page. The daily links live in the row; every
+// occasional tool sits behind a Tools menu (plain <details> --
+// touch-friendly, no dialogs, CSP-safe). Managers get their own
+// smaller Tools list; admin-only pages stay off it. Sub-pages
+// stop inventing partial navs, so nothing "drops off" anymore.
+// ============================================================
+const navBar95 = (isAdmin, showReports = false) => {
+  const it = (h, t) => `<a href="${h}" style="display:block;color:#ddd;padding:9px 20px;text-decoration:none;white-space:nowrap">${t}</a>`;
+  const tools = isAdmin
+    ? [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/intake", "Intake"], ["/mapper", "Mapper"], ["/feed", "Coyote feed"], ["/sync", "Sync"], ["/order", "Order history"], ["/integrity", "Integrity"], ["/lines", "Lines & parts"], ["/tv", "TV screen"]]
+    : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tv", "TV screen"]]);
+  return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
+  <p style="text-align:center;margin:-4px 0 14px">
+    ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
+    <a href="/manager" style="color:#8e8e93;margin-right:16px">Cockpit</a>
+    <a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>
+    ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
+    <a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a>
+    <details class="t95" style="display:inline-block;position:relative">
+      <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none">Tools &#9662;</summary>
+      <div style="position:absolute;left:50%;transform:translateX(-50%);top:30px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:80;min-width:185px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
+        ${tools.map(([h, t]) => it(h, t)).join("")}
+      </div>
+    </details>
+    <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
+  </p>`;
+};
+
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1778,14 +1823,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- Top nav (Sonnet UX escalation 2026-07-28, C16: there was no way BACK
        from Manager to Admin — nav now lives at the top of every console,
        same placement everywhere per file 22.4). -->
-  <p style="text-align:center;margin:-4px 0 14px">
-    ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
-    ${isAdmin || showReports ? `<a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>` : ""}
-    <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
-    <a href="/coverage" style="color:#8e8e93;margin-right:18px">Coverage</a>
-    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(isAdmin, showReports)}
   <h2>Manager</h2>
   ${onClock.length ? `
   <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
@@ -1947,7 +1985,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
     </div>`).join("")}
   <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -2124,7 +2162,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
 // entry: the floor right now, cabs finishing (awaiting sign-off), sign-offs in
 // the last 7 days, and who's out ahead. Prints cleanly. "The button is the
 // feature" (owner-rep) — an optional Monday auto-push can ride the scheduler later.
-function meetingPage(now, board, awaiting, completed, out, proj = {}) {
+function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 = false) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2142,12 +2180,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}) {
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 14px">
-    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
-    <a href="/coverage" style="color:#8e8e93;margin-right:18px">Coverage</a>
-    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(isAdmin95)}
   <h2>Meeting Pack</h2>
   <p class="muted" style="margin-top:-8px">A live snapshot for the meeting — ${esc(now)} (Phoenix). Reload for the latest.</p>
 
@@ -2272,7 +2305,7 @@ function projPhrase(p) {
 // thin day BEFORE it arrives instead of discovering it at 7am. Read-only,
 // reuses the shop-calendar work-day rule + the Q92 pt-1 time-off data. `days`
 // is pre-assembled by the route; this is a pure render.
-function coveragePage(now, days, builderCount, cabs) {
+function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2294,12 +2327,7 @@ function coveragePage(now, days, builderCount, cabs) {
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 14px">
-    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
-    <a href="/meeting" style="color:#8e8e93;margin-right:18px">Meeting Pack</a>
-    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(isAdmin95)}
   <h2>Coverage — who's out, days ahead</h2>
   <p class="muted" style="margin-top:-8px;text-align:center">The next ${days.length} days at a glance — approved time off against the shop calendar.${builderCount ? ` ${builderCount} builder${builderCount === 1 ? "" : "s"} on the roster.` : ""} As of ${esc(now)} (Phoenix).</p>
   <div class="mp">
@@ -2406,6 +2434,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
 </style></head>
 <body><div class="wrap" style="max-width:980px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${navBar95(true)}
   <!-- Sticky console nav (Sonnet UX escalation 2026-07-28, C17: the admin
        console was one long scroll with nav buried at the bottom). Tabs jump
        to sections; room to grow toward file 21's nine sections. Same top
@@ -2419,20 +2448,6 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
     <a href="#calendar" style="color:#fff;font-weight:700;margin-right:16px">Shop calendar</a>
     <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
-    <span style="opacity:.35">|</span>
-    <a href="/manager" style="color:#8e8e93;margin-left:16px;margin-right:16px">Manager cockpit</a>
-    <a href="/reports" style="color:#8e8e93;margin-right:16px">Reports</a>
-    <a href="/payroll" style="color:#8e8e93;margin-right:16px">Payroll</a>
-    <a href="/integrity" style="color:#8e8e93;margin-right:16px">Integrity</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
-    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
-    <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
-    <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
-    <a href="/lines" style="color:#8e8e93;margin-right:16px">Lines &amp; parts</a>
-    <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
-    <a href="/reconcile" style="color:#8e8e93;margin-right:16px">Reconcile</a>
-    <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
   <h2>Admin</h2>
 
@@ -2605,7 +2620,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
 
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
-  <a href="/board" style="color:#8e8e93;margin-right:24px">TV board</a>
+  <a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -2990,12 +3005,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 14px">
-    ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}
-    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
-    <a href="/board" style="color:#8e8e93;margin-right:18px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(isAdmin, true)}
   <h2>Reports</h2>
   <!-- Q119: clear period picker — rolling windows vs calendar to-date, plus a
        custom From/To range, with the exact dates shown so it's unambiguous. -->
@@ -3195,12 +3205,7 @@ function integrityPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:960px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
-    <a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Integrity — admin only</h2>
   <p class="muted" style="margin-top:-8px">Integrity-sensitive actions, derived from the audit log. <b>These flag; you judge.</b> Nothing here is auto-acted on and none of it ever reaches the floor. The manager shares the team bonus and holds the pause buttons, so his own integrity signals are surfaced here, above him — same spirit as the self-sign tag.</p>
   <div class="lane" style="padding:10px 16px">
@@ -3353,12 +3358,7 @@ function intakeInboxPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/integrity" style="color:#8e8e93;margin-right:18px">Integrity</a>
-    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Intake — orders from Coyote</h2>
   <p class="muted" style="margin-top:-8px">The fresh orders Coyote has pushed, collapsed to the <b>latest record per order</b>. This is a review view — <b>nothing here is on the board yet</b>; the mapping job turns these into cabs once the push is finalized. Blazer tops are outsourced and never enter the app.</p>
   <div style="margin:14px 0">
@@ -3502,11 +3502,7 @@ function mapperPreviewPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1050px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Mapper preview <span class="muted" style="font-size:.6em;font-weight:400">— dry run, nothing is written</span></h2>
   <p class="muted" style="margin-top:-8px">Exactly what the mapping job <b>would</b> put on the board for each fresh Coyote order, so you can check it against the whiteboard first. This writes <b>nothing</b> — no cab is placed and no order is marked handled. <b>Cab #s aren't shown</b> on purpose: the floor assigns those and the app mirrors the wall, so match rows to the board by <b>order #</b>. When the push contract is final, the write step promotes these — and the mapping is already correct no matter how often the developer pushes.</p>
   <div style="margin:14px 0">
@@ -3592,12 +3588,7 @@ function pushDiffPage(d) {
   const clip = (s, n) => { s = String(s == null ? "" : s); return s.length > n ? esc(s.slice(0, n)) + "…" : esc(s); };
   const stat = (s) => s === "Queued" ? '<span class="st q">Queued</span>' : s === "Processed" ? '<span class="st p">Processed</span>' : `<span class="st o">${esc(s)}</span>`;
   const nav = `<div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
-    <a href="/mapper" style="color:#8e8e93;margin-right:18px">Mapper</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>`;
+  ${navBar95(true)}`;
   const head = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -3753,12 +3744,7 @@ function feedMonitorPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:18px">Intake</a>
-    <a href="/changes" style="color:#8e8e93;margin-right:18px">Changes</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Coyote feed <span class="muted" style="font-size:.6em;font-weight:400">— activity &amp; data health</span></h2>
   <p class="muted" style="margin-top:-8px">A live look at the intake: how much data we're holding and every push as it lands. Read-only — nothing here changes the board or the data.</p>
   <div class="lane ${health.cls}" style="padding:12px 16px;display:flex;align-items:center;gap:10px">
@@ -3939,14 +3925,7 @@ function orderHistoryPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:900px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
-    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
-    <a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>
-    <a href="/feed" style="color:#8e8e93;margin-right:16px">Feed</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Order history${d.found ? ` — <span style="color:#5eaeff">${esc(d.order)}</span>${d.customer ? ` <span class="muted" style="font-size:.6em;font-weight:400">· ${esc(d.customer)}</span>` : ""}` : ""}</h2>
   <p class="muted" style="margin-top:-8px">One order's full history from Coyote — every push, every change, and how it maps to the board. Read-only.</p>
   ${lookup}
@@ -4039,12 +4018,7 @@ function linesManagerPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
-    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Lines &amp; parts <span class="muted" style="font-size:.6em;font-weight:400">— production lines &amp; the cab part numbers Coyote routes to them</span></h2>
   <p class="muted" style="margin-top:-8px">Add or rename a line, move a cab family to a different line, and register the part numbers a cab is built from. Every part number here is <b>accepted Coyote push data</b> — a number not in this catalog is ignored when a push lands. Changes apply to the next push and to new placements; cabs already on the board don't move.</p>
 
@@ -4295,12 +4269,7 @@ function syncPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
-    <a href="/intake" style="color:#8e8e93;margin-right:16px">Intake</a>
-    <a href="/mapper" style="color:#8e8e93;margin-right:16px">Mapper</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Sync <span class="muted" style="font-size:.6em;font-weight:400">— Coyote → board, ${d.preview ? "PREVIEW (writes nothing)" : "last run"}</span></h2>
   <p class="muted" style="margin-top:-8px">${d.preview ? "This is exactly what the automatic engine <b>would do</b> to the board right now — nothing is written here. Once it's turned on, it does this by itself every hour." : "The engine runs automatically every hour."}</p>
   <div style="margin:14px 0">
@@ -4419,12 +4388,7 @@ function reconcilePage(d, role) {
 </style></head>
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>
-    <a href="/sync" style="color:#8e8e93;margin-right:16px">Sync</a>
-    <a href="/board" style="color:#8e8e93;margin-right:16px">TV board</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${role === "admin" || role === "manager" ? navBar95(role === "admin") : ""}
   <h2>White Board <span class="muted" style="font-size:.6em;font-weight:400">— the production lines${admin ? "" : " (view only)"}</span></h2>
   <p class="muted" style="margin-top:-8px">Each line lists its cabs oldest-first — the top upcoming cab is <b>on deck</b> next. ${admin ? "Use the &#9650;&#9660; arrows to move a cab up or down the queue; type a cab its wall number and Save." : "This is a live view — the warehouse and admin control the order; it refreshes here on its own."} Changes on another screen show up here within a few seconds.</p>
   <div id="freshnote" style="display:none">The queue just changed on another screen — this page will refresh as soon as you're done typing.</div>
@@ -4537,11 +4501,7 @@ function payrollPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1200px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">
-    <a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>
-    <a href="/reports" style="color:#8e8e93;margin-right:18px">Reports</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </p>
+  ${navBar95(true)}
   <h2>Pay Worksheet</h2>
   <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Regular (up to 8/day) and Overtime (over 8/day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. This replaces the hand-tallied worksheet; download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
@@ -5310,7 +5270,16 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", html);
     }
 
-    if (url.pathname === "/board") return send(200, "text/html; charset=utf-8", boardPage);
+    // Block 95 (owner-rep): the TV and the staff board are SEPARATE surfaces.
+    // /tv = the standalone TV URL — no sign-in, nothing clickable, sleep
+    // overlay on. /board = the staff shop board — sign-in required, every
+    // order (current and upcoming) taps through to the cab card.
+    if (url.pathname === "/tv") return send(200, "text/html; charset=utf-8", boardPage(true));
+    if (url.pathname === "/board") {
+      const empB95 = await liveSession(req);
+      if (!empB95) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      return send(200, "text/html; charset=utf-8", boardPage(false));
+    }
 
     // ORDER DETAIL (block 25) — public look-up from the board's order links.
     if (url.pathname.startsWith("/order/")) {
@@ -5377,7 +5346,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
       // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
       // order #, customer or business name, ship-to state. The Q65 toggle
       // ("Customer names on the TV") still governs the name; missing row = ON.
@@ -5424,13 +5393,21 @@ http.createServer(async (req, res) => {
 
       const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
       const deckOf = {}; // first UPCOMING cab per line = "on deck" (C19 single-owner)
+      const upOf = {};   // Block 95: ALL upcoming cabs per line, White-Board order
       const waitOf = {}; // awaiting-inspection cab (shows if the line has no active cab)
       for (const b of builds) {
         // A rework cab owns the line tile exactly like an active one (file 18:
         // distinct badge, its own countdown vs the manager's time frame).
         if ((b.state === "active" || b.state === "rework") && !cabOf[b.line_id]) cabOf[b.line_id] = b;
         if (b.state === "awaiting_inspection" && !waitOf[b.line_id]) waitOf[b.line_id] = b;
-        if (b.state === "upcoming" && !deckOf[b.line_id]) deckOf[b.line_id] = b;
+        if (b.state === "upcoming") (upOf[b.line_id] = upOf[b.line_id] || []).push(b);
+      }
+      // Block 95: sort each line's queue the way the White Board orders it
+      // (queue_pos, then age). On deck = the head of that queue — this also
+      // fixes ON DECK ignoring an admin's reorder (it used created_at only).
+      for (const k95 of Object.keys(upOf)) {
+        upOf[k95].sort((x, y) => ((x.queue_pos == null ? 1e9 : Number(x.queue_pos)) - (y.queue_pos == null ? 1e9 : Number(y.queue_pos))) || (x.created_at < y.created_at ? -1 : x.created_at > y.created_at ? 1 : 0));
+        deckOf[k95] = upOf[k95][0];
       }
       // Q85: a FIX JOB owns the tile ONLY on a line with no live build (it
       // "runs alongside", never displacing current work) — second pass so
@@ -5478,16 +5455,17 @@ http.createServer(async (req, res) => {
       return json(200, { shop: shopState, tv, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]) } : null;
+        const upcoming95 = (upOf[l.id] || []).map((u) => ({ order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
-          return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
+          return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
             cab: { order: w.order_number, family: familyOf[w.part_number] || "", customer: who88(w), dest: dest88(w),
               done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
               day: 0, total_days: 0 } };
         }
-        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], cab: null, ondeck: deck };
+        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], cab: null, ondeck: deck, upcoming: upcoming95 };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
         // Clip this line's coverage to the cab's life (Q103-2).
@@ -5542,7 +5520,7 @@ http.createServer(async (req, res) => {
           rcolor = !frame ? "amber" : elapsedH > frame ? "red" : elapsedH > frame * 0.75 ? "amber" : "green";
           rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${elapsedH.toFixed(1)} of ${frame || "—"} hrs`;
         }
-        return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
+        return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
             done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
             pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
@@ -5709,7 +5687,7 @@ http.createServer(async (req, res) => {
       // Block 61: projected finish on the floor lines — shared helper, reusing
       // the board we already fetched above (no extra board read).
       const { byOrder: mtProj } = await cabProjections(board);
-      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out, mtProj));
+      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out, mtProj, me.role === "admin"));
     }
 
     // Q92 pt 2: the COVERAGE CALENDAR — the next 14 days of who's out, laid
@@ -5757,7 +5735,7 @@ http.createServer(async (req, res) => {
       // source of truth the Meeting Pack floor + the cockpit also read.
       const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const { cabs } = await cabProjections(board);
-      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs));
+      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs, me.role === "admin"));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
