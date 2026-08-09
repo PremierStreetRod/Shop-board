@@ -1651,7 +1651,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     model, features, addons,
   };
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false) => {
   const real = tasks.filter((t) => !t.is_background);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -1698,6 +1698,19 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false) =
       : `<div class="muted" style="font-size:1.02rem">No configuration detail on file for this cab yet.</div>`}
   </div>
   ${detail.addons.length ? `<div class="lane"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD-ONS &amp; EXTRAS</div>${detail.addons.map((a) => `<div style="padding:3px 0;font-size:1.03rem">&#9656; ${escH(a.desc)}</div>`).join("")}</div>` : ""}` : ""}
+  ${flags.length ? `<div class="lane" style="border-color:#ffd60a">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; UPGRADE WORK NEEDING HOURS</div>
+    ${canHours
+      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : "option not in library"})</span><br>
+        Hrs <input id="fh-${f.id}" style="width:64px"> Day <input id="fd-${f.id}" style="width:50px" value="1"> Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
+        <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button></div>`).join("")
+      : `<div style="opacity:.75">${flags.length} item${flags.length === 1 ? "" : "s"} awaiting hours from the front office — the clock does not include them yet.</div>`}
+  </div>` : ""}
+  ${canHours ? `<div class="lane">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD HOURS <span style="opacity:.5;font-weight:400;font-size:.8em">manager/admin · reason required · audited</span></div>
+    Hrs <input id="ah-h" style="width:64px"> Day <input id="ah-d" style="width:50px" value="1"> Reason <input id="ah-r" style="min-width:240px" placeholder="customer request / custom note…">
+    <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','',this)">Add to this cab's clock</button>
+  </div>` : ""}
   <!-- v25.2 (owner-rep): UPGRADES & OPTIONS, prominent under the owner box —
        THIS is what production needs to see to know what they're building.
        Reads the cab's option tasks, so the moment the Coyote link goes live
@@ -1717,6 +1730,17 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false) =
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)</span></div>`).join("")}`).join("")}
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
   <p style="text-align:center"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
+  <script>
+  function addHrs(bid, fid, btn){ btn.disabled = true;
+    var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
+    fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ build_id: bid, flag_id: fid || undefined,
+        hours: Number(g(fid ? "fh-" + fid : "ah-h")), day_no: Number(g(fid ? "fd-" + fid : "ah-d")), reason: g(fid ? "fr-" + fid : "ah-r") }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
+      .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; });
+  }
+  </script>
 </div></body></html>`;
 };
 
@@ -4550,7 +4574,56 @@ async function freezeAndStart(b, empId, startedAt) {
     await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: st.display_no,
       name: st.name, day_no: st.day_no, man_hours: st.man_hours, is_background: st.is_background,
       source: "template", state: "not_started", sort_order: st.sort_order }) });
-  logEvent("build.start", empId, { build_id: b.id, order_number: b.order_number, tasks_frozen: steps.length });
+  // Block 94b: freeze the cab's UPGRADE OPTIONS in with the steps. Structured
+  // options match the per-family library by exact normalized text and get real
+  // hours on their day. Unknown options + ALL PSR-CUSTOM add-ons become FLAGS
+  // (a human types the hours — never guessed); admins get notified (Q106-
+  // sandboxed). Wrapped in try/catch: an option hiccup never blocks a start.
+  let optCount94 = 0, flagCount94 = 0;
+  try {
+    const coyOrd94 = b.coyote_root || String(b.order_number || "").split(".")[0];
+    if (coyOrd94) {
+      const [ci94] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd94)}&order=received_at.desc&limit=1`);
+      const prodsAll94 = await db(`product?select=part_number,family`);
+      const allow94 = new Set(prodsAll94.map((x) => String(x.part_number).toUpperCase()));
+      const det94 = ci94 && ci94.payload ? parseCoyoteDetail(ci94.payload, b.part_number, allow94) : null;
+      if (det94) {
+        const famMap94 = {}; for (const x of prodsAll94) famMap94[String(x.part_number).toUpperCase()] = x.family;
+        const fam94 = famMap94[String(b.part_number || "").toUpperCase()] || "";
+        const lib94 = fam94 ? await db(`option_item?select=match_text,man_hours,day_no&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
+        const norm94 = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+        const byText94 = {}; for (const o of lib94) byText94[norm94(o.match_text)] = o;
+        const sig94 = []; let sort94 = 9000;
+        for (const f of det94.features) {
+          if (f.stock) continue;
+          const full = (f.label ? f.label + ": " : "") + f.value;
+          sig94.push(full);
+          const hit = byText94[norm94(full)] || byText94[norm94(f.value)];
+          if (hit) {
+            optCount94++;
+            await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
+              name: "UPGRADE — " + full, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
+              source: "option", state: "not_started", sort_order: sort94++ }) });
+          } else {
+            flagCount94++;
+            await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "option", flag_text: full }) });
+          }
+        }
+        for (const a of det94.addons) {
+          sig94.push("CUSTOM: " + a.desc); flagCount94++;
+          await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "custom", flag_text: a.desc }) });
+        }
+        let sg94 = 0; const ss94 = sig94.sort().join("|"); for (let i = 0; i < ss94.length; i++) sg94 = (sg94 * 31 + ss94.charCodeAt(i)) >>> 0;
+        await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ options_sig: String(sg94) }) });
+        if (flagCount94) {
+          const adm94 = (await db(`employee?select=id&role=eq.admin&active=is.true`)).map((e) => e.id);
+          await notify("option.flagged", adm94, `Order ${b.order_number}: ${flagCount94} upgrade${flagCount94 === 1 ? "" : "s"} need hours`,
+            "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number));
+        }
+      }
+    }
+  } catch (e94) { logEvent("option.freeze_error", null, { build_id: b.id, error: String((e94 && e94.message) || e94) }); }
+  logEvent("build.start", empId, { build_id: b.id, order_number: b.order_number, tasks_frozen: steps.length, options_frozen: optCount94, option_flags: flagCount94 });
 }
 
 // ============================================================
@@ -5242,7 +5315,10 @@ http.createServer(async (req, res) => {
         // only — no write endpoint honors it, no credentials involved.
         const va90 = String(url.searchParams.get("viewas") || "").toLowerCase();
         if (va90 && me86 && me86.role === "admin") canFull86 = !(va90 === "production" || va90 === "build" || va90 === "body"); }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86));
+      const flags94 = await db(`option_flag?select=id,kind,flag_text&build_id=eq.${bO.id}&resolved=is.false&order=created_at.asc`);
+      let canHours94 = false;
+      if (empId86) { const [meH94] = await db(`employee?select=role&id=eq.${empId86}`); canHours94 = !!meH94 && (meH94.role === "admin" || meH94.role === "manager"); }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
@@ -6646,6 +6722,31 @@ self.addEventListener("notificationclick", (e) => {
       await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
       await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
       logEvent("queue.move", adminId, { build_id, order_number: b.order_number, dir });
+      return json(200, { ok: true });
+    }
+
+    // ADD HOURS (block 94, owner-rep): a manager OR admin adds extra hours to a
+    // cab's clock — reason REQUIRED, lands as a tagged step on that cab, pace
+    // math extends automatically, audited. Also resolves option/custom flags.
+    if (url.pathname === "/api/build/addhours" && req.method === "POST") {
+      const empIdH = await liveSession(req);
+      if (!empIdH) return json(401, { ok: false, error: "Signed out" });
+      const [meH] = await db(`employee?select=role&id=eq.${empIdH}`);
+      if (!meH || (meH.role !== "admin" && meH.role !== "manager")) return json(403, { ok: false, error: "Managers and admins only" });
+      const p = await body(req);
+      if (!isUuid(p.build_id)) return json(400, { ok: false, error: "Bad cab reference" });
+      const hrs = Number(p.hours), day = Number(p.day_no);
+      if (!(hrs > 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
+      if (!Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Day looks wrong" });
+      const reason = String(p.reason || "").trim();
+      if (reason.length < 3) return json(400, { ok: false, error: "Give the reason — it shows on the cab and in the log" });
+      const [bH] = await db(`build?select=id,order_number&id=eq.${p.build_id}`);
+      if (!bH) return json(404, { ok: false, error: "Cab not found" });
+      await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
+        name: "EXTRA — " + reason, day_no: day, man_hours: hrs, is_background: false,
+        source: "manual", state: "not_started", sort_order: 9500 }) });
+      if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true }) });
+      logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, day_no: day, reason, flag_id: p.flag_id || null });
       return json(200, { ok: true });
     }
 
