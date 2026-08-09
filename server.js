@@ -4142,7 +4142,7 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await db(`build?select=order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination&limit=100000`);
+  const builds = await db(`build?select=id,order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig&limit=100000`);
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   const allNums = await db(`build?select=cab_number&cab_number=not.is.null&limit=100000`);
   const hi = {}; for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
@@ -4229,6 +4229,30 @@ async function syncRun(apply, actorId) {
           if (apply && Object.keys(patch).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
           if (disruptive) { sum.flagged++; if (apply) logEvent("sync.started_cab_flag", actorId || null, { order_number: t.order_number, from_line: b.line_id, to_line: t.line_id, from_part: b.part_number, to_part: t.part_number }); A(t.order_number, "update started cab — line/part change FLAGGED, not relocated", { started: true }); }
           else { sum.updated++; A(t.order_number, "update started cab (info only)", { started: true }); }
+          // Block 94d (owner-rep): OPTIONS changed in Coyote AFTER this cab
+          // started — rare but real. The frozen checklist is NEVER touched:
+          // flag the cab, notify admins, a human compares and adjusts hours.
+          // Fires only when a delta arrives for a started cab whose options
+          // signature (stamped at freeze) no longer matches. Fully try/caught.
+          if (apply && b.id && b.options_sig) {
+            try {
+              const [ci94d] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(t.coyote_root || t.order_number)}&order=received_at.desc&limit=1`);
+              const det94d = ci94d && ci94d.payload ? parseCoyoteDetail(ci94d.payload, b.part_number, new Set(Object.keys(ctx.prodByPart))) : null;
+              if (det94d) {
+                const parts94d = [];
+                for (const f of det94d.features) if (!f.stock) parts94d.push((f.label ? f.label + ": " : "") + f.value);
+                for (const a of det94d.addons) parts94d.push("CUSTOM: " + a.desc);
+                let sgD = 0; const ssD = parts94d.sort().join("|"); for (let i = 0; i < ssD.length; i++) sgD = (sgD * 31 + ssD.charCodeAt(i)) >>> 0;
+                if (String(sgD) !== String(b.options_sig)) {
+                  await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "changed", flag_text: "Coyote options CHANGED after build start — now: " + (parts94d.join(" · ") || "(none)") + ". Compare the checklist and add/adjust hours." }) });
+                  await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true, options_sig: String(sgD) }) });
+                  const admD = (await db(`employee?select=id&role=eq.admin&active=is.true`)).map((e) => e.id);
+                  await notify("option.changed", admD, `Order ${t.order_number}: options changed MID-BUILD`, "Coyote changed this cab's options after it started. The checklist was NOT touched — open the order to review and set hours.", "/order/" + encodeURIComponent(t.order_number));
+                  sum.flagged++; logEvent("sync.options_changed", actorId || null, { order_number: t.order_number, new_sig: String(sgD) });
+                }
+              }
+            } catch (eD) { logEvent("option.change_check_error", null, { order_number: t.order_number, error: String((eD && eD.message) || eD) }); }
+          }
         } else {
           const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged };
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
