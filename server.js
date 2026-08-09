@@ -2413,12 +2413,21 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <h2>Admin</h2>
 
   <div class="panel" id="people"><h3>People</h3>
+  <div style="background:#1c1c1e;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+    <b style="font-size:.9rem">Add a person</b> &nbsp;
+    <input id="np-fn" placeholder="First name" style="width:110px"> <input id="np-ln" placeholder="Last name" style="width:110px">
+    <select id="np-d">${DEPTS.map((d) => `<option>${d}</option>`).join("")}</select>
+    <select id="np-r">${ROLES.map((r) => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join("")}</select>
+    <input id="np-l" placeholder="lines e.g. 1,2 (Production only)" style="width:180px">
+    <button class="b grn" onclick="addEmp(this)">Add + issue temp code</button>
+    <span id="np-msg" style="font-size:.85rem;margin-left:6px"></span>
+  </div>
   <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Usual lines</th><th></th><th></th><th></th></tr>
   ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
     <td><b>${e.first_name} ${e.last_name}</b></td>
     <td><select id="d-${e.id}">${DEPTS.map((d) => `<option ${e.department === d ? "selected" : ""}>${d}</option>`).join("")}</select></td>
     <td><select id="r-${e.id}">${ROLES.map((r) => `<option value="${r}" ${e.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
-    <td><input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2"></td>
+    <td>${e.department === "Production" ? `<input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2">` : '<span style="opacity:.35">—</span>'}</td>
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
     <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
     <td><button class="b ${e.must_change_pin ? "grn" : ""}" onclick="arm(this,()=>resetPin('${e.id}',this))">${e.must_change_pin && e.temp_pin ? `Temp: ${e.temp_pin}` : (e.pin_hash ? "Reset PIN" : "No PIN yet")}</button></td>
@@ -2576,6 +2585,12 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     if (btn) { btn.disabled = false; }
   }
   const v = (id) => document.getElementById(id).value;
+  function addEmp(btn){
+    // On success the page reloads and the new row's PIN button shows Temp: XXXX.
+    post("/api/admin/employee", { add: true, first_name: v("np-fn"), last_name: v("np-ln"),
+      department: v("np-d"), role: v("np-r"),
+      lines: v("np-l") ? v("np-l").split(",").map(Number) : [] }, btn);
+  }
   function saveEmp(id, btn){ post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
     lines: v("l-"+id).split(",").map(s=>Number(s.trim())).filter(n=>n>0) }, btn); }
   function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
@@ -6446,7 +6461,24 @@ self.addEventListener("notificationclick", (e) => {
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
     if (url.pathname === "/api/admin/employee" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
-      const { id, department, role, lines, active, reset_pin } = await body(req);
+      const p94 = await body(req);
+      const { id, department, role, lines, active, reset_pin } = p94;
+      // Block 93 (owner-rep note 1): ADD a person from the console. Creates the
+      // row + issues a temp passcode via the proven Q114 path (first sign-in
+      // forces them to pick their own PIN). Lines only make sense for Production.
+      if (p94.add) {
+        const fn = String(p94.first_name || "").trim(), ln = String(p94.last_name || "").trim();
+        if (!/^[A-Za-z][A-Za-z' -]{0,39}$/.test(fn) || !/^[A-Za-z][A-Za-z' -]{0,39}$/.test(ln)) return json(400, { ok: false, error: "Give a first and last name (letters only)" });
+        if (!DEPTS.includes(p94.department)) return json(400, { ok: false, error: "Pick a department" });
+        if (!ROLES.includes(p94.role)) return json(400, { ok: false, error: "Pick a role" });
+        const dupes = await db(`employee?select=id&first_name=eq.${encodeURIComponent(fn)}&last_name=eq.${encodeURIComponent(ln)}`);
+        if (dupes.length) return json(400, { ok: false, error: "That name already exists — reactivate or rename instead" });
+        const wantL = p94.department === "Production" && Array.isArray(p94.lines) ? p94.lines.map(Number).filter(Number.isInteger) : [];
+        const [neu] = await db("employee", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ first_name: fn, last_name: ln, department: p94.department, role: p94.role, lines: wantL, active: true }) });
+        const code = await assignTempPin(neu.id);
+        logEvent("employee.added", adminId, { employee_id: neu.id, name: fn + " " + ln, department: p94.department, role: p94.role });
+        return json(200, { ok: true, id: neu.id, temp_pin: code });
+      }
       if (!id) return json(400, { ok: false, error: "Missing employee" });
       if (!isUuid(id)) return json(400, { ok: false, error: "That employee reference isn't valid" });
       if (reset_pin) {
