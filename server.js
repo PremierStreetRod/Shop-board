@@ -1790,7 +1790,7 @@ const navBar95 = (isAdmin, showReports = false) => {
     ? [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/intake", "Intake"], ["/mapper", "Mapper"], ["/feed", "Coyote feed"], ["/sync", "Sync"], ["/order", "Order history"], ["/integrity", "Integrity"], ["/lines", "Lines & parts"], ["/tv", "TV screen"]]
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tv", "TV screen"]]);
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
-  <p style="text-align:center;margin:-4px 0 14px">
+  <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Cockpit</a>
     <a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>
@@ -1803,7 +1803,7 @@ const navBar95 = (isAdmin, showReports = false) => {
       </div>
     </details>
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
-  </p>`;
+  </div>`;
 };
 
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
