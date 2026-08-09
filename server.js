@@ -2361,7 +2361,7 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -2461,6 +2461,20 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
     Day <input class="num" id="new-day" value="1"> Hrs <input class="num" id="new-hrs" value="1">
     <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
+  <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
+  <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
+  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th><th></th><th></th></tr>
+  ${optItems.map((o) => `<tr${o.retired ? ' style="opacity:.45"' : ""}>
+    <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${o.match_text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</code></td>
+    <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
+    <td><input class="num" id="op-d-${o.id}" value="${o.day_no}"></td>
+    <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
+    <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
+  </tr>`).join("")}</table>
+  <p style="margin-top:10px">Add an option:
+    <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
+    Hrs <input class="num" id="op-new-hrs" value="1"> Day <input class="num" id="op-new-day" value="1">
+    <button class="b" onclick="addOpt('${tplId}',this)">Add</button></p>
   <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>
   </div>
 
@@ -2619,6 +2633,9 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     name: v("sm-"+id), day_no: Number(v("sd-"+id)), man_hours: Number(v("sh-"+id)) }, btn); }
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
   function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
+  function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: Number(v("op-new-day")) }, btn); }
+  function saveOpt(id, btn){ post("/api/admin/option", { action: "update", id, man_hours: Number(v("op-h-"+id)), day_no: Number(v("op-d-"+id)) }, btn); }
+  function toggleOpt(id, to, btn){ post("/api/admin/option", { action: to, id }, btn); }
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
@@ -6424,6 +6441,8 @@ self.addEventListener("notificationclick", (e) => {
       const tmpls = await db("build_template?select=id,family&order=family");
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = (tplId && isUuid(tplId)) ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
+      const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
+      const optItems94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,retired&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [];
       const toggles = await db("feature_toggle?select=key,enabled&order=key");
       // Q110: the cab-number editor works the OPEN cabs (upcoming through
       // rework) — signed-off history is corrected by support, not this page.
@@ -6455,7 +6474,7 @@ self.addEventListener("notificationclick", (e) => {
       const calDays = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&order=cal_date`).catch(() => []);
       const ntRows = await db(`shop_setting?select=key,value&key=in.(nudge_mon,nudge_tue,nudge_wed,nudge_thu,nudge_fri)`).catch(() => []);
       const nudgeTimes = {}; for (const r of ntRows) nudgeTimes[r.key.replace("nudge_", "")] = r.value;
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes));
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -6767,6 +6786,42 @@ self.addEventListener("notificationclick", (e) => {
     // TEMPLATE ready-gate (admin): mark a cab's build template ready — allowed
     // only once it has real steps that add up to > 0 hours — or set it back to
     // draft. A draft template's cab is accepted + routed but held off the board.
+    // OPTION LIBRARY (block 94a): per-family upgrade options — exact Coyote
+    // text + hours + build-day. Retire-not-delete. Matching happens at build
+    // start; an option not in this library gets FLAGGED, never guessed.
+    if (url.pathname === "/api/admin/option" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const act = String(p.action || "");
+      if (act === "add") {
+        if (!isUuid(p.template_id)) return json(400, { ok: false, error: "Bad template reference" });
+        const [tp] = await db(`build_template?select=family&id=eq.${p.template_id}`);
+        if (!tp) return json(404, { ok: false, error: "Template not found" });
+        const mt = String(p.match_text || "").trim();
+        if (mt.length < 3 || mt.length > 160) return json(400, { ok: false, error: "Type the option exactly as Coyote sends it" });
+        const hrs = Number(p.man_hours), day = Number(p.day_no);
+        if (!(hrs >= 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
+        if (!Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Day looks wrong" });
+        await db("option_item", { method: "POST", body: JSON.stringify({ family: tp.family, match_text: mt, man_hours: hrs, day_no: day }) });
+        logEvent("option.added", adminId, { family: tp.family, match_text: mt, man_hours: hrs, day_no: day });
+        return json(200, { ok: true });
+      }
+      if (!isUuid(p.id)) return json(400, { ok: false, error: "Bad option reference" });
+      if (act === "update") {
+        const hrs = Number(p.man_hours), day = Number(p.day_no);
+        if (!(hrs >= 0 && hrs < 200) || !Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Hours/day look wrong" });
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ man_hours: hrs, day_no: day }) });
+        logEvent("option.updated", adminId, { id: p.id, man_hours: hrs, day_no: day });
+        return json(200, { ok: true });
+      }
+      if (act === "retire" || act === "restore") {
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: act === "retire" }) });
+        logEvent(act === "retire" ? "option.retired" : "option.restored", adminId, { id: p.id });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+
     if (url.pathname === "/api/admin/template" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p = await body(req);
