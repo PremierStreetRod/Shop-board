@@ -1551,13 +1551,14 @@ const boardPage = `<!doctype html>
           \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER <a href="/order/\${encodeURIComponent(l.cab.order)}" style="color:inherit">\${l.cab.order}</a></div>
+            \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today — " + l.down.reason : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
-            ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\`
+            ? \`ON DECK: <a href="/order/\${encodeURIComponent(l.ondeck.order)}" style="color:inherit">ORDER \${l.ondeck.order}</a> · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\`
             : "ON DECK: — nothing queued"}</div>
           <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
         </div>\`).join("");
@@ -1652,7 +1653,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false) =
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order ${escH(b.order_number)}</title>${style}
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-.kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em}</style></head>
+.kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em;padding-right:12px;vertical-align:top}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
@@ -5151,6 +5152,10 @@ http.createServer(async (req, res) => {
 
     // ORDER DETAIL (block 25) — public look-up from the board's order links.
     if (url.pathname.startsWith("/order/")) {
+      // Block 88 (owner-rep): order DETAILS are signed-in-staff only. The TV
+      // shows the basics on its tiles; clicking through asks for a sign-in.
+      const empView88 = await liveSession(req);
+      if (!empView88) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const ord = decodeURIComponent(url.pathname.slice(7));
       const [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
       if (!bO) return send(404, "text/html; charset=utf-8",
@@ -5164,7 +5169,7 @@ http.createServer(async (req, res) => {
       let coyDetail86 = null;
       if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
       let canFull86 = false;
-      const empId86 = await liveSession(req);
+      const empId86 = empView88;
       if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Admin" || me86.department === "Owner"; }
       return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86));
     }
@@ -5201,7 +5206,14 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/board-state") {
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
+      // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
+      // order #, customer or business name, ship-to state. The Q65 toggle
+      // ("Customer names on the TV") still governs the name; missing row = ON.
+      const [namesTog88] = await db(`feature_toggle?select=enabled&key=eq.customer_names_on_tv`);
+      const namesOn88 = !namesTog88 || namesTog88.enabled !== false;
+      const who88 = (x) => (namesOn88 && x && x.customer_name ? String(x.customer_name) : "");
+      const dest88 = (x) => (x && x.destination ? String(x.destination) : "");
       // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
       // would silently drop a long-running cab's EARLIEST coverage after about
       // a month of real usage — corrupting pace math invisibly. Now the window
@@ -5294,12 +5306,12 @@ http.createServer(async (req, res) => {
       } catch (e) { /* toggle hiccup — never sleep on error */ }
       return json(200, { shop: shopState, tv, lines: lines.map((l) => {
         const b = cabOf[l.id];
-        const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "" } : null;
+        const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]) } : null;
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
           return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
-            cab: { order: w.order_number, family: familyOf[w.part_number] || "",
+            cab: { order: w.order_number, family: familyOf[w.part_number] || "", customer: who88(w), dest: dest88(w),
               done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
               day: 0, total_days: 0 } };
@@ -5360,7 +5372,7 @@ http.createServer(async (req, res) => {
           rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${elapsedH.toFixed(1)} of ${frame || "—"} hrs`;
         }
         return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck,
-          cab: { order: b.order_number, family: familyOf[b.part_number] || "",
+          cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
             done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
             pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
             // Promised date is FIXED at start (Q103-6); remaining standard
