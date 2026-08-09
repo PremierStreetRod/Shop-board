@@ -875,9 +875,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <h2 id="hi">${state.clockedIn
-    ? `${emp.first_name} — ON THE CLOCK · ${state.lineName}`
-    : `Hi ${emp.first_name} — clock in to start`}</h2>
+  <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
 
   <!-- CLOCK IN: shown when off the clock. Usual lines first (Q90). -->
   <div id="in" style="display:${state.clockedIn ? "none" : "block"}">
@@ -1298,6 +1296,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
     ${clockedIn
@@ -1366,13 +1365,19 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   qpoll();setInterval(qpoll,6000);
 </script></body></html>`;
 
-const watcherPage = (emp) => `<!doctype html>
+const watcherPage = (emp, clk = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <h2>Welcome, ${emp.first_name}.</h2>
+  ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
+  <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
+    ? `<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div>`
+    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wclk('/api/clock/in',{line_id:${clk.lineId}},this)">CLOCK IN</button>`}</div>
+  <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p>` : ""}
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
     ${emp.department === "Owner" || emp.department === "Admin" || emp.role === "admin"
@@ -1399,6 +1404,12 @@ const watcherPage = (emp) => `<!doctype html>
 <script>
   // Plain English: ask the browser's permission, install the tiny
   // service worker, get this device's push address, hand it to the server.
+  async function wclk(u,p,b){ b.disabled = true;
+    try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, claimed_at: new Date().toISOString() }) });
+      const o = await r.json(); if (o.ok) return location.reload();
+      document.getElementById("werr").textContent = o.error || "Something went wrong";
+    } catch (e) { document.getElementById("werr").textContent = "Network hiccup — try again"; }
+    b.disabled = false; }
   const NPUB = "${VAPID_PUB}";
   const nmsg = (t) => { document.getElementById("nmsg").textContent = t; };
   function nkey(s){ const pad = "=".repeat((4 - s.length % 4) % 4);
@@ -4900,8 +4911,19 @@ http.createServer(async (req, res) => {
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, Boolean(lastW && lastW.kind === "clock_in"), reasonsW, linesW, rowsW));
       }
-      if (emp.department !== "Production")
-        return send(200, "text/html; charset=utf-8", watcherPage(emp));
+      if (emp.department !== "Production") {
+        // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
+        // 13/12 (disabled: clockable, never on the TV — warehouse-9 pattern).
+        // Accounting/Marketing/admins stay off the clock for now.
+        const DEPT_LINE92 = { "Body Shop": 13, "Build": 12 };
+        let clk92 = null;
+        if (DEPT_LINE92[emp.department]) {
+          const [lastC92] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+          const rs92 = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+          clk92 = { show: true, clockedIn: Boolean(lastC92 && lastC92.kind === "clock_in"), reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department] };
+        }
+        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
+      }
       const [last] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
       const clockedIn = last && last.kind === "clock_in";
