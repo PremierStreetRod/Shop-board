@@ -3475,7 +3475,13 @@ function diffFields(a, b) {   // a = newer, b = older; returns list of changes
   return out;
 }
 async function pushDiffData() {
-  const rows = await db(`coyote_intake?select=payload,received_at&processed_at=is.null&order=received_at.desc&limit=5000`);
+  // Block 90: reworked for the CHANGE-ONLY delta feed (confirmed live 2026-08-06).
+  // The old version compared batch ROSTERS (full-snapshot thinking) and read only
+  // processed_at=is.null rows — but the write engine now stamps rows processed
+  // within the hour (the page would starve), and absence from a delta push means
+  // "nothing changed", never "left the queue". Now: read ALL rows, and diff each
+  // order in the latest push against ITS OWN most recent earlier row.
+  const rows = await db(`coyote_intake?select=payload,received_at&order=received_at.desc&limit=5000`);
   const recs = rows.map((r) => {
     const p = r.payload || {}, o = (p.order && typeof p.order === "object") ? p.order : {};
     const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
@@ -3495,20 +3501,24 @@ async function pushDiffData() {
   batches.push(cur);
   const latest = batches[0], prev = batches[1] || [];
   const mapOf = (b) => { const m = {}; for (const r of b) if (!(r.ord in m)) m[r.ord] = r; return m; }; // desc -> first = newest
-  const A = mapOf(latest), B = mapOf(prev);
+  const A = mapOf(latest);
+  const prevOf = {}; // each order's most recent row from ANY earlier push
+  for (let bi = 1; bi < batches.length; bi++) for (const r of batches[bi]) if (!(r.ord in prevOf)) prevOf[r.ord] = r;
   const stamp = (iso) => { const d = new Date(new Date(iso).getTime() - 7 * 3600 * 1000); return d.toISOString().slice(0, 16).replace("T", " "); };
-  const added = [], changed = []; let unchanged = 0;
+  const added = [], changed = [], left = []; let unchanged = 0;
   for (const k of Object.keys(A)) {
-    if (!(k in B)) { if (A[k].status === "Queued") added.push(A[k]); continue; }
-    const fx = diffFields(A[k], B[k]);
-    if (fx.length) changed.push({ ...A[k], changes: fx }); else unchanged++;
+    if (!(k in prevOf)) { added.push(A[k]); continue; }
+    const fx = diffFields(A[k], prevOf[k]);
+    if (!fx.length) { unchanged++; continue; }
+    changed.push({ ...A[k], changes: fx });
+    const st = fx.find((c) => c.field === "status");
+    if (st && st.before === "Queued" && st.after !== "Queued") left.push({ ...A[k], from: st.before, to: st.after });
   }
-  const gone = Object.keys(B).filter((k) => B[k].status === "Queued" && !(k in A)).map((k) => B[k]);
   const bo = (x, y) => String(x.ord).localeCompare(String(y.ord));
-  added.sort(bo); changed.sort(bo); gone.sort(bo);
+  added.sort(bo); changed.sort(bo); left.sort(bo);
   return { hasPrev: !!batches[1], latestTime: stamp(latest[0].received), latestCount: Object.keys(A).length,
-    prevTime: prev.length ? stamp(prev[0].received) : null, prevCount: Object.keys(B).length,
-    added, changed, gone, unchanged, batchCount: batches.length };
+    prevTime: prev.length ? stamp(prev[0].received) : null, prevCount: prev.length ? Object.keys(mapOf(prev)).length : 0,
+    added, changed, left, unchanged, batchCount: batches.length };
 }
 function pushDiffPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -3543,8 +3553,8 @@ function pushDiffPage(d) {
 <body><div class="wrap" style="max-width:1000px">
   ${nav}
   <h2>Latest push <span class="muted" style="font-size:.6em;font-weight:400">— what changed since the one before</span></h2>`;
-  if (d.empty) return head + `<div class="lane"><div class="muted">No pushes have landed yet. When Coyote sends one, this page shows what's new, changed, or gone versus the previous push.</div></div></div></body></html>`;
-  const intro = `<p class="muted" style="margin-top:-8px">Compares the most recent Coyote push against the one before it — new orders, field edits (status · ship date · invoice note · cab part), and Queued orders that <b>fell off</b> (were Queued last time, absent now — a Hold, a ship, or a cancel). Read-only; nothing is written. Compares the active <b>Queued</b> set, so shipped/Processed orders don't show as false drop-offs.</p>
+  if (d.empty) return head + `<div class="lane"><div class="muted">No pushes have landed yet. When Coyote sends one, this page shows what's new or changed — each order against its own history.</div></div></div></body></html>`;
+  const intro = `<p class="muted" style="margin-top:-8px">The feed is <b>change-only</b>: a push carries just the orders with changes, so every order here is compared against <b>its own previous row</b> — never against a full roster. An order absent from a push simply had nothing new. New orders, field edits (status · ship date · invoice note · cab part), and status moves off Queued all arrive as explicit rows. Read-only; nothing is written.</p>
   <div class="lane" style="padding:12px 16px">
     <b>Latest push:</b> ${esc(d.latestTime)} <span class="muted">· ${d.latestCount} order${d.latestCount === 1 ? "" : "s"} in the batch</span><br>
     <b>Previous push:</b> ${d.prevTime ? esc(d.prevTime) + ` <span class="muted">· ${d.prevCount} order${d.prevCount === 1 ? "" : "s"}</span>` : '<span class="muted">— none earlier to compare against</span>'}
@@ -3553,17 +3563,17 @@ function pushDiffPage(d) {
   const kpis = `<div style="margin:14px 0">
     <div class="kpi"><b>${d.added.length}</b><span>new</span></div>
     <div class="kpi"><b>${d.changed.length}</b><span>changed</span></div>
-    <div class="kpi"><b>${d.gone.length}</b><span>fell off</span></div>
+    <div class="kpi"><b>${d.left.length}</b><span>left the queue</span></div>
     <div class="kpi"><b>${d.unchanged}</b><span>unchanged</span></div>
   </div>`;
   const addedRows = d.added.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)}</td><td>${esc(o.parts) || '<span class="muted">—</span>'}</td></tr>`).join("");
   const changedRows = d.changed.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td class="chg">${o.changes.map((c) => `${esc(c.field)}: <b>${clip(c.before, 50)}</b> → <b>${clip(c.after, 50)}</b>`).join("<br>")}</td></tr>`).join("");
-  const goneRows = d.gone.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.status)} <span class="muted">last seen</span></td></tr>`).join("");
+  const leftRows = d.left.map((o) => `<tr><td><b><a href="/order?n=${encodeURIComponent(o.ord)}" style="color:inherit;text-decoration:underline dotted">${esc(o.ord)}</a></b></td><td>${esc(o.customer) || '<span class="muted">—</span>'}</td><td>${stat(o.from)} → ${stat(o.to)}</td></tr>`).join("");
   const sect = (title, rows, headcols, sub) => `<div class="lane"><h3>${title} <span class="muted" style="font-weight:400;font-size:.8em">(${rows ? rows.split("</tr>").length - 1 : 0})</span></h3>${sub ? `<p class="muted" style="margin:-4px 0 8px;font-size:.85rem">${sub}</p>` : ""}${rows ? `<table><tr>${headcols}</tr>${rows}</table>` : `<div class="muted">None.</div>`}</div>`;
   return head + intro + kpis
-    + sect("🆕 New in this push", addedRows, "<th>Order #</th><th>Customer</th><th>Status</th><th>Cab part(s)</th>", "Orders Queued in this push that weren't in the previous one.")
+    + sect("🆕 New in this push", addedRows, "<th>Order #</th><th>Customer</th><th>Status</th><th>Cab part(s)</th>", "First appearance in the feed — orders never pushed before (any status).")
     + sect("✏️ Changed", changedRows, "<th>Order #</th><th>Customer</th><th>What changed</th>", "Orders present in both pushes with an edited field. A status change (e.g. Queued → Hold) shows here when the push carries it as a row.")
-    + sect("🚪 Fell off (was Queued, gone now)", goneRows, "<th>Order #</th><th>Customer</th><th>Last status</th>", "Were Queued in the previous push and absent from this one. On a full-snapshot push that means the order left the active set — a Hold, a ship, or a cancel. Check Coyote to confirm which.")
+    + sect("🚪 Left the build queue", leftRows, "<th>Order #</th><th>Customer</th><th>Status moved</th>", "Status moved OFF Queued in this push (a hold, a ship, or a cancel) — carried as an explicit row by the change-only feed, never guessed from absence.")
     + `<p class="muted" style="font-size:.85rem;text-align:center">Read-only. This is the standing version of the manual push-to-push diff — it answers "what moved" every time a push lands, no queries needed.</p>
 </div></body></html>`;
 }
@@ -4875,7 +4885,7 @@ http.createServer(async (req, res) => {
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       // Q114: a temporary code gets you exactly one place — the change-PIN screen.
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
-      if (emp.department === "Warehouse") {
+      if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
         const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
         const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
@@ -5171,7 +5181,13 @@ http.createServer(async (req, res) => {
       if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
       let canFull86 = false;
       const empId86 = empView88;
-      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Admin" || me86.department === "Owner"; }
+      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Admin" || me86.department === "Owner";
+        // Block 90 (owner-rep): admin-gated role PREVIEW for checking work while
+        // building — ?viewas=production|build|body|warehouse|accounting renders
+        // this page as that tier sees it. Real admin session required; rendering
+        // only — no write endpoint honors it, no credentials involved.
+        const va90 = String(url.searchParams.get("viewas") || "").toLowerCase();
+        if (va90 && me86 && me86.role === "admin") canFull86 = !(va90 === "production" || va90 === "build" || va90 === "body"); }
       return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86));
     }
 
@@ -5750,7 +5766,8 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return send(403, "text/plain", "Not allowed");
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await reconcileData();
-      return send(200, "text/html; charset=utf-8", reconcilePage(data, me.role));
+      const vaR90 = String(url.searchParams.get("viewas") || "").toLowerCase();
+      return send(200, "text/html; charset=utf-8", reconcilePage(data, (vaR90 && me.role === "admin") ? "viewer-preview" : me.role));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
