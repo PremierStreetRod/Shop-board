@@ -1751,7 +1751,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order ${escH(b.order_number)}</title>${style}
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-.kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em;padding-right:12px;vertical-align:top}</style></head>
+.kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
   <p style="text-align:center;margin:2px 0 12px"><a href="/board" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93">&#8962; Home</a></p>
@@ -1765,7 +1765,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
     ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
-    ${b.invoice_note ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
+    ${b.invoice_note && !(detail && detail.order.note) ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
   </div>
   ${detail ? `<div class="lane">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">OWNER</div>
@@ -1775,7 +1775,6 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       ? `${detail.customer.email ? `<div class="kv"><b>Email</b>${escH(detail.customer.email)}</div>` : ""}${detail.customer.phone ? `<div class="kv"><b>Phone</b>${escH(detail.customer.phone)}</div>` : ""}${detail.customer.billStr ? `<div class="kv"><b>Billing</b>${escH(detail.customer.billStr)}</div>` : ""}${detail.customer.shipStr ? `<div class="kv"><b>Shipping</b>${escH(detail.customer.shipStr)}</div>` : ""}`
       : `${detail.customer.shipState ? `<div class="kv"><b>Ship to</b>${escH(detail.customer.shipState)}</div>` : ""}`}
     ${(detail.order.status || detail.order.date || detail.order.ship) ? `<div class="kv"><b>Order</b>${escH(detail.order.status || "—")}${detail.order.date ? ` &middot; ordered ${escH(detail.order.date)}` : ""}${detail.order.ship ? ` &middot; ship ${escH(detail.order.ship)}` : ""}</div>` : ""}
-    ${detail.order.note ? `<div class="kv"><b>Coyote note</b><span style="white-space:normal">${escH(detail.order.note)}</span></div>` : ""}
     ${canFull ? `<div style="margin-top:6px"><a href="/order?n=${encodeURIComponent(b.coyote_root || String(b.order_number || "").split(".")[0])}" style="color:#8e8e93;font-size:.85rem">View Coyote push history &rarr;</a></div>` : ""}
   </div>
   <div class="lane" style="border-color:#C8102E">
@@ -1804,17 +1803,21 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <button class="b" style="background:#5a1d1d;border:none;border-radius:9px;color:#fff;padding:8px 16px;cursor:pointer" onclick="unstart97('${b.id}',this)">Undo start — back to the queue</button>
     <span id="us-msg" style="font-size:.85rem;margin-left:8px"></span>
   </div>` : ""}
-  <!-- v25.2 (owner-rep): UPGRADES & OPTIONS, prominent under the owner box —
-       THIS is what production needs to see to know what they're building.
-       Reads the cab's option tasks, so the moment the Coyote link goes live
-       and options flow in, they populate here automatically. -->
-  <div class="lane" style="border-color:#C8102E">
-    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">UPGRADES &amp; OPTIONS — what this cab gets</div>
-    ${(() => { const opts = tasks.filter((t) => t.source === "option"); return opts.length
+  <!-- Block 98d (owner-rep): the Upgrades lane earns its keep — frozen option
+       steps when the build has them, the Coyote order note showcased either
+       way, and the whole lane disappears when it truly has nothing to say. -->
+  ${(() => {
+    const opts = tasks.filter((t) => t.source === "option");
+    const cnote = detail && detail.order.note ? detail.order.note : "";
+    if (!opts.length && !cnote) return "";
+    const above = opts.length
       ? opts.map((o) => `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(o.name)} <span style="opacity:.5">(+${Number(o.man_hours)}h)</span></div>`).join("")
-      : `<div style="opacity:.8;font-size:1.05rem">STOCK BUILD — no upgrade options on file for this cab.</div>`; })()}
-    <div style="opacity:.45;font-size:.85rem;margin-top:6px">Options land here automatically from the order system once the Coyote link is live.</div>
-  </div>
+      : tasks.length ? `<div style="opacity:.8;font-size:1.05rem">STOCK BUILD — no upgrade option steps on this cab.</div>` : "";
+    const noteRow = cnote ? `<div style="${above ? "margin-top:10px;padding-top:10px;border-top:1px solid var(--line);" : ""}font-size:1.02rem"><span style="color:#ffd60a;font-weight:800;letter-spacing:.04em;font-size:.8em">&#9873; COYOTE NOTE</span><br>${escH(cnote)}</div>` : "";
+    return `<div class="lane" style="border-color:#C8102E">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">UPGRADES &amp; OPTIONS — what this cab gets</div>
+    ${above}${noteRow}
+  </div>`; })()}
   ${tasks.length ? `<div class="lane">
     <div style="font-weight:700;margin-bottom:6px">${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%</div>
     <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-bottom:12px"><div style="background:#30d158;height:10px;border-radius:6px;width:${pct}%"></div></div>
