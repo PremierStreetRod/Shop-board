@@ -869,7 +869,7 @@ const changePinPage = (first) => `<!doctype html>
 // Q90: your USUAL lines are the big one-tap buttons; other lines sit below.
 // Clock-out asks WHY from the admin-managed reason list (Q77).
 // `state` = { clockedIn: bool, lineName } derived from the latest clock event.
-const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }) => `<!doctype html>
+const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
@@ -906,8 +906,22 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     </p>
   </div>` : ""}
 
+  <!-- Block 98c (owner-rep nav hard pass): if you're ON a line whose cab just
+       left (finished / awaiting inspection), SAY SO — the bare clock-out page
+       read as "I can't get back onto my line." The card explains the line's
+       state and the screen re-checks itself; the moment a cab lands, the task
+       list appears on the next refresh. -->
+  ${lineStat ? `<div style="background:var(--card);border:1px solid #30d158;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
+    <b>You're ON ${lineStat.name}.</b> No cab to work right now${lineStat.awaiting ? ` — ORDER ${lineStat.awaiting} is awaiting the manager's inspection` : ""}${lineStat.ondeck ? `. Next up: ORDER ${lineStat.ondeck} — it starts the moment warehouse delivers the kit` : ""}.
+    <div style="opacity:.55;font-size:.85rem;margin-top:6px">This screen checks again on its own — when a cab lands on your line, the task list appears here.</div>
+  </div><script>setTimeout(() => location.reload(), 45000);</script>` : ""}
   <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
+    ${state.lineId === 14 ? `<p class="msg" style="font-weight:700">Pick a line to start working</p>
+    <div class="grid" style="margin-bottom:16px">
+      ${[...usualLines, ...otherLines].map((l) => `<button class="name" data-switch="${l.id}">${l.name}</button>`).join("")}
+      <button class="name" style="opacity:.8" data-switch="10">Shop time</button>
+    </div>` : ""}
     ${ah.open ? `<p class="msg" style="color:#ffd60a">AFTER-HOURS wrap-up — one line on what got done (required):</p>
     <input id="wrapnote" placeholder="What did you get done?" style="width:100%;margin:6px 0 12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">` : ""}
     <p class="msg">Clocking out — what kind?</p>
@@ -917,12 +931,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
-    <p class="msg" style="margin-top:18px">…or work a line — tap to jump on</p>
+    ${state.lineId === 14 ? "" : `<p class="msg" style="margin-top:18px">…or work a line — tap to jump on</p>
     <div class="grid">
       ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" style="opacity:.8" data-switch="${l.id}">${l.name}</button>`).join("")}
       ${state.lineId === 10 ? "" : `<button class="name" style="opacity:.8" data-switch="10">Shop time</button>`}
-      ${state.lineId === 14 ? "" : `<button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>`}
-    </div>
+      <button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>
+    </div>`}
   </div>
 
   <!-- Q92: request time off — a date range + a reason, right from the phone.
@@ -5169,10 +5183,20 @@ http.createServer(async (req, res) => {
       const toMine = toMineRows.map((t) => ({
         dates: t.start_date === t.end_date ? t.start_date : `${t.start_date} → ${t.end_date}`,
         reason: t.reason, status: t.status, note: t.decision_note }));
+      // Block 98c: clocked ONTO a real line that has no workable cab — tell the
+      // tech where the line stands instead of a bare clock-out screen.
+      let lineStat98 = null;
+      if (clockedIn && last && last.line_id !== SHOP_LINE_ID && last.line_id !== 14) {
+        const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(awaiting_inspection,upcoming)&order=created_at&limit=30`);
+        const up98 = lnB98.filter((b) => b.state === "upcoming").sort((a, b) => ((a.queue_pos ?? 9999) - (b.queue_pos ?? 9999)) || (a.created_at < b.created_at ? -1 : 1));
+        lineStat98 = { name: lineName,
+          awaiting: (lnB98.find((b) => b.state === "awaiting_inspection") || {}).order_number || null,
+          ondeck: (up98[0] || {}).order_number || null };
+      }
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
           { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) },
-          { on: toOn, reasons: toReasons, mine: toMine }));
+          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
