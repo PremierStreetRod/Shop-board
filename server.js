@@ -875,6 +875,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
 
   <!-- Block 98b (owner-rep): ONE general CLOCK IN — company time first, same
@@ -962,7 +963,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
-    <a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1067,7 +1068,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <b>ORDER ${build.order_number}</b> · ${lineName}<br>
@@ -1156,6 +1157,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <p style="text-align:center;margin:22px 0">
     <button class="back" id="clockout">Clock out</button> ·
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
+    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager cockpit</a> ·` : ""}
     <a href="/board" style="color:#8e8e93">Shop board</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -6069,6 +6071,13 @@ http.createServer(async (req, res) => {
       notify("build.awaiting_inspection", await warehouseIds(),
         `${lnF ? lnF.name : "Line"} — pull the next kit`,
         `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection. The line frees soon.`, "/home");
+      // Block 99 (owner-rep): the DIRECT review signal — a finished cab is the
+      // manager's ACTION ITEM, not just planning info. Always on; delivery
+      // obeys the Q106 sandbox until cutover like everything else.
+      const mgrsI99 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+      if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
+        `ORDER ${b.order_number} — ready for inspection`,
+        `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the cockpit: sign off, or send it back with a reason and hours.`, "/manager");
       // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
