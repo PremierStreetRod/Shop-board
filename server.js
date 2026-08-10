@@ -1880,8 +1880,9 @@ const navBar95 = (isAdmin, showReports = false) => {
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
-    <a href="/manager" style="color:#8e8e93;margin-right:16px">Cockpit</a>
-    <a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>
+    <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
+    <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager cockpit</a>
+    ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>` : ""}
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <details class="t95" style="display:inline-block;position:relative">
@@ -1912,12 +1913,23 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        from Manager to Admin — nav now lives at the top of every console,
        same placement everywhere per file 22.4). -->
   ${navBar95(isAdmin, showReports)}
+  <!-- Block 99b (owner-rep): the cockpit got long — one-tap section jumps,
+       same sticky pattern as the admin console. Anchors are harmless when a
+       lane isn't rendered that day. -->
+  <div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;text-align:center;border-bottom:1px solid var(--line)">
+    <a href="#oc" style="color:#fff;font-weight:700;margin-right:14px">On the clock</a>
+    <a href="#rl" style="color:#fff;font-weight:700;margin-right:14px">Running long</a>
+    <a href="#lines99" style="color:#fff;font-weight:700;margin-right:14px">Lines</a>
+    <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
+    <a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
+    <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>
+  </div>
   <h2>Manager</h2>
   ${onClock.length ? `
   <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
        clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
        button is for catching it sooner. Audited (who forced it is logged). -->
-  <div class="lane"><h3>On the clock</h3>
+  <div class="lane" id="oc"><h3>On the clock</h3>
     ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
@@ -1926,8 +1938,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
        run; the who + since makes it self-explanatory. -->
-  <div class="lane" style="border-color:#7a5900"><h3>Running long</h3>
-    ${longRunners.map((t) => `<div class="qrow">ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+  <div class="lane" id="rl" style="border-color:#7a5900"><h3>Running long</h3>
+    ${longRunners.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
       <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
   </div>` : ""}
@@ -1963,7 +1975,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   </div>` : ""}
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
-  <div class="lane"><h3>Time off</h3>
+  <div class="lane" id="to99"><h3>Time off</h3>
     ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
       From <input type="date" id="toa-start"> To <input type="date" id="toa-end">
@@ -2024,6 +2036,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off below.</span>
     </div>
   </div>
+  <div id="lines99"></div>
   ${rows.map((r) => `
     <div class="lane">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
@@ -5701,6 +5714,7 @@ http.createServer(async (req, res) => {
       //   it comes back (line-mates can also just tap the step itself).
       const workIds = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
       const orderOf = {}; for (const b of builds) orderOf[b.id] = b.order_number;
+      const lineOf99 = {}; for (const b of builds) lineOf99[b.id] = (lines.find((l) => l.id === b.line_id) || {}).name || (b.line_id ? "Line " + b.line_id : "");
       const allNames = await db("employee?select=id,first_name");
       const nameOf = {}; for (const p of allNames) nameOf[p.id] = p.first_name;
       const phx = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(11, 16) : "";
@@ -5708,7 +5722,7 @@ http.createServer(async (req, res) => {
       if (workIds.length) {
         const doing = await db(`task?select=id,name,display_no,build_id,started_by,started_at&build_id=in.(${workIds.join(",")})&state=eq.in_progress&order=started_at.asc`);
         longRunners = doing.filter((t) => t.started_at && Date.now() - new Date(t.started_at).getTime() > 4 * 3600000)
-          .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.started_by] || "?", hhmm: phx(t.started_at) }));
+          .map((t) => ({ ...t, order_number: orderOf[t.build_id], line: lineOf99[t.build_id], who: nameOf[t.started_by] || "?", hhmm: phx(t.started_at) }));
         const dones = await db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`);
         recentDone = dones.filter((t) => t.completed_at)
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.completed_by] || "?", hhmm: phx(t.completed_at) }));
