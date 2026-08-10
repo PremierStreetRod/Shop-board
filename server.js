@@ -1096,15 +1096,15 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
         ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
-            ? `📎 ${(notesOf[t.id] || []).length + (photosOf[t.id] || []).length} attached — view / add`
+            ? `${(photosOf[t.id] || []).length ? `📎 ${(photosOf[t.id] || []).length} photo${(photosOf[t.id] || []).length === 1 ? "" : "s"}` : ""}${(photosOf[t.id] || []).length && (notesOf[t.id] || []).length ? " · " : ""}${(notesOf[t.id] || []).length ? `📝 ${(notesOf[t.id] || []).length} note${(notesOf[t.id] || []).length === 1 ? "" : "s"}` : ""} — view / add`
             : "＋ note / photo"}</a>
         <div id="att-${t.id}" hidden style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px">
           ${(notesOf[t.id] || []).map((n) => `<div style="opacity:.85;padding:3px 0;border-bottom:1px solid var(--line)">${String(n.note).replace(/</g, "&lt;")}</div>`).join("")}
           ${(photosOf[t.id] || []).length ? `<div style="margin-top:6px">${(photosOf[t.id] || []).map((p) =>
-            `<a href="/photo/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:56px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>` : ""}
+            `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:56px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>` : ""}
           <textarea id="an-${t.id}" placeholder="Note about this step"
             style="width:100%;min-height:44px;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-family:inherit"></textarea>
-          <input type="file" id="ap-${t.id}" accept="image/*" capture="environment" multiple style="color:#8e8e93;margin-top:6px">
+          <input type="file" id="ap-${t.id}" accept="image/*" multiple style="color:#8e8e93;margin-top:6px">
           <button class="back" style="color:#fff;background:#3a3a3c;border-radius:8px;margin-top:6px"
             onclick="saveAtt('${t.id}','${build.id}',this)">Save</button>
           <div style="margin-top:6px"><button class="back" type="button" style="color:#fff;background:#3a3a3c;border-radius:8px"
@@ -1123,7 +1123,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
              border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit"></textarea>
     <!-- Completion photos (file 11): captured on the phone camera. -->
     <div style="margin-top:10px;opacity:.85">Completion photos${photoMin > 0 ? ` — at least ${photoMin} required` : " (optional for this product)"}:
-      <input type="file" id="fphotos" accept="image/*" capture="environment" multiple style="color:#8e8e93"></div>
+      <input type="file" id="fphotos" accept="image/*" multiple style="color:#8e8e93"></div>
     <div style="margin-top:8px"><button class="b" type="button" onclick="phoneHandoff('${build.id}',null,this)">📱 Send photos from a phone</button>
       <div id="hoff" style="margin-top:8px"></div></div>
     <div class="msg" id="upmsg"></div>
@@ -1238,8 +1238,16 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         '<div style="margin:10px auto 6px;max-width:260px;line-height:0">' + (o.qr || "") + '</div>' +
         '<div style="opacity:.75;font-size:.85rem;color:#111">or open <b>' + location.host + '/h</b> and enter</div>' +
         '<div style="font-size:1.8rem;letter-spacing:4px;font-weight:800;margin:4px 0;color:#111">' + o.code + '</div>' +
-        '<div style="opacity:.55;font-size:.8rem;color:#111">Good for 20 minutes. Photos land on this cab — reload to see them.</div>' +
+        '<div style="opacity:.55;font-size:.8rem;color:#111">Good for 20 minutes. Photos land on this cab as they send.</div>' +
+        '<div id="hophotos" style="margin-top:6px;font-weight:800;color:#1d5a2d"></div>' +
         '</div>';
+      // Block 98: LIVE recognition — poll the cab's photo count every 5 s while
+      // the code is up, so the Finish gate sees phone-sent photos without a reload.
+      if (!window.__hcPoll) window.__hcPoll = setInterval(async () => {
+        try { const lc = await fetch("/api/build/photocount?build_id=" + encodeURIComponent(buildId)).then((r) => r.json());
+          if (lc && lc.ok) { const fb = document.querySelector("[data-min]"); if (fb) fb.dataset.have = lc.count;
+            const el = document.getElementById("hophotos"); if (el) el.textContent = lc.count + " photo" + (lc.count === 1 ? "" : "s") + " on this cab ✓"; } } catch (e) {}
+      }, 5000);
       btn.textContent = "New code"; btn.disabled = false;
     }catch(e){ document.getElementById("err").textContent = e.message; btn.disabled = false; btn.textContent = orig; }
   }
@@ -1249,7 +1257,13 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     // photos already on the cab (incl. any sent from a phone via the hand-off);
     // the server enforces the same rule.
     const need = Number(btn.dataset.min || 0);
-    const have = Number(btn.dataset.have || 0);
+    let have = Number(btn.dataset.have || 0);
+    if (have + files.length < need) {
+      // Block 98 (owner-rep): photos may have arrived from a PHONE (QR hand-off)
+      // since this page loaded — ask the server for the LIVE count first.
+      try { const lc = await fetch("/api/build/photocount?build_id=" + encodeURIComponent(id)).then((r) => r.json());
+        if (lc && lc.ok) { have = lc.count; btn.dataset.have = lc.count; } } catch (e) {}
+    }
     if (have + files.length < need) {
       document.getElementById("err").textContent = "This cab needs at least " + need + " completion photo" + (need === 1 ? "" : "s") + " before finishing (" + (have + files.length) + " so far).";
       return;
@@ -1528,8 +1542,10 @@ function handoffPage(info) {
     '<p style="text-align:center;opacity:.6;font-size:.9rem">Take or pick photos - they go straight to this cab on the tablet. No sign-in needed.</p>' +
     '<div style="text-align:center;margin-top:14px"><input type="file" id="hp" accept="image/*" multiple style="color:#8e8e93"></div>' +
     '<div class="msg" id="hm" style="text-align:center;margin-top:12px"></div>' +
-    '<p style="text-align:center;margin-top:8px"><b id="hc">0</b> sent</p>' +
-    '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Sent! Add more if you like, or finish on the tablet.";e.target.value="";});})();</script>' +
+    '<div id="hsent" style="display:none;text-align:center;margin:14px auto 0;max-width:420px;background:#1d5a2d;border:2px solid #30d158;border-radius:14px;padding:16px;font-size:1.35rem;font-weight:800">&#10003; <span id="hc">0</span> SENT &mdash; ON THE CAB</div>' +
+    '<div id="hthumbs" style="text-align:center;margin-top:10px"></div>' +
+    '<p style="text-align:center;margin-top:20px"><button class="name" id="hcl" style="display:inline-block;width:auto;padding:14px 30px;background:#3a3a3c">Done &mdash; close this tab</button></p>' +
+    '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;document.getElementById("hsent").style.display="block";var im=document.createElement("img");im.src=URL.createObjectURL(files[i]);im.style.cssText="height:76px;border-radius:10px;margin:4px;border:2px solid #30d158";document.getElementById("hthumbs").appendChild(im);}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Add more if you like, or finish on the tablet.";e.target.value="";});document.getElementById("hcl").onclick=function(){window.close();setTimeout(function(){document.getElementById("hm").textContent="Tab would not close itself? Swipe it away - the photos are already on the cab.";},300);};})();</script>' +
     foot;
 }
 
@@ -1722,8 +1738,8 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
 .kv{opacity:.85;padding:3px 0}.kv b{opacity:.6;font-weight:600;display:inline-block;min-width:9em;padding-right:12px;vertical-align:top}</style></head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:2px 0 12px"><a href="/board" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93">&#8962; Home</a></p>
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -2012,7 +2028,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
           ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
-            `<a href="/photo/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
+            `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
             : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
           <!-- The OTHER inspection outcome (files 11/18): send it back,
@@ -5986,6 +6002,16 @@ http.createServer(async (req, res) => {
     // TECH FINISH (file 11, builder half): every non-background step complete
     // -> final note -> AWAITING INSPECTION. Any clocked-on tech may send it
     // (Q104); the paused clock there is management's bottleneck (Q53/C11).
+    // Block 98: live finish-photo count (feeds the gate + the hand-off poll).
+    if (url.pathname === "/api/build/photocount") {
+      const empPC = await liveSession(req);
+      if (!empPC) return json(401, { ok: false, error: "Signed out" });
+      const bidPC = url.searchParams.get("build_id");
+      if (!isUuid(bidPC)) return json(400, { ok: false, error: "Bad reference" });
+      const shotsPC = await db(`build_photo?select=id&build_id=eq.${bidPC}&kind=eq.finish`);
+      return json(200, { ok: true, count: shotsPC.length });
+    }
+
     if (url.pathname === "/api/build/finish" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -7430,6 +7456,15 @@ self.addEventListener("notificationclick", (e) => {
 
     // Serve a photo to any SIGNED-IN person — the bucket is private and the
     // app is the only door (spec §10: anon reaches nothing directly).
+    // Block 98 (owner-rep): photos open in a wrapper page with a one-tap CLOSE
+    // (the raw image tab had no way back). window.close() works for tabs the
+    // app opened; the fallback line covers the rest.
+    if (url.pathname.startsWith("/photo-view/")) {
+      const pidV = url.pathname.slice(12);
+      if (!isUuid(pidV)) return send(404, "text/plain", "Not found");
+      return send(200, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Photo — Shop Board</title><style>body{margin:0;background:#000;display:flex;flex-direction:column;min-height:100vh}img{max-width:100vw;max-height:88vh;object-fit:contain;margin:auto}#xb{position:fixed;top:14px;right:14px;background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 26px;font-size:1.05rem;font-weight:800;cursor:pointer}</style></head><body><button id="xb" onclick="window.close();document.getElementById('cm').style.display='block'">&#10005; Close</button><img src="/photo/${pidV}"><div id="cm" style="display:none;color:#8e8e93;text-align:center;padding:12px;font-family:system-ui">If this tab didn't close itself, swipe it away — nothing is lost.</div></body></html>`);
+    }
+
     if (url.pathname.startsWith("/photo/")) {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
