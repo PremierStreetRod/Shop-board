@@ -1585,15 +1585,20 @@ const boardPage = (tv98 = false) => `<!doctype html>
   .status{font-weight:700;margin-top:6px}
   .s-green{color:#30d158}.s-amber{color:#ffd60a}.s-red{color:#ff453a}.s-none{color:#8e8e93}
   .day{float:right;font-size:1.1rem;opacity:.8;font-weight:700}
+  #rail>div:first-child{grid-column:1/-1}
 </style></head>
 <body>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
-  <div style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
+  <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
+       left-hand UPCOMING rail; the staff board (phones / iPads) tiles the
+       LINES first, full width, and the upcoming queue reads BELOW them. -->
+  ${tv98 ? `<div style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
     <div id="rail" style="padding:12px 4px 12px 16px"></div>
     <div class="board" id="board"></div>
-  </div>
+  </div>` : `<div class="board" id="board"></div>
+  <div id="rail" style="padding:6px 26px 30px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:0 20px;align-items:start"></div>`}
   <!-- Block 25 (owner-rep): the legend — every color the board can show,
        spelled out — plus the sign-out that was missing. -->
   <div style="position:fixed;bottom:12px;left:18px;font-size:.9rem;opacity:.75">
