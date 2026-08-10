@@ -1286,7 +1286,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 // see every line's state + what's on deck, verify kits (the three-state
 // gate), reorder the upcoming queue, and run the two-step pull task whose
 // "Delivered" tap starts the cab's clock on production's side.
-const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
@@ -1302,6 +1302,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <p style="text-align:center;margin:-4px 0 12px"><a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
@@ -1322,23 +1323,30 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
     ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
       ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; HELD — front office</span>' : ""}
         ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
-        ${q.kit_note ? `<span style="opacity:.6;font-size:.85rem"> · ${q.kit_note}</span>` : ""}
-        <span style="float:right">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px">
           ${i > 0 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
           ${i < r.queue.length - 1 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
           ${q.kit_status !== "verified" ? `<button class="b grn" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts ✓</button>` : ""}
           ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
-        </span>
-        <div style="clear:both"></div>
-        ${q.kit_status !== "short" ? `<input id="kn-${q.id}" placeholder="optional note (what's short — if you know)" style="width:60%;margin-top:4px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem">` : ""}
+        </div>
+        <div style="margin-top:6px"><input id="kn-${q.id}" value="${String(q.kit_note || "").replace(/"/g, "&quot;")}" placeholder="parts note — what's short, when it's expected (stays with warehouse)" style="width:60%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem"> <button class="b" onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button></div>
         ${i === 0 && q.kit_status === "verified" ? `
           <div class="pull">${q.kit_pull_started_at
-            ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC — deliver when it's all on the line:
-               <button class="b grn" onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">Delivered — start the cab</button>`
+            ? (r.active
+              ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC. <span style="color:#ffd60a">Line busy — ORDER ${r.active.order_number} is still on it. Deliver unlocks when the line clears.</span>
+               <button class="b" onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
+              : `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC — deliver when it's all on the line:
+               <button class="b grn" onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">Delivered — start the cab</button>
+               <button class="b" onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
             : `<button class="b grn" onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">Pull started — gathering the kit</button>`}
           </div>` : ""}
       </div>`).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
   </div>`).join("")}
+  <div class="lane">
+    <h3>Delivered — now in production</h3>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come BACK to warehouse for ship-prep in a later stage.</div>
+    ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
+  </div>
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -1347,7 +1355,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   // Same sturdy patterns as the consoles: two-tap arm on anything that
   // changes another team's world; plain posts; full reload on success.
   function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
-  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   async function post(url, payload, btn){
     if (btn) btn.disabled = true;
     try {
@@ -1355,9 +1363,22 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
         body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }) });
       const out = await r.json();
       if (out.ok) return location.reload();
-      document.getElementById("err").textContent = out.error || "Something went wrong";
-    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+      showErr97(btn, out.error || "Something went wrong");
+    } catch (e) { showErr97(btn, "Network hiccup — try again"); }
     if (btn) btn.disabled = false;
+  }
+  // Block 97: errors land NEXT to the button you tapped (the old bottom-of-page
+  // message was invisible mid-scroll), plus the bottom line as backup.
+  function showErr97(btn, msg){
+    document.getElementById("err").textContent = msg;
+    if (!btn) return;
+    let s = btn.nextElementSibling;
+    if (!s || !s.className || s.className.indexOf("berr97") === -1) {
+      s = document.createElement("span"); s.className = "berr97";
+      s.style.cssText = "color:#ff6b5e;font-size:.85rem;margin-left:8px;font-weight:700";
+      btn.after(s);
+    }
+    s.textContent = msg;
   }
   function clockIn(btn){ post("/api/clock/in", { line_id: 9 }, btn); }
   function clockOut(reason, btn, note){
@@ -2065,7 +2086,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     btn.disabled = false; btn.textContent = "Confirm";
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
-  function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   // Q85: open a fix job on a returned/kicked-back cab.
   async function openFix(){
     var cab = document.getElementById("fx-cab").value;
@@ -2646,7 +2667,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
 <script>
   // Same sturdy pattern as the cockpit: plain global handlers, no dialogs.
   // Destructive taps use arm(): first tap arms the button, second fires.
-  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; }, 4000); } }
+  function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   async function post(url, payload, btn){
     if (btn) { btn.disabled = true; }
     try {
@@ -5030,8 +5051,13 @@ http.createServer(async (req, res) => {
           rework: buildsW.filter((b) => b.line_id === l.id && b.state === "rework"),
           queue: buildsW.filter((b) => b.line_id === l.id && b.state === "upcoming")
             .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
+        // Block 97 (owner-rep): the delivered history — where warehouse's cabs
+        // ARE in production. Read-only; ship-prep/receive-back is a later stage.
+        const histW97 = await db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`);
+        const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
+        histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); });
         return send(200, "text/html; charset=utf-8",
-          warehousePage(emp, Boolean(lastW && lastW.kind === "clock_in"), reasonsW, linesW, rowsW));
+          warehousePage(emp, Boolean(lastW && lastW.kind === "clock_in"), reasonsW, linesW, rowsW, histW97));
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
@@ -6173,6 +6199,36 @@ http.createServer(async (req, res) => {
     // KIT STATUS (Q109 three-state gate): unverified -> verified -> short.
     // Warehouse dept, or manager/admin. SHORT is a FLAG — part-level detail
     // lives in Coyote and is out of launch scope; the note is optional.
+    // Block 97 (owner-rep): the parts note is its OWN saved thing — editable
+    // any time (before or after a Short), survives refresh, stays on the
+    // warehouse screen (the cab card only shows kit info while a cab waits).
+    if (url.pathname === "/api/kit/note" && req.method === "POST") {
+      const [whoN97, wnFail] = await requireWarehouse(true); if (wnFail) return wnFail;
+      const { build_id, note } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const noteN97 = String(note || "").trim().slice(0, 200);
+      const [bN97] = await db(`build?select=id,order_number,state&id=eq.${build_id}`);
+      if (!bN97 || bN97.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ kit_note: noteN97 || null }) });
+      logEvent("kit.note", whoN97, { build_id, order_number: bN97.order_number, note: noteN97 });
+      return json(200, { ok: true });
+    }
+
+    // Block 97 (owner-rep): back up a step — un-does "Pull started" (harmless;
+    // the kit stays verified). Delivered/started stays one-way for warehouse;
+    // the admin undo-start is the escape hatch for that.
+    if (url.pathname === "/api/kit/unpull" && req.method === "POST") {
+      const [whoU97, wuFail] = await requireWarehouse(true); if (wuFail) return wuFail;
+      const { build_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bU97] = await db(`build?select=id,order_number,state,kit_pull_started_at&id=eq.${build_id}`);
+      if (!bU97 || bU97.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
+      if (!bU97.kit_pull_started_at) return json(400, { ok: false, error: "No pull to undo" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ kit_pull_started_at: null, kit_pull_started_by: null }) });
+      logEvent("kit.pull_undone", whoU97, { build_id, order_number: bU97.order_number });
+      return json(200, { ok: true });
+    }
+
     if (url.pathname === "/api/kit/status" && req.method === "POST") {
       const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, status, note } = await body(req);
