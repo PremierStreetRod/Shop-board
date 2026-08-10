@@ -2736,10 +2736,29 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     try {
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const out = await r.json();
-      if (out.ok) return location.reload();
-      document.getElementById("err").textContent = out.error || "Something went wrong";
-    } catch(e){ document.getElementById("err").textContent = "Network hiccup — try again"; }
+      if (out.ok) {
+        // Block 100 (owner-rep): a silent reload after Save read as "the button
+        // does nothing" — the numbers re-render identical, so nothing LOOKS
+        // different. Flash the win on the button itself, then refresh.
+        if (btn) { btn.textContent = "\u2713 Saved"; btn.classList.add("grn"); }
+        setTimeout(() => location.reload(), 650); return;
+      }
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
     if (btn) { btn.disabled = false; }
+  }
+  // Block 100: errors land NEXT to the button you tapped (the bottom-of-page
+  // line was invisible mid-scroll on this long console) — bottom kept as backup.
+  function showErrA(btn, msg){
+    document.getElementById("err").textContent = msg;
+    if (!btn) return;
+    let s = btn.nextElementSibling;
+    if (!s || !s.classList || !s.classList.contains("berrA")) {
+      s = document.createElement("span"); s.className = "berrA";
+      s.style.cssText = "color:#ff453a;font-size:.85rem;margin-left:8px";
+      btn.insertAdjacentElement("afterend", s);
+    }
+    s.textContent = msg;
   }
   const v = (id) => document.getElementById(id).value;
   function addEmp(btn){
