@@ -1707,7 +1707,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     model, features, addons,
   };
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false) => {
   const real = tasks.filter((t) => !t.is_background);
   const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
   const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
@@ -1767,6 +1767,12 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     Hrs <input id="ah-h" style="width:64px"> Day <input id="ah-d" style="width:50px" value="1"> Reason <input id="ah-r" style="min-width:240px" placeholder="customer request / custom note…">
     <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','',this)">Add to this cab's clock</button>
   </div>` : ""}
+  ${isAdmin97 && b.state === "active" && b.started_at && new Date(b.started_at).toISOString().slice(0, 10) === new Date(Date.now() - 7 * 3600000).toISOString().slice(0, 10) ? `<div class="lane" style="border-color:#7a1d1d">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">START WAS A MISTAKE? <span style="opacity:.5;font-weight:400;font-size:.8em">admin only · same day only · audited</span></div>
+    <div style="opacity:.7;font-size:.9rem;margin-bottom:8px">Un-starts this cab: it returns to the FRONT of its line's queue (kit stays verified), the frozen checklist is cleared, and the clock resets. Warehouse re-delivers when ready.</div>
+    <button class="b" style="background:#5a1d1d;border:none;border-radius:9px;color:#fff;padding:8px 16px;cursor:pointer" onclick="unstart97('${b.id}',this)">Undo start — back to the queue</button>
+    <span id="us-msg" style="font-size:.85rem;margin-left:8px"></span>
+  </div>` : ""}
   <!-- v25.2 (owner-rep): UPGRADES & OPTIONS, prominent under the owner box —
        THIS is what production needs to see to know what they're building.
        Reads the cab's option tasks, so the moment the Coyote link goes live
@@ -1787,6 +1793,16 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
   <p style="text-align:center"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
   <script>
+  async function unstart97(bid, btn){
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o97; }, 4000); return; }
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/build/unstart", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, claimed_at: new Date().toISOString() }) });
+      const o = await r.json(); if (o.ok) return location.reload();
+      document.getElementById("us-msg").textContent = o.error || "Something went wrong";
+    } catch (e) { document.getElementById("us-msg").textContent = "Network hiccup — try again"; }
+    btn.disabled = false;
+  }
   function addHrs(bid, fid, btn){ btn.disabled = true;
     var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
     fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -5374,9 +5390,9 @@ http.createServer(async (req, res) => {
         const va90 = String(url.searchParams.get("viewas") || "").toLowerCase();
         if (va90 && me86 && me86.role === "admin") canFull86 = !(va90 === "production" || va90 === "build" || va90 === "body"); }
       const flags94 = await db(`option_flag?select=id,kind,flag_text&build_id=eq.${bO.id}&resolved=is.false&order=created_at.asc`);
-      let canHours94 = false;
-      if (empId86) { const [meH94] = await db(`employee?select=role&id=eq.${empId86}`); canHours94 = !!meH94 && (meH94.role === "admin" || meH94.role === "manager"); }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94));
+      let canHours94 = false, isAdmin97r = false;
+      if (empId86) { const [meH94] = await db(`employee?select=role&id=eq.${empId86}`); canHours94 = !!meH94 && (meH94.role === "admin" || meH94.role === "manager"); isAdmin97r = !!meH94 && meH94.role === "admin"; }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
@@ -6175,6 +6191,44 @@ http.createServer(async (req, res) => {
       }
       return [empId, null];
     };
+
+    // Block 97 (owner-rep): UNDO START — the escape hatch for a fat-fingered
+    // "Delivered — start the cab". ADMIN only, SAME Phoenix day only. The cab
+    // returns to upcoming at the FRONT of its line's queue; the frozen task
+    // rows (a derived copy of the template + options) are removed and the
+    // freeze runs fresh on the next start; unresolved option flags from the
+    // mistaken start go too (the next freeze re-raises what still applies).
+    // Kit stays verified + pulled so warehouse can re-deliver in one tap.
+    // Fully audited with row counts. Completed work blocks the undo.
+    if (url.pathname === "/api/build/unstart" && req.method === "POST") {
+      const empU = await liveSession(req);
+      if (!empU) return json(401, { ok: false, error: "Signed out" });
+      const [meU] = await db(`employee?select=role&id=eq.${empU}`);
+      if (!meU || meU.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bU] = await db(`build?select=id,order_number,line_id,state,started_at&id=eq.${build_id}`);
+      if (!bU || bU.state !== "active") return json(400, { ok: false, error: "Only an ACTIVE cab can be un-started" });
+      const phx97 = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
+      if (!bU.started_at || phx97(new Date(bU.started_at).getTime()) !== phx97(Date.now()))
+        return json(400, { ok: false, error: "Same-day only — this cab started on an earlier day" });
+      const doneU = await db(`task?select=id&build_id=eq.${build_id}&state=eq.complete&limit=1`);
+      if (doneU.length) return json(400, { ok: false, error: "Steps are already checked off — handle this with the manager tools instead" });
+      const allT = await db(`task?select=id&build_id=eq.${build_id}`);
+      await db(`task?build_id=eq.${build_id}`, { method: "DELETE" });
+      const openF = await db(`option_flag?select=id&build_id=eq.${build_id}&resolved=is.false`);
+      if (openF.length) await db(`option_flag?build_id=eq.${build_id}&resolved=is.false`, { method: "DELETE" });
+      // Front of the queue: one less than the line's smallest queue_pos.
+      const qMin = await db(`build?select=queue_pos&line_id=eq.${bU.line_id}&state=eq.upcoming&queue_pos=not.is.null&order=queue_pos.asc&limit=1`);
+      const newPos = qMin.length && qMin[0].queue_pos != null ? Number(qMin[0].queue_pos) - 1 : 0;
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        state: "upcoming", started_at: null, kit_delivered_at: null, kit_delivered_by: null,
+        options_sig: null, queue_pos: newPos, pace_alert_color: null }) });
+      logEvent("build.unstarted", empU, { build_id, order_number: bU.order_number, line_id: bU.line_id,
+        task_rows_removed: allT.length, open_flags_removed: openF.length, at: claimed_at || new Date().toISOString() });
+      boardTick();
+      return json(200, { ok: true });
+    }
 
     if (url.pathname === "/api/build/start" && req.method === "POST") {
       const empId = await liveSession(req);
