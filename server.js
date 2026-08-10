@@ -108,8 +108,8 @@ const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 // Signed session cookie: "employeeId.expiresMs.signature".
 // The signature (HMAC) means a phone can't forge someone else's login.
-function makeSession(empId) {
-  const exp = Date.now() + 12 * 60 * 60 * 1000; // 12 h — floor day plus margin
+function makeSession(empId, ttlMs = 12 * 60 * 60 * 1000) {
+  const exp = Date.now() + ttlMs; // default 12 h (phones/day); shared tablets pass 30 min
   const body = `${empId}.${exp}`;
   const sig = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("hex");
   return `${body}.${sig}`;
@@ -918,6 +918,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div class="grid">
       ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
     </div>
+    <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
     <p class="msg" style="margin-top:18px">…or switch straight to</p>
@@ -988,7 +989,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   });
   document.getElementById("out").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-reason]"); if(b){ const w=document.getElementById("wrapnote");
+      // Block 97: "Other (add note)" opens the note row first.
+      if (b.dataset.reason.indexOf("Other") === 0) { window.__hoth97 = b.dataset.reason;
+        const r97 = document.getElementById("hoth97"); if (r97) { r97.style.display = "block"; document.getElementById("hothn97").focus(); return; } }
       act("/api/clock/out",{reason:b.dataset.reason, wrap_note: w ? w.value : undefined}); }
+    if (e.target.id === "hothgo97") { const w=document.getElementById("wrapnote");
+      act("/api/clock/out",{reason:window.__hoth97, note:document.getElementById("hothn97").value || undefined, wrap_note: w ? w.value : undefined}); }
     const s=e.target.closest("[data-switch]"); if(s) act("/api/clock/switch",{line_id:Number(s.dataset.switch)});
   });
   // Q92: submit a time-off request. Client sanity only — the server re-checks.
@@ -1301,7 +1307,8 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
   <div class="lane">
     ${clockedIn
       ? `<b>ON THE CLOCK — Warehouse</b><br><span style="opacity:.6;font-size:.9rem">Clocking out — what kind?</span><br>
-         ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}`
+         ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}
+         <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
          <span style="opacity:.5;font-size:.85rem;margin-left:10px">Morning, back from lunch — same habit as the floor.</span>`}
   </div>
@@ -1353,7 +1360,14 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows) => `<!doctype html>
     if (btn) btn.disabled = false;
   }
   function clockIn(btn){ post("/api/clock/in", { line_id: 9 }, btn); }
-  function clockOut(reason, btn){ post("/api/clock/out", { reason }, btn); }
+  function clockOut(reason, btn, note){
+    // Block 97: "Other (add note)" opens a one-line note box first.
+    if (reason.indexOf("Other") === 0 && note === undefined) {
+      window.__oth97 = reason; document.getElementById("oth97").style.display = "block";
+      const n97 = document.getElementById("othn97"); if (n97) n97.focus(); return;
+    }
+    post("/api/clock/out", { reason, note: note && note.trim() ? note.trim() : undefined }, btn);
+  }
   setTimeout(() => location.reload(), 60000); // the board keeps itself fresh
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
   // reorders a line (queue_pos) or a cab changes state, reflect it here within
@@ -1375,7 +1389,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
-    ? `<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div>`
+    ? `<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
     : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wclk('/api/clock/in',{line_id:${clk.lineId}},this)">CLOCK IN</button>`}</div>
   <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p>` : ""}
   <p style="text-align:center;opacity:.75">
@@ -1401,7 +1415,13 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 <script>
   // Plain English: ask the browser's permission, install the tiny
   // service worker, get this device's push address, hand it to the server.
-  async function wclk(u,p,b){ b.disabled = true;
+  async function wclk(u,p,b){
+    // Block 97: "Other (add note)" opens the note row first.
+    if (p && p.reason && String(p.reason).indexOf("Other") === 0 && p.note === undefined) {
+      window.__othW97 = p.reason; var r97 = document.getElementById("woth97");
+      if (r97) { r97.style.display = "block"; var n97 = document.getElementById("wothn97"); if (n97) n97.focus(); return; }
+    }
+    b.disabled = true;
     try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, claimed_at: new Date().toISOString() }) });
       const o = await r.json(); if (o.ok) return location.reload();
       document.getElementById("werr").textContent = o.error || "Something went wrong";
@@ -1787,7 +1807,7 @@ const shellPage = `<!doctype html>
 const navBar95 = (isAdmin, showReports = false) => {
   const it = (h, t) => `<a href="${h}" style="display:block;color:#ddd;padding:9px 20px;text-decoration:none;white-space:nowrap">${t}</a>`;
   const tools = isAdmin
-    ? [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/intake", "Intake"], ["/mapper", "Mapper"], ["/feed", "Coyote feed"], ["/sync", "Sync"], ["/order", "Order history"], ["/integrity", "Integrity"], ["/lines", "Lines & parts"], ["/tv", "TV screen"]]
+    ? [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/intake", "Intake"], ["/mapper", "Mapper"], ["/feed", "Coyote feed"], ["/sync", "Sync"], ["/order", "Order history"], ["/integrity", "Integrity"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tv", "TV screen"]]
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tv", "TV screen"]]);
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
@@ -2895,7 +2915,7 @@ async function reportData(startMs, endMs) {
     if (t < sinceMs || t > winEnd) continue;
     const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
     if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
-    if (ev.reason && !["End of shift", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
+    if (ev.reason && !["End of shift", "End of day", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
   }
   // Q112: after-hours sessions stamp their timecard rows — the reason, the
   // claimed approver, and whether anyone has CONFIRMED the claim yet.
@@ -4891,7 +4911,16 @@ http.createServer(async (req, res) => {
   // cover); connect-src 'self' still stops an injected script exfiltrating
   // off-origin, and the rest locks down framing, base-uri, forms, and objects.
   res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'");
-  const send = (code, type, data) => { res.writeHead(code, { "content-type": type }); res.end(data); };
+  const send = (code, type, data) => {
+    // Block 97: shared-tablet sliding sign-out — each page load on a marked
+    // device renews a 30-minute window; 30 quiet minutes = signed out. Skips
+    // /logout so signing out sticks. Phones (unmarked) are untouched.
+    if (String(type).startsWith("text/html") && url.pathname !== "/logout" && /sb_shared=1/.test(req.headers.cookie || "")) {
+      const sid97 = readSession(req.headers.cookie);
+      if (sid97) res.setHeader("Set-Cookie", `sb_session=${makeSession(sid97, 30 * 60 * 1000)}; Path=/; HttpOnly; SameSite=Lax`);
+    }
+    res.writeHead(code, { "content-type": type }); res.end(data);
+  };
   const json = (code, obj) => send(code, "application/json", JSON.stringify(obj));
 
   try {
@@ -4969,7 +4998,11 @@ http.createServer(async (req, res) => {
       }
       pinStrikes.delete(id);
       logEvent("employee.login", id, {});
-      res.setHeader("Set-Cookie", `sb_session=${makeSession(id)}; Path=/; HttpOnly; SameSite=Lax`);
+      // Block 97 (owner-rep): a device marked "shared tablet" gets a SHORT
+      // sliding session (30 min, renewed per page in send()); personal phones
+      // keep the 12-hour day session.
+      const shared97 = /sb_shared=1/.test(req.headers.cookie || "");
+      res.setHeader("Set-Cookie", `sb_session=${makeSession(id, shared97 ? 30 * 60 * 1000 : undefined)}; Path=/; HttpOnly; SameSite=Lax`);
       // Q114: a temp-code login works — but goes straight to /change-pin.
       return json(200, { ok: true, change_required: Boolean(emp.must_change_pin) });
     }
@@ -5183,7 +5216,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { reason, claimed_at, wrap_note } = await body(req);
+      const { reason, claimed_at, wrap_note, note } = await body(req);
       // Q112: an open after-hours session can't close without its wrap-up —
       // one line on what got done (photos ride the normal task-photo flow).
       const [openAhOut] = await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
@@ -5194,11 +5227,17 @@ http.createServer(async (req, res) => {
           ended_at: claimed_at || new Date().toISOString(), wrap_note: String(wrap_note).trim() }) });
         logEvent("afterhours.end", empId, { session_id: openAhOut.id, wrap_note: String(wrap_note).trim() });
       }
+      // Block 97 (owner-rep): "End of day" and "End of shift" are the SAME
+      // normal end-of-day punch (the old split mis-filed "End of day" as an
+      // early-out and flagged it on timecards). An "Other" clock-out may carry
+      // a short typed note; it rides inside the reason so timecards read plainly.
+      const note97 = String(note || "").trim().slice(0, 120);
+      const reason97 = note97 ? `${reason} — ${note97}` : reason;
       const kind = reason === "Lunch" ? "clock_out_lunch"
-        : reason === "End of shift" ? "clock_out_shift" : "clock_out_early";
+        : (reason === "End of shift" || reason === "End of day") ? "clock_out_shift" : "clock_out_early";
       await db("clock_event", { method: "POST", body: JSON.stringify({
-        employee_id: empId, kind, reason: reason || null, claimed_at: claimed_at || new Date().toISOString() }) });
-      logEvent("clock.out", empId, { reason, kind });
+        employee_id: empId, kind, reason: reason97 || null, claimed_at: claimed_at || new Date().toISOString() }) });
+      logEvent("clock.out", empId, { reason: reason97, kind });
       return json(200, { ok: true });
     }
 
@@ -6094,12 +6133,20 @@ http.createServer(async (req, res) => {
     // template edits never rewrite a started cab's checklist.
     // Q109 gate, shared by the four kit endpoints: warehouse department OR
     // a manager/admin (they can always step in).
-    const requireWarehouse = async () => {
+    const requireWarehouse = async (mustClock = false) => {
       const empId = await liveSession(req);
       if (!empId) return [null, json(401, { ok: false, error: "Signed out" })];
       const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.department !== "Warehouse" && me.role !== "manager" && me.role !== "admin"))
         return [null, json(403, { ok: false, error: "Warehouse, manager or admin only" })];
+      // Block 97 (owner-rep): signed in is NOT on the clock. Working the line
+      // requires an open clock-in for warehouse staff (managers/admins exempt —
+      // they fix things). The tap works the moment they punch in.
+      if (mustClock && me.department === "Warehouse" && me.role !== "manager" && me.role !== "admin") {
+        const [lastP97] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        if (!lastP97 || lastP97.kind !== "clock_in")
+          return [null, json(403, { ok: false, error: "Clock in first — tap Clock in at the top, then work the line" })];
+      }
       return [empId, null];
     };
 
@@ -6127,7 +6174,7 @@ http.createServer(async (req, res) => {
     // Warehouse dept, or manager/admin. SHORT is a FLAG — part-level detail
     // lives in Coyote and is out of launch scope; the note is optional.
     if (url.pathname === "/api/kit/status" && req.method === "POST") {
-      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, status, note } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       if (!["unverified", "verified", "short"].includes(status))
@@ -6146,7 +6193,7 @@ http.createServer(async (req, res) => {
     // only, clocks untouched (C9). A short kit slides back; a complete one
     // slides forward; the line never idles waiting on a part.
     if (url.pathname === "/api/kit/move" && req.method === "POST") {
-      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, dir } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number,queue_pinned&id=eq.${build_id}`);
@@ -6169,7 +6216,7 @@ http.createServer(async (req, res) => {
 
     // KIT PULL (Q109 two-step, first tap): only a VERIFIED kit can be pulled.
     if (url.pathname === "/api/kit/pull" && req.method === "POST") {
-      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,kit_status,order_number&id=eq.${build_id}`);
@@ -6185,7 +6232,7 @@ http.createServer(async (req, res) => {
     // line — THIS is what starts the cab's clock now. Same freeze-and-start
     // path as the manager override; one-active-per-line still enforced.
     if (url.pathname === "/api/kit/deliver" && req.method === "POST") {
-      const [whoId, whFail] = await requireWarehouse(); if (whFail) return whFail;
+      const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,line_id,part_number,order_number,kit_status,kit_pull_started_at&id=eq.${build_id}`);
@@ -6889,6 +6936,54 @@ self.addEventListener("notificationclick", (e) => {
     // TEMPLATE ready-gate (admin): mark a cab's build template ready — allowed
     // only once it has real steps that add up to > 0 hours — or set it back to
     // draft. A draft template's cab is accepted + routed but held off the board.
+    // Block 97 (owner-rep): SHARED TABLET setup. An admin walks to the tablet,
+    // signs in, opens Tools -> Tablet setup, and flips it ONCE. The device
+    // keeps a year-long marker cookie; from then on EVERY sign-in on it mints
+    // a 30-minute sliding session (renewed per page view in send()), so a
+    // walked-away tablet signs itself out. Personal phones stay 12-hour.
+    if (url.pathname === "/tablet") {
+      const empT97 = await liveSession(req);
+      if (!empT97) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meT97] = await db(`employee?select=role&id=eq.${empT97}`);
+      if (!meT97 || meT97.role !== "admin") return send(403, "text/plain", "Admin only");
+      const isShared97 = /sb_shared=1/.test(req.headers.cookie || "");
+      return send(200, "text/html; charset=utf-8", `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Tablet setup</title>${style}</head>
+<body><div class="wrap" style="max-width:640px">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${navBar95(true)}
+  <h2>This device</h2>
+  <div style="text-align:center;margin:8px 0 18px;padding:16px;border-radius:14px;font-weight:800;font-size:1.15rem;${isShared97 ? "background:#3a2f10;color:#ffd60a;border:2px solid #7a5900" : "background:#1c1c1e;color:#8e8e93;border:2px solid #3a3a3c"}">
+    ${isShared97 ? "SHARED TABLET — everyone signs out after 30 quiet minutes" : "PERSONAL DEVICE — normal 12-hour sign-in"}</div>
+  <p style="text-align:center;opacity:.7;font-size:.95rem">Mark the shop's shared tablets so a walked-away screen signs itself out. Staff phones should stay unmarked.</p>
+  <p style="text-align:center;margin-top:16px">
+    ${isShared97
+      ? `<button class="name" style="display:inline-block;width:auto;padding:14px 26px" onclick="setT97(false,this)">Unmark — back to personal device</button>`
+      : `<button class="name" style="display:inline-block;width:auto;padding:14px 26px" onclick="setT97(true,this)">Mark as a SHARED TABLET</button>`}
+  </p>
+  <p class="msg err" id="terr97" style="text-align:center"></p>
+  <script>
+    async function setT97(shared, btn){ btn.disabled = true;
+      try { const r = await fetch("/api/admin/tablet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shared }) });
+        const o = await r.json(); if (o.ok) return location.reload();
+        document.getElementById("terr97").textContent = o.error || "Something went wrong";
+      } catch (e) { document.getElementById("terr97").textContent = "Network hiccup — try again"; }
+      btn.disabled = false; }
+  </script>
+</div></body></html>`);
+    }
+
+    if (url.pathname === "/api/admin/tablet" && req.method === "POST") {
+      const [adminT97, failT97] = await requireAdmin(); if (failT97) return failT97;
+      const pT97 = await body(req);
+      res.setHeader("Set-Cookie", pT97.shared
+        ? "sb_shared=1; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+        : "sb_shared=; Path=/; Max-Age=0");
+      logEvent(pT97.shared ? "device.shared_marked" : "device.shared_unmarked", adminT97, {});
+      return json(200, { ok: true });
+    }
+
     // OPTION LIBRARY (block 94a): per-family upgrade options — exact Coyote
     // text + hours + build-day. Retire-not-delete. Matching happens at build
     // start; an option not in this library gets FLAGGED, never guessed.
