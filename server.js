@@ -877,20 +877,16 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
 
-  <!-- CLOCK IN: shown when off the clock. Usual lines first (Q90). -->
+  <!-- Block 98b (owner-rep): ONE general CLOCK IN — company time first, same
+       habit as warehouse/Body/Build. It lands on the disabled "Production
+       time" line (14; warehouse-9 pattern: clockable, never on the TV, never
+       in any cab's pace math). Lines are worked via on/off taps AFTER the
+       punch — the line tap is no longer the paycheck punch. Shop time stays,
+       reachable from the work-a-line picker. -->
   <div id="in" style="display:${state.clockedIn ? "none" : "block"}">
-    <div class="grid">
-      ${usualLines.map((l) => `<button class="name" data-line="${l.id}">${l.name}<small>your usual line — one tap</small></button>`).join("")}
+    <div style="text-align:center">
+      <button class="name" data-line="14" style="display:inline-block;width:auto;background:#1d5a2d;border-color:#30d158;font-size:1.3rem;padding:18px 44px">CLOCK IN<small>start your work day — then tap onto a line</small></button>
     </div>
-    <!-- Q111: not going straight to a line? Clock in HERE — paid from this
-         tap, and the time never lands on any cab's numbers. -->
-    <div class="grid" style="margin-top:10px">
-      <button class="name" data-line="10">Shop time<small>meeting · cleanup · in-house work — paid, not on a cab</small></button>
-    </div>
-    ${otherLines.length ? `<p class="msg" style="margin-top:18px">Other lines</p>
-    <div class="grid">
-      ${otherLines.map((l) => `<button class="name" style="opacity:.75" data-line="${l.id}">${l.name}</button>`).join("")}
-    </div>` : ""}
   </div>
 
   <!-- Q112: AFTER HOURS — same clock, plus its governance. This panel only
@@ -921,10 +917,11 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
-    <p class="msg" style="margin-top:18px">…or switch straight to</p>
+    <p class="msg" style="margin-top:18px">…or work a line — tap to jump on</p>
     <div class="grid">
       ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" style="opacity:.8" data-switch="${l.id}">${l.name}</button>`).join("")}
       ${state.lineId === 10 ? "" : `<button class="name" style="opacity:.8" data-switch="10">Shop time</button>`}
+      ${state.lineId === 14 ? "" : `<button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>`}
     </div>
   </div>
 
@@ -1056,6 +1053,8 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <p style="text-align:center;margin:-4px 0 10px"><a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <b>ORDER ${build.order_number}</b> · ${lineName}<br>
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
@@ -5110,6 +5109,7 @@ http.createServer(async (req, res) => {
       // Q111: Shop time (line 10) is disabled so it never appears in
       // allLines — name it by hand for the on-the-clock header.
       const lineName = clockedIn ? (last.line_id === SHOP_LINE_ID ? "Shop time"
+        : last.line_id === 14 ? "no line yet — tap one below"
         : (allLines.find((l) => l.id === last.line_id) || {}).name || "") : "";
       const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
       // ?clockout=1 = the task screen's Clock-out button — show the reason picker.
@@ -5137,7 +5137,7 @@ http.createServer(async (req, res) => {
           // Q111: Shop time joins the switch picker — a tech can step off
           // the cab to a meeting or in-house work with one honest tap.
           const otherLines = allLines.filter((l) => l.id !== last.line_id)
-            .concat([{ id: SHOP_LINE_ID, name: "Shop time" }]);
+            .concat([{ id: SHOP_LINE_ID, name: "Shop time" }, { id: 14, name: "⏸ Off the line — stay on the clock" }]);
           // Q86: this product's completion-photo minimum drives the phone Finish gate.
           const [prodMin] = await db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`);
           const photoMin = prodMin ? prodMin.photo_min : 1;
