@@ -4740,7 +4740,10 @@ async function freezeAndStart(b, empId, startedAt) {
         let sg94 = 0; const ss94 = sig94.sort().join("|"); for (let i = 0; i < ss94.length; i++) sg94 = (sg94 * 31 + ss94.charCodeAt(i)) >>> 0;
         await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ options_sig: String(sg94) }) });
         if (flagCount94) {
-          const adm94 = (await db(`employee?select=id&role=eq.admin&active=is.true`)).map((e) => e.id);
+          // Block 104 (owner-rep): custom add-ons and unknown options are
+          // ACTION ITEMS the moment the cab reaches the line — the production
+          // manager gets the push alongside the admins (Q106-sandboxed).
+          const adm94 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
           await notify("option.flagged", adm94, `Order ${b.order_number}: ${flagCount94} upgrade${flagCount94 === 1 ? "" : "s"} need hours`,
             "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number));
         }
@@ -7050,13 +7053,17 @@ self.addEventListener("notificationclick", (e) => {
       const p = await body(req);
       if (!isUuid(p.build_id)) return json(400, { ok: false, error: "Bad cab reference" });
       const hrs = Number(p.hours), day = Number(p.day_no);
-      if (!(hrs > 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
+      // Block 104: 0 is a legal answer WHEN resolving a flag — it means
+      // "confirmed: no shop labor" (ships loose / config choice). The flag
+      // resolves, NO task is added, and the confirmation is audited.
+      const zeroFlag104 = hrs === 0 && p.flag_id && isUuid(p.flag_id);
+      if (!zeroFlag104 && !(hrs > 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
       if (!Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Day looks wrong" });
       const reason = String(p.reason || "").trim();
       if (reason.length < 3) return json(400, { ok: false, error: "Give the reason — it shows on the cab and in the log" });
       const [bH] = await db(`build?select=id,order_number&id=eq.${p.build_id}`);
       if (!bH) return json(404, { ok: false, error: "Cab not found" });
-      await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
+      if (!zeroFlag104) await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
         name: "EXTRA — " + reason, day_no: day, man_hours: hrs, is_background: false,
         source: "manual", state: "not_started", sort_order: 9500 }) });
       if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true }) });
