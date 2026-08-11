@@ -912,7 +912,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
 
   <!-- Block 98b (owner-rep): ONE general CLOCK IN — company time first, same
@@ -1011,6 +1011,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
     ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+    <a href="/settings" style="color:#8e8e93;margin-right:24px">&#9881; My settings</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1138,7 +1139,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1232,6 +1233,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
     ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager cockpit</a> ·` : ""}
     <a href="/board" style="color:#8e8e93">Shop board</a> ·
+    <a href="/settings" style="color:#8e8e93">&#9881; My settings</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -2136,6 +2138,7 @@ const navBar95 = (isAdmin, showReports = false) => {
         ${isAdmin ? `<div style="border-top:1px solid #3a3a3c;margin:6px 0 0;padding:8px 20px 3px;color:#6e6e73;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase">Plumbing</div>` + plumbing95.map(([h, t]) => it(h, t)).join("") : ""}
       </div>
     </details>
+    <a href="/settings" style="color:#8e8e93;margin-left:16px">&#9881; My settings</a>
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
   </div>
   <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
@@ -2144,6 +2147,69 @@ const navBar95 = (isAdmin, showReports = false) => {
     document.querySelectorAll("details.t95[open]").forEach((d)=>{ if(!d.contains(e.target)) d.removeAttribute("open"); });
   });}</script>`;
 };
+
+// ⚙ MY SETTINGS (block 117, owner-approved spec + owner-rep add: "each of
+// the users should be able to change all their personal settings, email,
+// phone, etc"). The ROLE decides which events reach a person; this page
+// owns the CHANNELS and their contact info. PINs stay office-reset (Q114);
+// name/role/department stay admin-owned (People panel).
+const settingsPage117 = (me) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — My settings</title>${style}</head>
+<body><div class="wrap" style="max-width:560px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:2px 0 14px"><a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <h2 style="text-align:center;margin:0 0 2px">&#9881; My settings</h2>
+  <p style="text-align:center;opacity:.7;margin:0 0 14px">${me.first_name} ${me.last_name || ""}</p>
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px">
+    <b>My contact info</b>
+    <p style="opacity:.6;font-size:.9rem;margin:6px 0 10px">Where texts and emails reach you. Keep these current — pay and after-hours notices use them.</p>
+    <div style="padding:6px 0">Mobile # <input id="mc-m" value="${escH(me.mobile || "")}" placeholder="602 555 0117" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;width:150px"></div>
+    <div style="padding:6px 0">Email <input id="mc-e" value="${escH(me.email || "")}" placeholder="name@example.com" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:220px"></div>
+    <button style="background:#3a3a3c;border:none;border-radius:9px;color:#fff;padding:9px 14px;cursor:pointer;margin-top:4px" onclick="saveC117(this)">Save contact info</button>
+    <span id="mc-msg" style="font-size:.85rem;margin-left:8px"></span>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px">
+    <b>How notices reach me</b>
+    <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Critical notices (pay decisions, inspection hand-offs) always come through.</p>
+    ${[["push", "Phone / web push", "Pops up on this device once you allow notifications (the bell)."],
+       ["sms", "Text message", "Sent to the mobile number above."],
+       ["email", "Email", "Sent to the email address above."]].map(([ch, label, note]) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)">
+      <div style="flex:1"><b>${label}</b><br><small style="opacity:.55">${note}</small></div>
+      <b id="st-${ch}" style="opacity:.7">${me["notify_" + ch] === false ? "OFF" : "ON"}</b>
+      <button style="background:${me["notify_" + ch] === false ? "#1d5a2d" : "#3a3a3c"};border:none;border-radius:9px;color:#fff;padding:9px 14px;cursor:pointer" onclick="flip117('${ch}',this)">Turn ${me["notify_" + ch] === false ? "ON" : "OFF"}</button>
+    </div>`).join("")}
+  </div>
+  <p style="text-align:center;margin-top:16px"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+<script>
+  var cur117 = { push: ${me.notify_push === false ? "false" : "true"}, sms: ${me.notify_sms === false ? "false" : "true"}, email: ${me.notify_email === false ? "false" : "true"} };
+  async function flip117(ch, btn){
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/settings/channels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: ch, enabled: !cur117[ch] }) });
+      const out = await r.json();
+      if (out.ok) { cur117[ch] = !cur117[ch];
+        document.getElementById("st-" + ch).textContent = cur117[ch] ? "ON" : "OFF";
+        btn.textContent = "Turn " + (cur117[ch] ? "OFF" : "ON");
+        btn.style.background = cur117[ch] ? "#3a3a3c" : "#1d5a2d";
+      }
+    } catch(e) {}
+    btn.disabled = false;
+  }
+  async function saveC117(btn){
+    btn.disabled = true; const m = document.getElementById("mc-msg"); m.textContent = "";
+    try {
+      const r = await fetch("/api/settings/contact", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mobile: document.getElementById("mc-m").value, email: document.getElementById("mc-e").value }) });
+      const out = await r.json();
+      if (out.ok) { m.textContent = "✓ Saved"; m.style.color = "#30d158"; }
+      else { m.textContent = out.error || "Something went wrong"; m.style.color = "#ff453a"; }
+    } catch(e){ m.textContent = "Network hiccup — try again"; m.style.color = "#ff453a"; }
+    btn.disabled = false;
+  }
+</script></div></body></html>`;
 
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2892,6 +2958,23 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <p style="opacity:.5;font-size:.85rem">Deactivated people vanish from the sign-in screen but their history stays. Resetting a PIN issues a fresh TEMPORARY code (it appears on the button) — they sign in with it once and are made to choose their own.</p>
   </div>
 
+  <!-- Block 117: the admin side of ⚙ My settings — every person's channel
+       switches AND contact info, controllable from one table. -->
+  <div class="panel" id="channels117"><h3>Notification channels &amp; contact — per person</h3>
+  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own from &#9881; My settings on their home screen.</p>
+  <table><tr><th>Name</th><th>Push</th><th>Text</th><th>Email</th><th>Mobile #</th><th>Email address</th><th></th></tr>
+  ${emps.filter((e) => e.active).map((e) => `<tr>
+    <td><b>${e.first_name} ${e.last_name}</b></td>
+    <td><button class="b ${e.notify_push === false ? "" : "grn"}" onclick="chan117('${e.id}','push',${e.notify_push === false},this)">${e.notify_push === false ? "OFF" : "ON"}</button></td>
+    <td><button class="b ${e.notify_sms === false ? "" : "grn"}" onclick="chan117('${e.id}','sms',${e.notify_sms === false},this)">${e.notify_sms === false ? "OFF" : "ON"}</button></td>
+    <td><button class="b ${e.notify_email === false ? "" : "grn"}" onclick="chan117('${e.id}','email',${e.notify_email === false},this)">${e.notify_email === false ? "OFF" : "ON"}</button></td>
+    <td><input id="cm-${e.id}" value="${e.mobile || ""}" placeholder="602 555 0117" style="width:120px"></td>
+    <td><input id="ce-${e.id}" value="${e.email || ""}" placeholder="name@…" style="width:170px"></td>
+    <td><button class="b" onclick="contact117('${e.id}',this)">Save</button></td>
+  </tr>`).join("")}</table>
+  <p style="opacity:.5;font-size:.85rem">A switch only matters once its channel is ON under Features and set up in "Email &amp; text setup" below. Push also needs the person to allow notifications on their device (the bell).</p>
+  </div>
+
   <div class="panel" id="steps"><h3>Build steps</h3>
   <!-- C18: switching cabs is a full page load (?tpl=), which used to dump
        the scroll back to the top — the #steps fragment lands you right here. -->
@@ -2956,6 +3039,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   ${SMS_READY ? `<div style="padding:6px 0 10px">Send a test text to
     <input id="t116-sm" style="min-width:170px" placeholder="602 555 0117">
     <button class="b" onclick="test116('sms','t116-sm',this)">Send test text</button></div>` : ""}
+  <p style="padding:6px 0 0"><button class="b" onclick="samples117(this)">Send me the sample set — one of each notice</button><br>
+  <span style="opacity:.5;font-size:.85rem">Fires a realistic example of every notice the system sends (inspection ready, after-hours clock-in and wrap-up, ship risk, red cab, upgrades needing hours) through the real pipe — sandboxed to you, on every channel that's on for you.</span></p>
   <p style="opacity:.5;font-size:.85rem">Tests go ONLY to the address or number you type, and each one is logged. Everyday sending stays off until the "Email notifications" / "Text-message notifications" switches above are ON — and until we go live, even those reroute to you.</p>
   </div>
 
@@ -3168,6 +3253,20 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
+  // Block 117: per-person channels + contact, and the sample-set button.
+  function chan117(id, ch, to, btn){ post("/api/admin/channels", { employee_id: id, channel: ch, enabled: to === true || to === "true" }, btn); }
+  function contact117(id, btn){ post("/api/admin/contact", { employee_id: id, mobile: v("cm-"+id), email: v("ce-"+id) }, btn); }
+  async function samples117(btn){
+    btn.disabled = true; const was = btn.textContent; btn.textContent = "Sending the set…";
+    try {
+      const r = await fetch("/api/notify/samples", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const out = await r.json();
+      if (out.ok) { btn.textContent = "✓ Sent — check your phone"; btn.classList.add("grn");
+        setTimeout(() => { btn.textContent = was; btn.classList.remove("grn"); btn.disabled = false; }, 8000); return; }
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
+    btn.textContent = was; btn.disabled = false;
+  }
   // Block 116: explicit one-shot channel test — no reload; the button tells the story.
   async function test116(channel, inputId, btn){
     const to = v(inputId).trim();
@@ -5402,9 +5501,19 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     const ppl = await db(`employee?select=first_name,last_name&id=in.(${intended.join(",")})`);
     const names = ppl.map((p) => `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`).join(", ");
     const targets = sandbox ? (SANDBOX_EMPLOYEE_ID ? [SANDBOX_EMPLOYEE_ID] : []) : intended;
+    // Block 117 (⚙ My settings): the person picks CHANNELS; their role
+    // already picked the EVENTS. Role-critical notices (pay decisions,
+    // inspection hand-offs, ship risk, self-tests) ignore the mutes —
+    // those must always land somewhere.
+    const critical117 = ["afterhours.", "build.ready_inspection", "build.rework_assigned", "build.promise_conflict", "test.", "notify."].some((pre) => String(eventType).startsWith(pre));
+    const prefs117 = {};
+    if (targets.length) for (const pp of await db(`employee?select=id,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
+    const wants117 = (id, ch) => { const pp = prefs117[id]; return critical117 || !pp || pp["notify_" + ch] !== false; };
+    const pushT117 = targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
-    if (targets.length && VAPID_PUB && VAPID_PRIV) {
-      const subs = await db(`push_subscription?select=id,endpoint,p256dh,auth&active=is.true&employee_id=in.(${targets.join(",")})`);
+    if (targets.length && !pushT117.length) status = "muted";
+    if (pushT117.length && VAPID_PUB && VAPID_PRIV) {
+      const subs = await db(`push_subscription?select=id,endpoint,p256dh,auth&active=is.true&employee_id=in.(${pushT117.join(",")})`);
       const payload = { title: sandbox ? `[TEST] ${title}` : title,
         body: sandbox ? `${bodyText}\n(Build test — would have gone to: ${names})` : bodyText,
         url: link || "/home" };
@@ -5427,11 +5536,11 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
           + `\n\nOpen: https://shopboard.premierstreetrod.com${link || "/home"}`;
         let emailStatus = null, smsStatus = null;
         for (const p of ppl116) {
-          if (emailOn && EMAIL_READY && p.email) {
+          if (emailOn && EMAIL_READY && p.email && wants117(p.id, "email")) {
             try { await sendEmail116(p.email, subj116, body116); emailStatus = "sent"; }
             catch (e) { if (emailStatus !== "sent") emailStatus = "failed"; }
           }
-          if (smsOn && SMS_READY && p.mobile) {
+          if (smsOn && SMS_READY && p.mobile && wants117(p.id, "sms")) {
             try { await sendSms116(p.mobile, (subj116 + " — " + bodyText).slice(0, 300)); smsStatus = "sent"; }
             catch (e) { if (smsStatus !== "sent") smsStatus = "failed"; }
           }
@@ -7480,6 +7589,41 @@ self.addEventListener("notificationclick", (e) => {
       return json(200, { ok: true });
     }
 
+    // ⚙ MY SETTINGS (block 117): every signed-in person can pick their own
+    // notification CHANNELS and keep their own contact info current. The
+    // role decides WHICH events; role-critical notices ignore the mutes.
+    // Admin can set all of it for anyone from the console panel.
+    if (url.pathname === "/settings") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me117] = await db(`employee?select=first_name,last_name,mobile,email,notify_push,notify_sms,notify_email&id=eq.${empId}`);
+      if (!me117) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      return send(200, "text/html; charset=utf-8", settingsPage117(me117));
+    }
+    if (url.pathname === "/api/settings/channels" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const p117 = await body(req);
+      const ch117 = String(p117.channel || "");
+      if (!["push", "sms", "email"].includes(ch117)) return json(400, { ok: false, error: "Unknown channel" });
+      const on117 = p117.enabled === true || p117.enabled === "true";
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
+      logEvent("settings.channel", empId, { channel: ch117, enabled: on117, by: "self" });
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/settings/contact" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const p117 = await body(req);
+      const mob117 = String(p117.mobile || "").trim().slice(0, 30);
+      const eml117 = String(p117.email || "").trim().slice(0, 120);
+      if (mob117 && mob117.replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "That doesn't look like a full phone number" });
+      if (eml117 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eml117)) return json(400, { ok: false, error: "That doesn't look like an email address" });
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ mobile: mob117 || null, email: eml117 || null }) });
+      logEvent("settings.contact", empId, { mobile_set: Boolean(mob117), email_set: Boolean(eml117), by: "self" });
+      return json(200, { ok: true });
+    }
+
     // Admin test: one real message through the WHOLE pipe — chokepoint,
     // sandbox rewrite, sealing, delivery. What the E2E and the owner-rep's
     // phone both use to prove the plumbing.
@@ -7509,7 +7653,7 @@ self.addEventListener("notificationclick", (e) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
-      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin&order=active.desc,first_name");
+      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email&order=active.desc,first_name");
       const tmpls = await db("build_template?select=id,family&order=family");
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = (tplId && isUuid(tplId)) ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
@@ -7735,6 +7879,50 @@ self.addEventListener("notificationclick", (e) => {
         else await sendSms116(to116, "Shop Board test text: if you're reading this, texting is working.");
       } catch (e) { return json(400, { ok: false, error: String(e.message || "Send failed").slice(0, 200) }); }
       logEvent("notify.channel_test", adminId116, { channel: ch116, to: to116 });
+      return json(200, { ok: true });
+    }
+
+    // Block 117: admin sets anyone's channel switches / contact info.
+    if (url.pathname === "/api/admin/channels" && req.method === "POST") {
+      const [adminId117, fail117] = await requireAdmin(); if (fail117) return fail117;
+      const p117 = await body(req);
+      if (!isUuid(p117.employee_id)) return json(400, { ok: false, error: "Bad person reference" });
+      const ch117 = String(p117.channel || "");
+      if (!["push", "sms", "email"].includes(ch117)) return json(400, { ok: false, error: "Unknown channel" });
+      const on117 = p117.enabled === true || p117.enabled === "true";
+      await db(`employee?id=eq.${p117.employee_id}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
+      logEvent("settings.channel", adminId117, { employee_id: p117.employee_id, channel: ch117, enabled: on117, by: "admin" });
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/admin/contact" && req.method === "POST") {
+      const [adminId117b, fail117b] = await requireAdmin(); if (fail117b) return fail117b;
+      const p117 = await body(req);
+      if (!isUuid(p117.employee_id)) return json(400, { ok: false, error: "Bad person reference" });
+      const mob117 = String(p117.mobile || "").trim().slice(0, 30);
+      const eml117 = String(p117.email || "").trim().slice(0, 120);
+      if (mob117 && mob117.replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "That phone number looks short" });
+      if (eml117 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eml117)) return json(400, { ok: false, error: "That email address looks off" });
+      await db(`employee?id=eq.${p117.employee_id}`, { method: "PATCH", body: JSON.stringify({ mobile: mob117 || null, email: eml117 || null }) });
+      logEvent("settings.contact", adminId117b, { employee_id: p117.employee_id, mobile_set: Boolean(mob117), email_set: Boolean(eml117), by: "admin" });
+      return json(200, { ok: true });
+    }
+    // Block 117 (owner-rep: "wouldnt mind sending out a few text pushes so i
+    // can see what they are going to look like"): ONE realistic example of
+    // each notice the system sends, fired through the REAL chokepoint —
+    // sandbox rules apply, so until go-live the whole set lands on the
+    // owner-rep, on every channel that's on for him. Admin-only, audited.
+    if (url.pathname === "/api/notify/samples" && req.method === "POST") {
+      const [adminId118, fail118] = await requireAdmin(); if (fail118) return fail118;
+      const set117 = [
+        ["build.ready_inspection", "ORDER 23417 — ready for inspection", "Production finished its checklist on Line 1. Sign off in the Manager cockpit, or send it back with a reason.", "/manager"],
+        ["afterhours.claimed", "After hours: Jonathan is clocking in", "Reason: Making up hours — plan: finish crating 23445. Confirm in the cockpit if this is approved.", "/manager"],
+        ["afterhours.wrapped", "After hours ended: Jonathan, 2.1h", "Wrap note: \"Finished the crate, swept bay 2.\" 1 photo attached. An ADMIN signs off in the Admin console before the hours count.", "/admin"],
+        ["build.promise_conflict", "ORDER 23536 — can't make the sold ship date", "The math says this cab finishes after the date it was sold to ship. Day one is the time to re-plan or re-promise.", "/order/23536"],
+        ["pace.warn", "Line 2: TEST-23702 needs help", "This cab just crossed into RED — it's 4.5 hours behind its checklist. A look now beats a surprise at 4pm.", "/board"],
+        ["option.flagged", "Order 23539: 2 upgrades need hours", "Coyote sent options the library doesn't price yet. Open the order and set hours (or tap Not production).", "/order/23539"],
+      ];
+      for (const [ev117, ti117, bo117, li117] of set117) await notify(ev117, [adminId118], ti117, bo117, li117);
+      logEvent("notify.samples", adminId118, { count: set117.length });
       return json(200, { ok: true });
     }
 
