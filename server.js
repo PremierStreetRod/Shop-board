@@ -635,7 +635,7 @@ async function sweepForgottenClockOuts() {
           const adminsAh107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
           notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id)])],
             `After hours auto-closed — ${whoAh107 ? whoAh107.first_name : "?"} left no wrap-up`,
-            "The session closed itself at day end with no wrap-up note. Its hours are HELD off the timecard until someone signs off in the cockpit.", "/manager");
+            "The session closed itself at day end with no wrap-up note. Its hours are HELD off the timecard until an ADMIN signs off in the Admin console.", "/manager");
         } catch (e) { console.error("ah sweep notify failed:", e.message); }
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
@@ -2164,15 +2164,18 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
   ${afterHours.length ? `
-  <!-- Q112 + block 107: claim-then-confirm, then WRAP-UP SIGN-OFF. A session's
-       hours are HELD off the timecard until a manager/admin signs off here. -->
-  <div class="lane" style="border-color:#7a5900"><h3>After hours — needs sign-off</h3>
-    ${afterHours.map((s) => `<div class="qrow">${s.who} · ${s.lineName} · ${s.when}
-      <span style="opacity:.7">— ${s.reason} · says ${s.appr} approved · "${s.plan}"</span>
-      ${s.ended ? `<span style="opacity:.85"> · ${s.hrs}h · wrap-up: "${s.wrap || ""}"</span>${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}` : ` <span style="color:#ffd60a">(still on the clock)</span>`}
-      ${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm approval</button>`}
-      ${s.ended ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-left:10px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button>` : ""}</div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Signing off (after the wrap-up lands) releases the session's hours onto the timecard — until then they're HELD and flagged.</div>
+  <!-- Q112 + blocks 107/108 (owner-rep): WHO worked leads each row, big and
+       bold, lines below the name. Managers CONFIRM the approval claim here;
+       the SIGN-OFF that releases pay hours is an ADMIN job (Admin console). -->
+  <div class="lane" style="border-color:#7a5900"><h3>After hours — ${isAdmin ? "needs your sign-off" : "confirm; admin signs off"}</h3>
+    ${afterHours.map((s) => `<div class="qrow" style="display:block;padding:10px 0">
+      <div style="font-size:1.15rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
+      <div style="margin:2px 0 0">${s.lineName}</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
+      ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock)</div>`}
+      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? (isAdmin ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button>` : `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN sign-off — hours held till then.</span>`) : ""}</div>
+    </div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
   </div>` : ""}
   ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
@@ -2739,7 +2742,7 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = []) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -2776,6 +2779,20 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
   </div>
   <h2>Admin</h2>
+
+  ${afterHours.length ? `
+  <!-- Block 108 (owner-rep): after-hours sign-off queue — ADMIN approval job.
+       WHO worked leads each row; sign-off releases the held hours onto pay. -->
+  <div class="panel" id="ah108" style="border-color:#7a5900"><h3>After hours — needs your sign-off</h3>
+    ${afterHours.map((s) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
+      <div style="font-size:1.2rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
+      <div style="margin:2px 0 0">${s.lineName}</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
+      ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock — sign off after the wrap-up lands)</div>`}
+      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="b" onclick="ahConf108('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<button class="b grn" onclick="arm(this,()=>ahSign108('${s.id}',this))">Sign off — count the hours</button>` : ""}</div>
+    </div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Signing off releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Managers can confirm the approval claim from the cockpit; the sign-off itself is yours.</div>
+  </div>` : ""}
 
   <div class="panel" id="people"><h3>People</h3>
   <div style="background:#1c1c1e;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">
@@ -2968,6 +2985,29 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       showErrA(btn, out.error || "Something went wrong");
     } catch(e){ showErrA(btn, "Network hiccup — try again"); }
     if (btn) { btn.disabled = false; }
+  }
+  // Block 108: after-hours confirm + SIGN-OFF from the admin console.
+  async function ahConf108(id, btn){
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/afterhours/confirm", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: id }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
+    btn.disabled = false;
+  }
+  async function ahSign108(id, btn){
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/api/afterhours/signoff", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: id }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
+    btn.disabled = false; btn.textContent = "Sign off — count the hours";
   }
   // Block 100: errors land NEXT to the button you tapped (the bottom-of-page
   // line was invisible mid-scroll on this long console) — bottom kept as backup.
@@ -5680,7 +5720,7 @@ http.createServer(async (req, res) => {
           const nPhotos107 = (await db(`after_hours_photo?select=id&session_id=eq.${openAhOut.id}`)).length;
           notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id)])],
             `After hours wrapped up — ${meOut107 ? meOut107.first_name : "?"}, ${hrs107}h`,
-            `"${String(wrap_note).trim()}"${nPhotos107 ? ` + ${nPhotos107} photo${nPhotos107 > 1 ? "s" : ""}` : ""} — sign off in the cockpit so the hours count on the timecard.`, "/manager");
+            `"${String(wrap_note).trim()}"${nPhotos107 ? ` + ${nPhotos107} photo${nPhotos107 > 1 ? "s" : ""}` : ""} — an ADMIN signs off in the Admin console so the hours count on the timecard.`, "/manager");
         } catch (e) { console.error("ah wrap notify failed:", e.message); }
       }
       // Block 97 (owner-rep): "End of day" and "End of shift" are the SAME
@@ -7067,9 +7107,11 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/afterhours/signoff" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
+      // Block 108 (owner-rep): sign-off is an ADMIN approval job — it releases
+      // pay hours. Managers still confirm the approval claim from the cockpit.
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      if (!me || me.role !== "admin")
+        return json(403, { ok: false, error: "Admin only — sign-off releases pay hours" });
       const { session_id } = await body(req);
       if (!isUuid(session_id)) return json(400, { ok: false, error: "That session reference isn't valid" });
       const [sAh2] = await db(`after_hours_session?select=id,employee_id,ended_at,confirmed_by,signed_off_by&id=eq.${session_id}`);
@@ -7179,7 +7221,21 @@ self.addEventListener("notificationclick", (e) => {
       const calDays = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&order=cal_date`).catch(() => []);
       const ntRows = await db(`shop_setting?select=key,value&key=in.(nudge_mon,nudge_tue,nudge_wed,nudge_thu,nudge_fri)`).catch(() => []);
       const nudgeTimes = {}; for (const r of ntRows) nudgeTimes[r.key.replace("nudge_", "")] = r.value;
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94));
+      // Block 108 (owner-rep): the after-hours SIGN-OFF queue is an ADMIN
+      // approval job — it lives here now, front and center under the title.
+      const ahRowsA = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by&signed_off_by=is.null&order=started_at.desc&limit=20`);
+      const ahPhA = ahRowsA.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [];
+      const linesA108 = ahRowsA.length ? await db(`line?select=id,name`) : [];
+      const nmA108 = {}; for (const p of emps) nmA108[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
+      const phxDTA = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
+      const ahAdmin = ahRowsA.map((s) => ({ id: s.id,
+        who: nmA108[s.employee_id] || "?", appr: nmA108[s.approved_by] || "?",
+        lineName: (linesA108.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
+        when: phxDTA(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note,
+        ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
+        hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
+        photos: ahPhA.filter((p2) => p2.session_id === s.id).map((p2) => p2.id) }));
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
