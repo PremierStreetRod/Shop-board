@@ -1071,7 +1071,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
-    <b>ORDER ${build.order_number}</b> · ${lineName}<br>
+    <!-- Block 101c (owner-rep): the order number taps through to the cab card
+         — a quick look at what this order IS without a trip over to the shop
+         board. ⌂ Home on the cab card lands right back on this task screen. -->
+    <b>ORDER <a href="/order/${encodeURIComponent(build.order_number)}" style="color:inherit">${build.order_number}</a></b> · ${lineName}<br>
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
     <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
   </div>
