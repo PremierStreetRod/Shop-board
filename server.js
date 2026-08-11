@@ -1642,8 +1642,14 @@ const boardPage = (tv98 = false) => `<!doctype html>
         const m = { open: ["SHOP OPEN", "#30d158"], after_hours: ["AFTER HOURS", "#ffd60a"], closed: ["SHOP CLOSED", "#8e8e93"] }[s.shop.state] || ["", "#8e8e93"];
         sc.innerHTML = '<span style="border:1px solid ' + m[1] + ';color:' + m[1] + ';border-radius:999px;padding:4px 16px;font-weight:700;font-size:.95rem">' + m[0] + (s.shop.detail ? " — " + s.shop.detail : "") + "</span>";
       }
+      // Block 105 (owner-rep): a FAINT per-line hue so the lines read apart on
+      // the dark theme — each tile and its UPCOMING queue share the wash.
+      // Pace green/amber/red stays the only loud signal; this is background-only.
+      const LTBG = ["rgba(96,156,224,.09)", "rgba(58,178,166,.09)", "rgba(148,118,214,.11)", "rgba(214,150,64,.09)"];
+      const LTHD = ["#7fb3e8", "#5cc8bd", "#b09ae0", "#dcae6b"];
+      const lt = (id) => (Math.max(1, Number(id) || 1) - 1) % 4;
       document.getElementById("board").innerHTML = s.lines.map(l => \`
-        <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" \${l.cab && l.cab.badge ? 'style="border-style:dashed;border-color:#ff9f0a;border-left-width:8px"' : ""}>
+        <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" style="background:linear-gradient(\${LTBG[lt(l.id)]},\${LTBG[lt(l.id)]}),#1c1c1e\${l.cab && l.cab.badge ? ";border-style:dashed;border-color:#ff9f0a;border-left-width:8px" : ""}">
           \${l.closed ? \`<span style="float:right;background:#3a3a3c;color:#ddd;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">CLOSED</span>\` : ""}
           \${l.down && !l.closed ? \`<span style="float:right;background:#37485a;color:#cfe3f2;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">DOWN TODAY</span>\` : ""}
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
@@ -1667,8 +1673,8 @@ const boardPage = (tv98 = false) => `<!doctype html>
       if (rl) {
         const grp = s.lines.filter(l => l.upcoming && l.upcoming.length);
         rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
-          (grp.length ? grp.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;opacity:.55;font-size:.95rem;margin-bottom:4px">' + l.name + '</div>' +
-            l.upcoming.map(u => '<div style="background:#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b><div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
+          (grp.length ? grp.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:.95rem;margin-bottom:4px;color:' + LTHD[lt(l.id)] + ';opacity:.85">' + l.name + '</div>' +
+            l.upcoming.map(u => '<div style="background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b><div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
           : '<div style="opacity:.45">Nothing in the queue.</div>');
       }
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
