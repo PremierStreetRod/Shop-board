@@ -2102,13 +2102,18 @@ const navBar95 = (isAdmin, showReports = false) => {
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <details class="t95" style="display:inline-block;position:relative">
-      <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none">Tools &#9662;</summary>
+      <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:30px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:80;min-width:185px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
         ${tools.map(([h, t]) => it(h, t)).join("")}
       </div>
     </details>
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
-  </div>`;
+  </div>
+  <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
+    // Block 110 (owner-rep): the Tools menu folds up like a normal menu —
+    // any tap outside it closes it. One shared nav = fixed everywhere.
+    document.querySelectorAll("details.t95[open]").forEach((d)=>{ if(!d.contains(e.target)) d.removeAttribute("open"); });
+  });}</script>`;
 };
 
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
@@ -2179,7 +2184,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div style="margin:2px 0 0">${s.lineName}</div>
       <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
       ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock)</div>`}
-      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? (isAdmin ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button>` : `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN sign-off — hours held till then.</span>`) : ""}</div>
+      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? (isAdmin ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="document.getElementById('dcm-${s.id}').style.display='block';document.getElementById('dcmr-${s.id}').focus()">Decline</button>` : `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN sign-off — hours held till then.</span>`) : ""}</div>
+      ${s.ended && isAdmin ? `<div id="dcm-${s.id}" style="display:none;margin-top:6px"><input id="dcmr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px"> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>declAh110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
     </div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
   </div>` : ""}
@@ -2388,6 +2394,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Sign off — count the hours";
+  }
+  // Block 110: decline with a typed reason — refuses the hours for good.
+  async function declAh110(id, btn){
+    const rsn = (document.getElementById("dcmr-" + id) || { value: "" }).value.trim();
+    if (!rsn) { document.getElementById("err").textContent = "Type the reason first"; return; }
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/afterhours/decline", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: id, reason: rsn }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false;
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
@@ -2805,7 +2825,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       <div style="margin:2px 0 0">${s.lineName}</div>
       <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
       ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock — sign off after the wrap-up lands)</div>`}
-      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="b" onclick="ahConf108('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<button class="b grn" onclick="arm(this,()=>ahSign108('${s.id}',this))">Sign off — count the hours</button>` : ""}</div>
+      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="b" onclick="ahConf108('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<button class="b grn" onclick="arm(this,()=>ahSign108('${s.id}',this))">Sign off — count the hours</button> <button class="b red" onclick="document.getElementById('dc-${s.id}').style.display='block';document.getElementById('dcr-${s.id}').focus()">Decline</button>` : ""}</div>
+      ${s.ended ? `<div id="dc-${s.id}" style="display:none;margin-top:6px"><input id="dcr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px"> <button class="b red" onclick="arm(this,()=>ahDecl110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
     </div>`).join("")}
     <div style="opacity:.5;font-size:.85rem;margin-top:8px">Signing off releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Managers can confirm the approval claim from the cockpit; the sign-off itself is yours.</div>
   </div>` : ""}
@@ -3024,6 +3045,20 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       showErrA(btn, out.error || "Something went wrong");
     } catch(e){ showErrA(btn, "Network hiccup — try again"); }
     btn.disabled = false; btn.textContent = "Sign off — count the hours";
+  }
+  // Block 110: decline with a typed reason — refuses the hours for good.
+  async function ahDecl110(id, btn){
+    const rsn = (document.getElementById("dcr-" + id) || { value: "" }).value.trim();
+    if (!rsn) { showErrA(btn, "Type the reason first"); return; }
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/afterhours/decline", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: id, reason: rsn }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
+    btn.disabled = false;
   }
   // Block 100: errors land NEXT to the button you tapped (the bottom-of-page
   // line was invisible mid-scroll on this long console) — bottom kept as backup.
@@ -3302,7 +3337,7 @@ async function reportData(startMs, endMs) {
   // session's hours are HELD off "paid" until a manager/admin SIGNS OFF on the
   // wrapped-up session in the cockpit (owner-rep: "MUST sign off before it
   // counts against their time card hours"). Sign-off releases them.
-  const ahSess = await db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
+  const ahSess = await db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,declined_by,decline_reason,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
   for (const sA of ahSess) {
     const sStart = new Date(sA.started_at).getTime();
     const sEnd = sA.ended_at ? new Date(sA.ended_at).getTime() : winEnd;
@@ -3322,7 +3357,14 @@ async function reportData(startMs, endMs) {
         if (iv.line === SHOP_LINE_ID) row.shop = Math.max(0, row.shop - o107);
       }
       row.paid = Math.max(0, row.paid - held107);
-      row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"}${sA.confirmed_by ? "" : " (UNCONFIRMED)"} — ${Math.round(held107 * 10) / 10}h HELD until sign-off`);
+      // Block 110: a DECLINED session keeps its hours off for good — the
+      // typed reason rides the timecard row so payroll sees why.
+      if (sA.declined_by) {
+        const dcA = emps.find((e) => e.id === sA.declined_by);
+        row.flags.add(`AFTER HOURS DECLINED${dcA ? " by " + dcA.first_name : ""}: "${sA.decline_reason || ""}" — ${Math.round(held107 * 10) / 10}h NOT counted`);
+      } else {
+        row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"}${sA.confirmed_by ? "" : " (UNCONFIRMED)"} — ${Math.round(held107 * 10) / 10}h HELD until sign-off`);
+      }
     }
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
@@ -6157,7 +6199,7 @@ http.createServer(async (req, res) => {
       const [repTog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
       // Q112 + block 107: every after-hours session surfaces here until it is
       // SIGNED OFF — sign-off is what releases its held hours to the timecard.
-      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by,signed_off_by&signed_off_by=is.null&order=started_at.desc&limit=20`);
+      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by,signed_off_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`);
       const ahPh107 = ahRows.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRows.map((s) => s.id).join(",")})`) : [];
       const phxDT = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const afterHours = ahRows.map((s) => ({ id: s.id,
@@ -7151,6 +7193,35 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Block 110 (owner-rep): DECLINE — the other verdict. An admin refuses
+    // the session with a TYPED reason; the hours stay off the timecard for
+    // good, the reason rides the timecard flag + the audit log, and the
+    // person is notified (Q106 sandbox applies until cutover).
+    if (url.pathname === "/api/afterhours/decline" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || me.role !== "admin")
+        return json(403, { ok: false, error: "Admin only — declining refuses pay hours" });
+      const { session_id, reason } = await body(req);
+      if (!isUuid(session_id)) return json(400, { ok: false, error: "That session reference isn't valid" });
+      if (String(reason || "").trim().length < 3)
+        return json(400, { ok: false, error: "Type the reason — it goes on the record" });
+      const [sAh3] = await db(`after_hours_session?select=id,employee_id,ended_at,signed_off_by,declined_by&id=eq.${session_id}`);
+      if (!sAh3) return json(404, { ok: false, error: "Session not found" });
+      if (!sAh3.ended_at) return json(400, { ok: false, error: "They're still on the clock — decide after the wrap-up lands" });
+      if (sAh3.signed_off_by) return json(400, { ok: false, error: "Already signed off — hours already counted" });
+      if (sAh3.declined_by) return json(400, { ok: false, error: "Already declined" });
+      const rsn110 = String(reason).trim().slice(0, 200);
+      await db(`after_hours_session?id=eq.${session_id}`, { method: "PATCH", body: JSON.stringify({
+        declined_by: empId, declined_at: new Date().toISOString(), decline_reason: rsn110 }) });
+      logEvent("afterhours.declined", empId, { session_id, employee_id: sAh3.employee_id, reason: rsn110 });
+      notify("afterhours.declined", [sAh3.employee_id],
+        "Your after-hours session was DECLINED",
+        `"${rsn110}" — those hours don't count on your timecard. Talk to the office if this looks wrong.`, "/home");
+      return json(200, { ok: true });
+    }
+
     // ---------- NOTIFICATIONS (block 23) ----------
     // The tiny service worker every subscribed device runs: show what
     // arrives, open the board when tapped. Served from root scope.
@@ -7248,7 +7319,7 @@ self.addEventListener("notificationclick", (e) => {
       const nudgeTimes = {}; for (const r of ntRows) nudgeTimes[r.key.replace("nudge_", "")] = r.value;
       // Block 108 (owner-rep): the after-hours SIGN-OFF queue is an ADMIN
       // approval job — it lives here now, front and center under the title.
-      const ahRowsA = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by&signed_off_by=is.null&order=started_at.desc&limit=20`);
+      const ahRowsA = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`);
       const ahPhA = ahRowsA.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [];
       const linesA108 = ahRowsA.length ? await db(`line?select=id,name`) : [];
       const nmA108 = {}; for (const p of emps) nmA108[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
