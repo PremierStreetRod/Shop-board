@@ -28,6 +28,14 @@
 //   NOTIFY_LIVE           unset = SANDBOX ON (the safe default). Set to
 //                         exactly "yes" at cutover — a NAMED checklist
 //                         step, deliberately not an admin-console switch.
+//   SMTP_USER             block 116: outbound EMAIL — the Microsoft 365
+//   SMTP_PASS             mailbox (info@premierstreetrod.com) and its
+//                         app/SMTP password. Host and port default to
+//                         smtp.office365.com : 587 (override with
+//                         SMTP_HOST / SMTP_PORT only if the mailbox moves).
+//   TWILIO_SID            block 116: outbound SMS — Twilio account SID,
+//   TWILIO_TOKEN          auth token, and the shop's Twilio number
+//   TWILIO_FROM           in +1XXXXXXXXXX form.
 // ============================================================
 const http = require("http");
 const crypto = require("crypto");
@@ -41,6 +49,20 @@ const VAPID_PUB = process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIV = process.env.VAPID_PRIVATE_KEY || "";
 const SANDBOX_EMPLOYEE_ID = process.env.SANDBOX_EMPLOYEE_ID || "";
 const NOTIFY_LIVE = process.env.NOTIFY_LIVE === "yes";
+// Block 116: outbound channels — email (Microsoft 365 SMTP) + SMS (Twilio).
+// Credentials live ONLY in Railway env vars the owner pastes himself;
+// EMAIL_READY / SMS_READY just mean "credentials are present".
+const net = require("net");
+const tls = require("tls");
+const SMTP_HOST = process.env.SMTP_HOST || "smtp.office365.com";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const TWILIO_SID = process.env.TWILIO_SID || "";
+const TWILIO_TOKEN = process.env.TWILIO_TOKEN || "";
+const TWILIO_FROM = process.env.TWILIO_FROM || "";
+const EMAIL_READY = Boolean(SMTP_USER && SMTP_PASS);
+const SMS_READY = Boolean(TWILIO_SID && TWILIO_TOKEN && TWILIO_FROM);
 // Q111: "Shop time" — the clockable NON-PRODUCTION work area (line 10,
 // same pattern as Warehouse's line 9). Monday meetings, cleanup, and
 // in-house fabrication (rolling bases, show fixtures) happen ON the clock
@@ -2771,6 +2793,10 @@ const TOGGLE_INFO = {
   // Q116: the pace early-warning monitor. OFF pauses the whole patrol;
   // delivery is ALSO gated by the Q106 sandbox until cutover regardless.
   pace_warnings: ["Pace early-warning heads-up", "Sends a push the moment a cab crosses into red and needs help. Until we go live, these come only to you."],
+  // Block 116 (owner-rep launch call: "easiest launch possible") — both ship
+  // OFF; flip them on one at a time when the crew is ready for them.
+  notify_email: ["Email notifications", "Also send notifications by EMAIL (from info@premierstreetrod.com) to people with an email on file. Until we go live, these come only to you."],
+  notify_sms: ["Text-message notifications", "Also send notifications by TEXT to people with a mobile number on file. Until we go live, these come only to you."],
 };
 // Q77: friendly names for the admin-editable reason lists (the pick-list
 // editor). A list_key not named here still appears, keyed by its raw name.
@@ -2910,6 +2936,27 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <b style="opacity:.7">${t.enabled ? "ON" : "OFF"}</b>
     <button class="b ${t.enabled ? "red" : "grn"}" onclick="flip('${t.key}',${t.enabled ? "false" : "true"},this)">Turn ${t.enabled ? "OFF" : "ON"}</button></div>`; }).join("")}
   <p style="opacity:.5;font-size:.85rem">Everything keeps tracking underneath while a feature is OFF — turning it back ON reveals full history. Every flip is logged.</p>
+  </div>
+
+  <!-- Block 116: outbound channels — prove email + SMS work BEFORE cutover.
+       Credentials live on Railway (the owner pastes them, never in code);
+       this panel only shows whether they are present and fires ONE explicit
+       test to a typed address/number. Day-to-day routing stays behind the
+       Features switches above. -->
+  <div class="panel" id="channels116"><h3>Email &amp; text setup</h3>
+  <div class="tglrow"><div style="flex:1"><b>Email — sends from info@premierstreetrod.com</b>
+    <small>${EMAIL_READY ? "Credentials are on file. Send yourself a test to prove the mailbox works." : "Waiting on credentials — add SMTP_USER and SMTP_PASS on Railway; the app picks them up on its next deploy."}</small></div>
+    <b style="opacity:.7">${EMAIL_READY ? "READY" : "NOT SET UP"}</b></div>
+  ${EMAIL_READY ? `<div style="padding:6px 0 10px">Send a test email to
+    <input id="t116-em" style="min-width:230px" placeholder="you@premierstreetrod.com">
+    <button class="b" onclick="test116('email','t116-em',this)">Send test email</button></div>` : ""}
+  <div class="tglrow"><div style="flex:1"><b>Text messages — through Twilio</b>
+    <small>${SMS_READY ? "Credentials are on file. Text yourself to prove the number works." : "Waiting on credentials — add TWILIO_SID, TWILIO_TOKEN and TWILIO_FROM on Railway; the app picks them up on its next deploy."}</small></div>
+    <b style="opacity:.7">${SMS_READY ? "READY" : "NOT SET UP"}</b></div>
+  ${SMS_READY ? `<div style="padding:6px 0 10px">Send a test text to
+    <input id="t116-sm" style="min-width:170px" placeholder="602 555 0117">
+    <button class="b" onclick="test116('sms','t116-sm',this)">Send test text</button></div>` : ""}
+  <p style="opacity:.5;font-size:.85rem">Tests go ONLY to the address or number you type, and each one is logged. Everyday sending stays off until the "Email notifications" / "Text-message notifications" switches above are ON — and until we go live, even those reroute to you.</p>
   </div>
 
   <!-- CAB NUMBERS (Q110): the wall board's internal cab # (244T, 305A…).
@@ -3121,6 +3168,21 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: Number(v("new-day")), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
+  // Block 116: explicit one-shot channel test — no reload; the button tells the story.
+  async function test116(channel, inputId, btn){
+    const to = v(inputId).trim();
+    if (!to) return showErrA(btn, channel === "email" ? "Type the address first" : "Type the number first");
+    btn.disabled = true; const was = btn.textContent; btn.textContent = "Sending…";
+    try {
+      const r = await fetch("/api/notify/test", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel, to }) });
+      const out = await r.json();
+      if (out.ok) { btn.textContent = "✓ Sent — go check"; btn.classList.add("grn");
+        setTimeout(() => { btn.textContent = was; btn.classList.remove("grn"); btn.disabled = false; }, 6000); return; }
+      showErrA(btn, out.error || "Something went wrong");
+    } catch(e){ showErrA(btn, "Network hiccup — try again"); }
+    btn.textContent = was; btn.disabled = false;
+  }
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
   function savePhotoMin(part, btn){ post("/api/admin/product", { part_number: part, photo_min: Number(v("pm-"+part)) }, btn); }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
@@ -5253,6 +5315,82 @@ async function sendPush(sub, payloadObj) {
   return r.status;
 }
 
+// Block 116: minimal SMTP client (zero-npm, matching this file's rule) for
+// the shop's Microsoft 365 mailbox — EHLO -> STARTTLS -> AUTH LOGIN -> one
+// message. Line-oriented; multi-line replies ("250-…") are consumed until
+// the "250 " final line. Throws with the server's actual reply so a bad
+// password or a blocked mailbox reads as itself in the admin test panel.
+function smtpExchange116(sock, expect, toSend) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const onData = (d) => {
+      buf += d.toString("utf8");
+      const lines = buf.split(/\r\n/).filter(Boolean);
+      const last = lines[lines.length - 1];
+      if (!last || !/^\d{3} /.test(last)) return; // multi-line reply, keep reading
+      sock.removeListener("data", onData);
+      if (!expect.test(last)) return reject(new Error("SMTP: " + last.slice(0, 180)));
+      resolve(last);
+    };
+    sock.on("data", onData);
+    sock.once("error", reject);
+    sock.once("close", () => reject(new Error("SMTP: connection closed early")));
+    if (toSend !== null) sock.write(toSend + "\r\n");
+  });
+}
+async function sendEmail116(to, subject, bodyText) {
+  if (!EMAIL_READY) throw new Error("Email is not set up yet (SMTP_USER / SMTP_PASS on Railway)");
+  const plain = await new Promise((res, rej) => {
+    const s = net.connect(SMTP_PORT, SMTP_HOST, () => res(s));
+    s.once("error", rej);
+    s.setTimeout(20000, () => s.destroy(new Error("SMTP: connection timed out")));
+  });
+  await smtpExchange116(plain, /^220 /, null); // server greeting
+  await smtpExchange116(plain, /^250 /, "EHLO shopboard.premierstreetrod.com");
+  await smtpExchange116(plain, /^220 /, "STARTTLS");
+  const sock = await new Promise((res, rej) => {
+    const t = tls.connect({ socket: plain, servername: SMTP_HOST }, () => res(t));
+    t.once("error", rej);
+    t.setTimeout(20000, () => t.destroy(new Error("SMTP: connection timed out")));
+  });
+  await smtpExchange116(sock, /^250 /, "EHLO shopboard.premierstreetrod.com");
+  await smtpExchange116(sock, /^334 /, "AUTH LOGIN");
+  await smtpExchange116(sock, /^334 /, Buffer.from(SMTP_USER).toString("base64"));
+  await smtpExchange116(sock, /^235 /, Buffer.from(SMTP_PASS).toString("base64"));
+  await smtpExchange116(sock, /^250 /, `MAIL FROM:<${SMTP_USER}>`);
+  await smtpExchange116(sock, /^250 /, `RCPT TO:<${to}>`);
+  await smtpExchange116(sock, /^354 /, "DATA");
+  const msg = [
+    `From: Shop Board <${SMTP_USER}>`,
+    `To: <${to}>`,
+    `Subject: ${String(subject).replace(/[\r\n]+/g, " ")}`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${crypto.randomUUID()}@premierstreetrod.com>`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    String(bodyText).replace(/\r?\n/g, "\r\n").replace(/^\./gm, ".."),
+  ].join("\r\n");
+  await smtpExchange116(sock, /^250 /, msg + "\r\n.");
+  try { sock.write("QUIT\r\n"); sock.end(); } catch (e) {}
+  return true;
+}
+// Block 116: SMS via Twilio's plain REST API (fetch, still zero-npm).
+async function sendSms116(to, bodyText) {
+  if (!SMS_READY) throw new Error("Texting is not set up yet (TWILIO_SID / TWILIO_TOKEN / TWILIO_FROM on Railway)");
+  const digits = String(to).replace(/[^\d+]/g, "");
+  const e164 = digits.startsWith("+") ? digits : "+1" + digits.replace(/^1/, "");
+  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+    method: "POST",
+    headers: { "Authorization": "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ To: e164, From: TWILIO_FROM, Body: String(bodyText).slice(0, 500) }).toString(),
+  });
+  const out = await r.json().catch(() => ({}));
+  if (r.status >= 300) throw new Error("Twilio: " + String(out.message || `status ${r.status}`).slice(0, 180));
+  return true;
+}
+
 // THE chokepoint — every notification the system ever sends passes here.
 // intendedIds = who SHOULD get it; the sandbox decides who DOES. Never
 // throws: a notification problem must never break a floor tap.
@@ -5272,6 +5410,39 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
         url: link || "/home" };
       for (const s of subs) { try { const st = await sendPush(s, payload); if (st < 300) sent++; } catch (e) {} }
       status = sent ? "sent" : (subs.length ? "failed" : "no_subscription");
+    }
+    // Block 116: EMAIL + SMS ride the same chokepoint — same sandbox, same
+    // [TEST] stamp, gated by the Features switches (both OFF by default so
+    // launch stays quiet). Deliberately NOT awaited: an SMTP round-trip must
+    // never slow a floor tap. The channel block logs its own rows.
+    if (targets.length && (EMAIL_READY || SMS_READY)) {
+      (async () => {
+        const togs116 = await db(`feature_toggle?select=key,enabled&key=in.(notify_email,notify_sms)`);
+        const emailOn = togs116.some((t) => t.key === "notify_email" && t.enabled === true);
+        const smsOn = togs116.some((t) => t.key === "notify_sms" && t.enabled === true);
+        if (!((emailOn && EMAIL_READY) || (smsOn && SMS_READY))) return;
+        const ppl116 = await db(`employee?select=id,email,mobile&id=in.(${targets.join(",")})`);
+        const subj116 = sandbox ? `[TEST] ${title}` : title;
+        const body116 = (sandbox ? `${bodyText}\n(Build test — would have gone to: ${names})` : bodyText)
+          + `\n\nOpen: https://shopboard.premierstreetrod.com${link || "/home"}`;
+        let emailStatus = null, smsStatus = null;
+        for (const p of ppl116) {
+          if (emailOn && EMAIL_READY && p.email) {
+            try { await sendEmail116(p.email, subj116, body116); emailStatus = "sent"; }
+            catch (e) { if (emailStatus !== "sent") emailStatus = "failed"; }
+          }
+          if (smsOn && SMS_READY && p.mobile) {
+            try { await sendSms116(p.mobile, (subj116 + " — " + bodyText).slice(0, 300)); smsStatus = "sent"; }
+            catch (e) { if (smsStatus !== "sent") smsStatus = "failed"; }
+          }
+        }
+        if (emailOn && EMAIL_READY && !emailStatus) emailStatus = "no_address";
+        if (smsOn && SMS_READY && !smsStatus) smsStatus = "no_number";
+        const rows116 = [];
+        if (emailStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "email", title, body: bodyText, sandboxed: sandbox, status: emailStatus })));
+        if (smsStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "sms", title, body: bodyText, sandboxed: sandbox, status: smsStatus })));
+        if (rows116.length) await db("notification_log", { method: "POST", body: JSON.stringify(rows116) });
+      })().catch(() => { /* channel trouble never breaks the floor */ });
     }
     await db("notification_log", { method: "POST", body: JSON.stringify(intended.map((id) => ({
       event_type: eventType, intended_employee_id: id, channel: "push", title, body: bodyText,
@@ -7542,6 +7713,28 @@ self.addEventListener("notificationclick", (e) => {
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ cab_number: clean || null }) });
       logEvent("build.cab_number_set", adminId, { build_id, order_number: b.order_number, from: b.cab_number || null, to: clean || null });
+      return json(200, { ok: true });
+    }
+
+    // CHANNEL TEST (block 116): an admin proves the email/SMS credentials
+    // work by sending ONE message to an explicitly typed address/number.
+    // Admin-only, audited (notify.channel_test). Bypasses the sandbox TARGET
+    // logic on purpose — the admin typed the destination — and the content
+    // is unmistakably a test message.
+    if (url.pathname === "/api/notify/test" && req.method === "POST") {
+      const [adminId116, fail116] = await requireAdmin(); if (fail116) return fail116;
+      const p116 = await body(req);
+      const ch116 = p116.channel === "sms" ? "sms" : "email";
+      const to116 = String(p116.to || "").trim().slice(0, 120);
+      if (!to116) return json(400, { ok: false, error: "Type where the test should go" });
+      if (ch116 === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to116)) return json(400, { ok: false, error: "That doesn't look like an email address" });
+      if (ch116 === "sms" && to116.replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "That doesn't look like a full phone number" });
+      try {
+        if (ch116 === "email") await sendEmail116(to116, "Shop Board test email",
+          "This is the Shop Board proving the info@premierstreetrod.com mailbox can send.\nIf you're reading this, email is working.");
+        else await sendSms116(to116, "Shop Board test text: if you're reading this, texting is working.");
+      } catch (e) { return json(400, { ok: false, error: String(e.message || "Send failed").slice(0, 200) }); }
+      logEvent("notify.channel_test", adminId116, { channel: ch116, to: to116 });
       return json(200, { ok: true });
     }
 
