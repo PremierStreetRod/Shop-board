@@ -4718,10 +4718,15 @@ async function freezeAndStart(b, empId, startedAt) {
           sig94.push(full);
           const hit = byText94[norm94(full)] || byText94[norm94(f.value)];
           if (hit) {
-            optCount94++;
-            await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
-              name: "UPGRADE — " + full, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
-              source: "option", state: "not_started", sort_order: sort94++ }) });
+            // Block 102: a matched ZERO-hour entry is a KNOWN config choice
+            // with no cab labor (year, floor style, bed hardware, scripts…) —
+            // recognized for the signature: no task, no flag, no clock time.
+            if (Number(hit.man_hours) > 0) {
+              optCount94++;
+              await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
+                name: "UPGRADE — " + full, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
+                source: "option", state: "not_started", sort_order: sort94++ }) });
+            }
           } else {
             flagCount94++;
             await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "option", flag_text: full }) });
