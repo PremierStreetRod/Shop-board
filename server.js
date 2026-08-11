@@ -623,11 +623,20 @@ async function sweepForgottenClockOuts() {
       // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
       // SESSION open forever — close it honestly so the cockpit lane and the
       // timecards tell the truth about forgetful nights.
-      const [ahSweep] = await db(`after_hours_session?select=id&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);
+      const [ahSweep] = await db(`after_hours_session?select=id,approved_by&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);
       if (ahSweep) {
         await db(`after_hours_session?id=eq.${ahSweep.id}`, { method: "PATCH", body: JSON.stringify({
           ended_at: new Date(closeAt).toISOString(), wrap_note: "(auto-closed — no wrap-up left)" }) });
         logEvent("afterhours.auto_end", null, { session_id: ahSweep.id, employee_id: ev.employee_id });
+        // Block 107: an auto-closed session still needs its sign-off — tell
+        // the people who'd give it; the hours stay HELD until someone does.
+        try {
+          const [whoAh107] = await db(`employee?select=first_name&id=eq.${ev.employee_id}`);
+          const adminsAh107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+          notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id)])],
+            `After hours auto-closed — ${whoAh107 ? whoAh107.first_name : "?"} left no wrap-up`,
+            "The session closed itself at day end with no wrap-up note. Its hours are HELD off the timecard until someone signs off in the cockpit.", "/manager");
+        } catch (e) { console.error("ah sweep notify failed:", e.message); }
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
     }
@@ -915,7 +924,10 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   ${lineStat ? `<div style="background:var(--card);border:1px solid #30d158;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
     <b>You're ON ${lineStat.name}.</b> No cab to work right now${lineStat.awaiting ? ` — ORDER ${lineStat.awaiting} is awaiting the manager's inspection` : ""}${lineStat.ondeck ? `. Next up: ORDER ${lineStat.ondeck} — it starts the moment warehouse delivers the kit` : ""}.
     <div style="opacity:.55;font-size:.85rem;margin-top:6px">This screen checks again on its own — when a cab lands on your line, the task list appears here.</div>
-  </div><script>setTimeout(() => location.reload(), 45000);</script>` : ""}
+  </div><script>setInterval(() => { const f = document.activeElement, wp = document.getElementById("wrap107");
+    if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
+    if (wp && wp.style.display !== "none") return;
+    location.reload(); }, 45000);</script>` : ""}
   <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
     ${state.lineId === 14 ? `<p class="msg" style="font-weight:700">Pick a line to start working</p>
@@ -923,8 +935,15 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
       ${[...usualLines, ...otherLines].map((l) => `<button class="name" data-switch="${l.id}">${l.name}</button>`).join("")}
       <button class="name" style="opacity:.8" data-switch="10">Shop time</button>
     </div>` : ""}
-    ${ah.open ? `<p class="msg" style="color:#ffd60a">AFTER-HOURS wrap-up — one line on what got done (required):</p>
-    <input id="wrapnote" placeholder="What did you get done?" style="width:100%;margin:6px 0 12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">` : ""}
+    ${ah.open ? `<div id="wrap107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:14px;margin:6px 0 12px;text-align:left">
+      <p class="msg" style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
+      <input id="wrapnote" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">
+      <div style="margin-top:8px;opacity:.8;font-size:.9rem">Photos of the work — optional:</div>
+      <input type="file" id="wrapph107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
+      <div id="wrapmsg107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
+      <button class="name" id="wrapgo107" style="display:inline-block;width:auto;padding:12px 22px;margin-top:10px;border-color:#30d158">Submit wrap-up &amp; clock out</button>
+    </div>
+    <p class="msg" style="color:#ffd60a">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
     <p class="msg">Clocking out — what kind?</p>
     <div class="grid">
       ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
@@ -999,14 +1018,37 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     if (e.target.id==="ahback"){ ahp.style.display="none"; document.getElementById("in").style.display="block"; }
     if (e.target.id==="ahgo") act("/api/clock/in",{line_id:ahLine, approved_by:ahAppr, ah_reason:ahReason, ah_plan:document.getElementById("ahplan").value});
   });
+  // Block 107: after hours, ANY reason tap opens the WRAP-UP step (required
+  // note + optional photos) — and THAT submits the clock-out.
+  async function wrapGo107(){
+    const w = document.getElementById("wrapnote"), m = document.getElementById("wrapmsg107");
+    if (!w.value.trim()) { m.textContent = "One line on what got done — required."; w.focus(); return; }
+    const files = (document.getElementById("wrapph107") || {}).files || [];
+    const go = document.getElementById("wrapgo107"); go.disabled = true;
+    for (let i = 0; i < files.length; i++) {
+      m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
+      try {
+        const r = await fetch("/api/afterhours/photo", { method: "POST", headers: { "Content-Type": files[i].type || "image/jpeg" }, body: files[i] });
+        const o = await r.json();
+        if (!o.ok) { m.textContent = (o.error || "Photo upload failed") + " — fix or clear the photos, then tap again."; go.disabled = false; return; }
+      } catch (e2) { m.textContent = "Network hiccup on a photo — try again."; go.disabled = false; return; }
+    }
+    m.textContent = "";
+    const rH = window.__wrapReason107 || "End of day";
+    act("/api/clock/out", { reason: rH, note: rH.indexOf("Other") === 0 ? w.value.trim() : undefined, wrap_note: w.value.trim() });
+    go.disabled = false;
+  }
   document.getElementById("out").addEventListener("click",(e)=>{
-    const b=e.target.closest("[data-reason]"); if(b){ const w=document.getElementById("wrapnote");
+    const b=e.target.closest("[data-reason]"); if(b){
+      const wp=document.getElementById("wrap107");
+      if (wp) { window.__wrapReason107 = b.dataset.reason; wp.style.display = "block";
+        document.getElementById("wrapnote").focus(); return; }
       // Block 97: "Other (add note)" opens the note row first.
       if (b.dataset.reason.indexOf("Other") === 0) { window.__hoth97 = b.dataset.reason;
         const r97 = document.getElementById("hoth97"); if (r97) { r97.style.display = "block"; document.getElementById("hothn97").focus(); return; } }
-      act("/api/clock/out",{reason:b.dataset.reason, wrap_note: w ? w.value : undefined}); }
-    if (e.target.id === "hothgo97") { const w=document.getElementById("wrapnote");
-      act("/api/clock/out",{reason:window.__hoth97, note:document.getElementById("hothn97").value || undefined, wrap_note: w ? w.value : undefined}); }
+      act("/api/clock/out",{reason:b.dataset.reason}); }
+    if (e.target.id === "hothgo97") { act("/api/clock/out",{reason:window.__hoth97, note:document.getElementById("hothn97").value || undefined}); }
+    if (e.target.id === "wrapgo107") wrapGo107();
     const s=e.target.closest("[data-switch]"); if(s) act("/api/clock/switch",{line_id:Number(s.dataset.switch)});
   });
   // Q92: submit a time-off request. Client sanity only — the server re-checks.
@@ -1340,8 +1382,15 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   <div class="lane">
     ${clockedIn
       ? `<b>ON THE CLOCK — Warehouse</b><br><span style="opacity:.6;font-size:.9rem">Clocking out — what kind?</span><br>
-         ${ah.open ? `<p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER-HOURS wrap-up — one line on what got done (required):</p>
-         <input id="wrapW106" maxlength="200" placeholder="What did you get done?" style="width:70%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">` : ""}
+         ${ah.open ? `<div id="ahwrapW107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:8px auto 4px;max-width:560px;text-align:left">
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
+           <input id="wrapW106" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px">
+           <div style="margin-top:8px;opacity:.8;font-size:.85rem">Photos of the work — optional:</div>
+           <input type="file" id="ahphW107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
+           <div id="ahmsgW107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
+           <button class="b grn" style="margin-top:8px" onclick="wrapGoW107(this)">Submit wrap-up &amp; clock out</button>
+         </div>
+         <p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
          ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
@@ -1445,23 +1494,47 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
       ah_plan: val("ahplanW") }, btn);
   }
   function clockOut(reason, btn, note){
+    // Block 107: after hours, ANY reason tap routes through the wrap-up step
+    // (required note + optional photos) — and THAT submits the clock-out.
+    const wp107 = document.getElementById("ahwrapW107");
+    if (wp107) { window.__wrapRW107 = reason; wp107.style.display = "block";
+      const w0 = document.getElementById("wrapW106"); if (w0) w0.focus(); return; }
     // Block 97: "Other (add note)" opens a one-line note box first.
     if (reason.indexOf("Other") === 0 && note === undefined) {
       window.__oth97 = reason; document.getElementById("oth97").style.display = "block";
       const n97 = document.getElementById("othn97"); if (n97) n97.focus(); return;
     }
-    const w106 = document.getElementById("wrapW106");
-    post("/api/clock/out", { reason, note: note && note.trim() ? note.trim() : undefined,
-      wrap_note: w106 && w106.value.trim() ? w106.value.trim() : undefined }, btn);
+    post("/api/clock/out", { reason, note: note && note.trim() ? note.trim() : undefined }, btn);
   }
-  setTimeout(() => location.reload(), 60000); // the board keeps itself fresh
+  async function wrapGoW107(btn){
+    const w = document.getElementById("wrapW106"), m = document.getElementById("ahmsgW107");
+    if (!w.value.trim()) { m.textContent = "One line on what got done — required."; w.focus(); return; }
+    const files = (document.getElementById("ahphW107") || {}).files || [];
+    btn.disabled = true;
+    for (let i = 0; i < files.length; i++) {
+      m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
+      try {
+        const r = await fetch("/api/afterhours/photo", { method: "POST", headers: { "Content-Type": files[i].type || "image/jpeg" }, body: files[i] });
+        const o = await r.json();
+        if (!o.ok) { m.textContent = (o.error || "Photo upload failed") + " — fix or clear the photos, then tap again."; btn.disabled = false; return; }
+      } catch (e) { m.textContent = "Network hiccup on a photo — try again."; btn.disabled = false; return; }
+    }
+    m.textContent = ""; btn.disabled = false;
+    const rW = window.__wrapRW107 || "End of day";
+    post("/api/clock/out", { reason: rW, note: rW.indexOf("Other") === 0 ? w.value.trim() : undefined,
+      wrap_note: w.value.trim() }, btn);
+  }
+  setInterval(() => { const f = document.activeElement, wp107 = document.getElementById("ahwrapW107");
+    if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
+    if (wp107 && wp107.style.display !== "none") return;
+    location.reload(); }, 60000); // the board keeps itself fresh — never mid-typing
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
   // reorders a line (queue_pos) or a cab changes state, reflect it here within
   // seconds instead of waiting for the 60s catch-all above. Polls the SAME
   // /api/queue/state version hash the White Board polls, so the two screens
   // never fork. Skips a cycle while a field is focused (60s backstop covers it).
   var QVER=null;
-  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){location.reload();}}}).catch(function(){});}
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')){location.reload();}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
 </script></body></html>`;
 
@@ -1475,8 +1548,15 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
-    ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER-HOURS wrap-up — one line on what got done (required):</div>
-       <input id="wrapW106" maxlength="200" placeholder="What did you get done?" style="width:70%;max-width:420px;margin-bottom:8px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px"><br>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
+    ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</div>
+       <div id="ahwrapV107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:0 auto 8px;max-width:560px;text-align:left">
+         <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
+         <input id="wrapW106" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:10px">
+         <div style="margin-top:8px;opacity:.8;font-size:.85rem">Photos of the work — optional:</div>
+         <input type="file" id="ahphV107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
+         <div id="ahmsgV107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
+         <button class="wbtn" style="background:#1d5a2d;margin-top:8px" onclick="wrapGoV107(this)">Submit wrap-up &amp; clock out</button>
+       </div>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
     : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — three quick questions, then a normal shift.</div>
       <div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:10px auto 0;text-align:left;max-width:560px">
         <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
@@ -1532,7 +1612,31 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
     wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0}, approved_by: window.__ahApW,
       ah_reason: window.__ahReW, ah_plan: document.getElementById("ahplanW").value }, btn);
   }
+  // Block 107: after hours, ANY clock-out routes through the wrap-up step
+  // (required note + optional photos) — and THAT submits the clock-out.
+  async function wrapGoV107(btn){
+    const w = document.getElementById("wrapW106"), m = document.getElementById("ahmsgV107");
+    if (!w.value.trim()) { m.textContent = "One line on what got done — required."; w.focus(); return; }
+    const files = (document.getElementById("ahphV107") || {}).files || [];
+    btn.disabled = true;
+    for (let i = 0; i < files.length; i++) {
+      m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
+      try {
+        const r = await fetch("/api/afterhours/photo", { method: "POST", headers: { "Content-Type": files[i].type || "image/jpeg" }, body: files[i] });
+        const o = await r.json();
+        if (!o.ok) { m.textContent = (o.error || "Photo upload failed") + " — fix or clear the photos, then tap again."; btn.disabled = false; return; }
+      } catch (e) { m.textContent = "Network hiccup on a photo — try again."; btn.disabled = false; return; }
+    }
+    m.textContent = ""; btn.disabled = false;
+    const rV = window.__wrapRV107 || "End of day";
+    wclk("/api/clock/out", { reason: rV, note: rV.indexOf("Other") === 0 ? w.value.trim() : undefined, wrapped107: true }, btn);
+  }
   async function wclk(u,p,b){
+    const wp107 = document.getElementById("ahwrapV107");
+    if (wp107 && u.indexOf("/out") > -1 && !p.wrapped107) {
+      window.__wrapRV107 = p.reason; wp107.style.display = "block";
+      const w0 = document.getElementById("wrapW106"); if (w0) w0.focus(); return;
+    }
     const w106 = document.getElementById("wrapW106");
     if (w106 && w106.value.trim() && u.indexOf("/out") > -1) p.wrap_note = w106.value.trim();
     // Block 97: "Other (add note)" opens the note row first.
@@ -2060,14 +2164,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
   ${afterHours.length ? `
-  <!-- Q112: after-hours sessions awaiting a confirm — the other half of
-       claim-then-confirm. One tap says "yes, I really approved that." -->
-  <div class="lane" style="border-color:#7a5900"><h3>After hours — needs a confirm</h3>
+  <!-- Q112 + block 107: claim-then-confirm, then WRAP-UP SIGN-OFF. A session's
+       hours are HELD off the timecard until a manager/admin signs off here. -->
+  <div class="lane" style="border-color:#7a5900"><h3>After hours — needs sign-off</h3>
     ${afterHours.map((s) => `<div class="qrow">${s.who} · ${s.lineName} · ${s.when}
       <span style="opacity:.7">— ${s.reason} · says ${s.appr} approved · "${s.plan}"</span>
-      ${s.wrap ? `<span style="opacity:.6"> · done: "${s.wrap}"</span>` : ` <span style="color:#ffd60a">(still on the clock)</span>`}
-      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm</button></div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem">Confirming records that the named approval was real. Unconfirmed sessions stay flagged here and on the timecards.</div>
+      ${s.ended ? `<span style="opacity:.85"> · ${s.hrs}h · wrap-up: "${s.wrap || ""}"</span>${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}` : ` <span style="color:#ffd60a">(still on the clock)</span>`}
+      ${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="confirmAh('${s.id}',this)">Confirm approval</button>`}
+      ${s.ended ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-left:10px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button>` : ""}</div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Signing off (after the wrap-up lands) releases the session's hours onto the timecard — until then they're HELD and flagged.</div>
   </div>` : ""}
   ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
@@ -2250,6 +2355,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Confirm";
+  }
+  // Block 107: sign off a wrapped-up after-hours session — this is what
+  // releases its HELD hours onto the timecard. Two-tap armed upstream.
+  async function signAh(id, btn) {
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/api/afterhours/signoff", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: id }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Sign off — count the hours";
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
@@ -3123,14 +3242,32 @@ async function reportData(startMs, endMs) {
     if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
     if (ev.reason && !["End of shift", "End of day", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
   }
-  // Q112: after-hours sessions stamp their timecard rows — the reason, the
-  // claimed approver, and whether anyone has CONFIRMED the claim yet.
-  const ahSess = await db(`after_hours_session?select=employee_id,reason,approved_by,confirmed_by,started_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
+  // Q112 + block 107: after-hours sessions stamp their timecard rows — and a
+  // session's hours are HELD off "paid" until a manager/admin SIGNS OFF on the
+  // wrapped-up session in the cockpit (owner-rep: "MUST sign off before it
+  // counts against their time card hours"). Sign-off releases them.
+  const ahSess = await db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
   for (const sA of ahSess) {
-    const row = tcMap[sA.employee_id + "|" + phxDate(new Date(sA.started_at).getTime())];
+    const sStart = new Date(sA.started_at).getTime();
+    const sEnd = sA.ended_at ? new Date(sA.ended_at).getTime() : winEnd;
+    const row = tcMap[sA.employee_id + "|" + phxDate(sStart)];
     if (!row) continue;
     const apA = emps.find((e) => e.id === sA.approved_by);
-    row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"}${sA.confirmed_by ? " ✓" : " (UNCONFIRMED)"}`);
+    if (sA.signed_off_by) {
+      const sgA = emps.find((e) => e.id === sA.signed_off_by);
+      row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"} ✓ signed off${sgA ? " by " + sgA.first_name : ""}`);
+    } else {
+      let held107 = 0;
+      for (const iv of ivs) {
+        if (iv.emp !== sA.employee_id) continue;
+        const o107 = overlapHrs(iv, Math.max(sStart, sinceMs), Math.min(sEnd, winEnd));
+        if (!o107) continue;
+        held107 += o107;
+        if (iv.line === SHOP_LINE_ID) row.shop = Math.max(0, row.shop - o107);
+      }
+      row.paid = Math.max(0, row.paid - held107);
+      row.flags.add(`AFTER HOURS: ${sA.reason} — appr. ${apA ? apA.first_name : "?"}${sA.confirmed_by ? "" : " (UNCONFIRMED)"} — ${Math.round(held107 * 10) / 10}h HELD until sign-off`);
+    }
   }
   const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
@@ -5518,15 +5655,33 @@ http.createServer(async (req, res) => {
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { reason, claimed_at, wrap_note, note } = await body(req);
-      // Q112: an open after-hours session can't close without its wrap-up —
-      // one line on what got done (photos ride the normal task-photo flow).
-      const [openAhOut] = await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
+      // Timecard-audit fix: an out while NOT clocked in wrote a misleading
+      // flagged row (pay math skips orphan outs, people reading don't).
+      // Same guard the switch endpoint has.
+      const [lastOut107] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastOut107 || lastOut107.kind !== "clock_in")
+        return json(400, { ok: false, error: "You're not on the clock" });
+      // Q112 + block 107: an open after-hours session can't close without its
+      // wrap-up. Closing it starts the SIGN-OFF loop — the approver + admins
+      // get the wrap note (and photo count), and the session's hours stay
+      // HELD off the timecard until a manager/admin signs off in the cockpit.
+      const [openAhOut] = await db(`after_hours_session?select=id,started_at,approved_by&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
       if (openAhOut) {
         if (!String(wrap_note || "").trim())
           return json(400, { ok: false, error: "After-hours wrap-up: one line on what got done, then clock out" });
+        const endIso107 = claimed_at || new Date().toISOString();
         await db(`after_hours_session?id=eq.${openAhOut.id}`, { method: "PATCH", body: JSON.stringify({
-          ended_at: claimed_at || new Date().toISOString(), wrap_note: String(wrap_note).trim() }) });
+          ended_at: endIso107, wrap_note: String(wrap_note).trim() }) });
         logEvent("afterhours.end", empId, { session_id: openAhOut.id, wrap_note: String(wrap_note).trim() });
+        try {
+          const hrs107 = Math.round(Math.max(0, new Date(endIso107).getTime() - new Date(openAhOut.started_at).getTime()) / 360000) / 10;
+          const [meOut107] = await db(`employee?select=first_name&id=eq.${empId}`);
+          const admins107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+          const nPhotos107 = (await db(`after_hours_photo?select=id&session_id=eq.${openAhOut.id}`)).length;
+          notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id)])],
+            `After hours wrapped up — ${meOut107 ? meOut107.first_name : "?"}, ${hrs107}h`,
+            `"${String(wrap_note).trim()}"${nPhotos107 ? ` + ${nPhotos107} photo${nPhotos107 > 1 ? "s" : ""}` : ""} — sign off in the cockpit so the hours count on the timecard.`, "/manager");
+        } catch (e) { console.error("ah wrap notify failed:", e.message); }
       }
       // Block 97 (owner-rep): "End of day" and "End of shift" are the SAME
       // normal end-of-day punch (the old split mis-filed "End of day" as an
@@ -5943,13 +6098,18 @@ http.createServer(async (req, res) => {
       // Reports link only if the admin has shared the page (Q65 toggle,
       // owner-rep 2026-07-29: reports are admin work by default).
       const [repTog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
-      // Q112: unconfirmed after-hours sessions surface until someone owns them.
-      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at&confirmed_by=is.null&order=started_at.desc&limit=12`);
+      // Q112 + block 107: every after-hours session surfaces here until it is
+      // SIGNED OFF — sign-off is what releases its held hours to the timecard.
+      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by,signed_off_by&signed_off_by=is.null&order=started_at.desc&limit=20`);
+      const ahPh107 = ahRows.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRows.map((s) => s.id).join(",")})`) : [];
       const phxDT = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const afterHours = ahRows.map((s) => ({ id: s.id,
         who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "?",
         lineName: (lines.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
-        when: phxDT(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note }));
+        when: phxDT(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note,
+        ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
+        hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
+        photos: ahPh107.filter((p2) => p2.session_id === s.id).map((p2) => p2.id) }));
       // Q113: line open/close — admins always, managers behind the switch.
       const [togLine] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
       const canCloseLines = me.role === "admin" || Boolean(togLine && togLine.enabled);
@@ -6900,6 +7060,30 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Block 107: SIGN-OFF — the closing half of the after-hours loop. Once the
+    // wrap-up lands (session ended), a manager/admin signs off; that releases
+    // the session's HELD hours onto the timecard. Signing off also counts as
+    // confirming the approval claim if nobody had yet.
+    if (url.pathname === "/api/afterhours/signoff" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { session_id } = await body(req);
+      if (!isUuid(session_id)) return json(400, { ok: false, error: "That session reference isn't valid" });
+      const [sAh2] = await db(`after_hours_session?select=id,employee_id,ended_at,confirmed_by,signed_off_by&id=eq.${session_id}`);
+      if (!sAh2) return json(404, { ok: false, error: "Session not found" });
+      if (!sAh2.ended_at) return json(400, { ok: false, error: "They're still on the clock — sign off after the wrap-up lands" });
+      if (sAh2.signed_off_by) return json(400, { ok: false, error: "Already signed off" });
+      const nowSg = new Date().toISOString();
+      const patch107 = { signed_off_by: empId, signed_off_at: nowSg };
+      if (!sAh2.confirmed_by) { patch107.confirmed_by = empId; patch107.confirmed_at = nowSg; }
+      await db(`after_hours_session?id=eq.${session_id}`, { method: "PATCH", body: JSON.stringify(patch107) });
+      logEvent("afterhours.signed_off", empId, { session_id, employee_id: sAh2.employee_id });
+      return json(200, { ok: true });
+    }
+
     // ---------- NOTIFICATIONS (block 23) ----------
     // The tiny service worker every subscribed device runs: show what
     // arrives, open the board when tapped. Served from root scope.
@@ -7699,6 +7883,35 @@ self.addEventListener("notificationclick", (e) => {
       return json(200, { ok: true, id: row ? row.id : null });
     }
 
+    // Block 107: after-hours wrap-up photos — optional evidence riding the
+    // wrap-up. Raw image body like every other upload; tied to the caller's
+    // own OPEN after-hours session (no ids from the client to trust).
+    if (url.pathname === "/api/afterhours/photo" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [openAhP] = await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
+      if (!openAhP) return json(400, { ok: false, error: "No open after-hours session" });
+      const ctype = String(req.headers["content-type"] || "");
+      if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
+      if (/hei[cf]/.test(ctype)) return json(415, { ok: false, error: "That photo format (HEIC) can't be shown on the shop screens — retake or re-pick it so the phone converts it" });
+      const chunks = []; let size = 0, over = false;
+      await new Promise((resolve) => {
+        req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
+        req.on("end", resolve); req.on("close", resolve);
+      });
+      if (over) return json(413, { ok: false, error: "Photo too large (8 MB max)" });
+      const buf = Buffer.concat(chunks);
+      const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
+      const path = `afterhours/${openAhP.id}/${Date.now()}.${ext}`;
+      const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
+        method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": ctype }, body: buf });
+      if (!up.ok) { console.error("ah photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
+      const [row] = await db("after_hours_photo", { method: "POST", body: JSON.stringify({
+        session_id: openAhP.id, uploaded_by: empId, storage_path: path }) });
+      logEvent("afterhours.photo", empId, { session_id: openAhP.id, photo_id: row ? row.id : null, bytes: buf.length });
+      return json(200, { ok: true, id: row ? row.id : null });
+    }
+
     // PER-TASK NOTE (file 11): a written note attached to one step —
     // documents a problem or the work right where it happened. Append-only
     // from the floor; who wrote it is recorded.
@@ -7734,7 +7947,9 @@ self.addEventListener("notificationclick", (e) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const pid = url.pathname.slice("/photo/".length);
-      const [p] = await db(`build_photo?select=storage_path&id=eq.${pid}`);
+      let [p] = await db(`build_photo?select=storage_path&id=eq.${pid}`);
+      // Block 107: after-hours wrap-up photos live in their own table.
+      if (!p) [p] = await db(`after_hours_photo?select=storage_path&id=eq.${pid}`);
       if (!p) return send(404, "text/plain", "Not found");
       const f = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${p.storage_path}`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
