@@ -1601,7 +1601,10 @@ const boardPage = (tv98 = false) => `<!doctype html>
   <div id="rail" style="padding:6px 26px 30px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:0 20px;align-items:start"></div>`}
   <!-- Block 25 (owner-rep): the legend — every color the board can show,
        spelled out — plus the sign-out that was missing. -->
-  <div style="position:fixed;bottom:12px;left:18px;font-size:.9rem;opacity:.75">
+  <!-- Block 101b (owner-rep): the pinned legend sat ON TOP of the queue on
+       tablets/phones. TV keeps the fixed corners (nothing scrolls there); the
+       staff board's legend + stamp join the page flow below the content. -->
+  <div style="${tv98 ? "position:fixed;bottom:12px;left:18px;" : "padding:12px 18px 4px;text-align:center;"}font-size:.9rem;opacity:.75">
     <span style="color:#30d158">■</span> on pace &nbsp;
     <span style="color:#ffd60a">■</span> running behind &nbsp;
     <span style="color:#ff453a">■</span> needs help &nbsp;
@@ -1610,7 +1613,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
     <a href="#" onclick="history.back();return false" style="color:#8e8e93">← Back</a> &nbsp;·&nbsp;
     <a href="/logout" style="color:#8e8e93">Sign out</a>`}
   </div>
-  <div class="stamp" id="stamp"></div>
+  ${tv98 ? `<div class="stamp" id="stamp"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
   <!-- Q86: TV SLEEP overlay — a near-black dim screen shown outside working
        hours / on closed days (burn-in + power). Tap anywhere to peek for 20s. -->
   <div id="sleep" style="display:none;position:fixed;inset:0;background:#000;z-index:9999;text-align:center;cursor:pointer" onclick="peek()">
