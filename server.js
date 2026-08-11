@@ -1801,7 +1801,8 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${canHours
       ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : "option not in library"})</span><br>
         Hrs <input id="fh-${f.id}" style="width:64px"> Day <input id="fd-${f.id}" style="width:50px" value="1"> Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
-        <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button></div>`).join("")
+        <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button>
+        <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this)">Not production</button></div>`).join("")
       : `<div style="opacity:.75">${flags.length} item${flags.length === 1 ? "" : "s"} awaiting hours from the front office — the clock does not include them yet.</div>`}
   </div>` : ""}
   ${canHours ? `<div class="lane">
@@ -1848,6 +1849,19 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       document.getElementById("us-msg").textContent = o.error || "Something went wrong";
     } catch (e) { document.getElementById("us-msg").textContent = "Network hiccup — try again"; }
     btn.disabled = false;
+  }
+  // Block 104c: one tap routes a custom OUT of production scope — the work is
+  // Build/Body's or ships with the order. Resolves the flag, adds NO cab
+  // hours, and the routing is stored for the future Build-department board.
+  function notProd104(bid, fid, btn){
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o104 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o104; }, 4000); return; }
+    btn.disabled = true;
+    fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ build_id: bid, flag_id: fid, hours: 0, day_no: 1, scope: "other",
+        reason: "Not production — handled by Build/Body or ships with the order" }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
+      .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; });
   }
   function addHrs(bid, fid, btn){ btn.disabled = true;
     var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
@@ -4734,7 +4748,14 @@ async function freezeAndStart(b, empId, startedAt) {
           }
         }
         for (const a of det94.addons) {
-          sig94.push("CUSTOM: " + a.desc); flagCount94++;
+          sig94.push("CUSTOM: " + a.desc);
+          // Block 104c (owner-rep audit): a catalog part SKU is MERCHANDISE —
+          // it ships with the order and is nobody's cab labor. Only true labor
+          // lines (LABOR / PSR-CUSTOM item numbers) ask for hours; whether
+          // they're production's or Build's is a one-tap human call on the card.
+          const num104 = String(a.num || "").toUpperCase();
+          if (!(num104 === "LABOR" || num104.startsWith("LABOR") || num104 === "PSR-CUSTOM" || num104.startsWith("PSR-CUSTOM"))) continue;
+          flagCount94++;
           await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "custom", flag_text: a.desc }) });
         }
         let sg94 = 0; const ss94 = sig94.sort().join("|"); for (let i = 0; i < ss94.length; i++) sg94 = (sg94 * 31 + ss94.charCodeAt(i)) >>> 0;
@@ -5586,6 +5607,9 @@ http.createServer(async (req, res) => {
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
       const prods = await db(`product?select=part_number,family,template_id`);
       const tmpls = await db(`build_template?select=id,total_days`);
+      // Block 104c: template man-hour sums — the day counter's denominator.
+      const stepRows104 = await db(`step_template?select=template_id,man_hours&retired=is.false&limit=2000`);
+      const tmplMh104 = {}; for (const st of stepRows104) tmplMh104[st.template_id] = (tmplMh104[st.template_id] || 0) + Number(st.man_hours || 0);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
       const daysOfTmpl = Object.fromEntries(tmpls.map((t) => [t.id, t.total_days]));
       const tmplOf = Object.fromEntries(prods.map((p) => [p.part_number, p.template_id]));
@@ -5710,7 +5734,13 @@ http.createServer(async (req, res) => {
           : behind > 4 ? `Needs help — ${behind.toFixed(1)} hrs behind`
           : behind >= 1 ? `Running behind — ${behind.toFixed(1)} hrs`
           : behind <= -1 ? `${(-behind).toFixed(1)} hrs ahead` : "On pace";
-        const totalDays = daysOfTmpl[tmplOf[b.part_number]] || 0;
+        const baseDays104 = daysOfTmpl[tmplOf[b.part_number]] || 0;
+        // Block 104c (owner-rep audit): options extend the day count the same
+        // way they extend the promise — total frozen hours over the family's
+        // day budget. An option-heavy cab reads DAY 3 of 10, not "of 7".
+        const tmb104 = tmplMh104[tmplOf[b.part_number]] || 0;
+        const totalDays = (a.total > 0 && tmb104 > 0 && baseDays104 > 0)
+          ? Math.max(baseDays104, Math.ceil(a.total / (tmb104 / baseDays104) - 1e-9)) : baseDays104;
         const day = Math.min(Math.max(1, Math.ceil(wallHrs / 8 || 1)), totalDays || 99);
         // REWORK OVERRIDE (files 11/18): distinct badge + the cab's OWN
         // amber->red countdown against the manager's time frame — the normal
@@ -7066,8 +7096,9 @@ self.addEventListener("notificationclick", (e) => {
       if (!zeroFlag104) await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
         name: "EXTRA — " + reason, day_no: day, man_hours: hrs, is_background: false,
         source: "manual", state: "not_started", sort_order: 9500 }) });
-      if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true }) });
-      logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, day_no: day, reason, flag_id: p.flag_id || null });
+      const scope104 = zeroFlag104 ? (String(p.scope || "") === "other" ? "other" : "none") : "production";
+      if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true, scope: scope104 }) });
+      logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, day_no: day, reason, flag_id: p.flag_id || null, scope: scope104 });
       return json(200, { ok: true });
     }
 
