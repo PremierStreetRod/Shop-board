@@ -1318,7 +1318,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 // see every line's state + what's on deck, verify kits (the three-state
 // gate), reorder the upcoming queue, and run the two-step pull task whose
 // "Delivered" tap starts the cab's clock on production's side.
-const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = []) => `<!doctype html>
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
@@ -1340,10 +1340,22 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = []) => `<!do
   <div class="lane">
     ${clockedIn
       ? `<b>ON THE CLOCK — Warehouse</b><br><span style="opacity:.6;font-size:.9rem">Clocking out — what kind?</span><br>
+         ${ah.open ? `<p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER-HOURS wrap-up — one line on what got done (required):</p>
+         <input id="wrapW106" maxlength="200" placeholder="What did you get done?" style="width:70%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">` : ""}
          ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
-         <span style="opacity:.5;font-size:.85rem;margin-left:10px">Morning, back from lunch — same habit as the floor.</span>`}
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — three quick questions, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
+         ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
+           <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
+           <div>${ah.approvers.map((a) => `<button class="b ahapW" data-appr="${a.id}" style="margin:4px 6px 0 0;opacity:.75">${a.name}</button>`).join("")}</div>
+           <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
+           <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;opacity:.75">${r}</button>`).join("")}</div>
+           <input id="ahplanW" maxlength="200" placeholder="What are you here to get done?" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"><br>
+           <button class="b grn" style="margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
+           <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
+         </div>` : ""}`}
   </div>
   ${rows.map((r) => `
   <div class="lane">
@@ -1412,14 +1424,35 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = []) => `<!do
     }
     s.textContent = msg;
   }
-  function clockIn(btn){ post("/api/clock/in", { line_id: 9 }, btn); }
+  // Block 106: after hours, the big button OPENS the questionnaire instead of
+  // posting (the server enforces the three answers either way).
+  function clockIn(btn){
+    const p106 = document.getElementById("ahpW");
+    if (p106) { p106.style.display = "block"; return; }
+    post("/api/clock/in", { line_id: 9 }, btn);
+  }
+  let ahApprW = "", ahReasonW = "";
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest(".ahapW"); if (a) { ahApprW = a.dataset.appr;
+      document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
+      a.style.opacity = "1"; a.style.outline = "2px solid #30d158"; }
+    const r = e.target.closest(".ahreW"); if (r) { ahReasonW = r.dataset.ahreason;
+      document.querySelectorAll(".ahreW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
+      r.style.opacity = "1"; r.style.outline = "2px solid #30d158"; }
+  });
+  function ahGoW(btn){
+    post("/api/clock/in", { line_id: 9, approved_by: ahApprW, ah_reason: ahReasonW,
+      ah_plan: val("ahplanW") }, btn);
+  }
   function clockOut(reason, btn, note){
     // Block 97: "Other (add note)" opens a one-line note box first.
     if (reason.indexOf("Other") === 0 && note === undefined) {
       window.__oth97 = reason; document.getElementById("oth97").style.display = "block";
       const n97 = document.getElementById("othn97"); if (n97) n97.focus(); return;
     }
-    post("/api/clock/out", { reason, note: note && note.trim() ? note.trim() : undefined }, btn);
+    const w106 = document.getElementById("wrapW106");
+    post("/api/clock/out", { reason, note: note && note.trim() ? note.trim() : undefined,
+      wrap_note: w106 && w106.value.trim() ? w106.value.trim() : undefined }, btn);
   }
   setTimeout(() => location.reload(), 60000); // the board keeps itself fresh
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
@@ -1442,8 +1475,19 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
-    ? `<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
-    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wclk('/api/clock/in',{line_id:${clk.lineId}},this)">CLOCK IN</button>`}</div>
+    ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER-HOURS wrap-up — one line on what got done (required):</div>
+       <input id="wrapW106" maxlength="200" placeholder="What did you get done?" style="width:70%;max-width:420px;margin-bottom:8px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px"><br>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
+    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — three quick questions, then a normal shift.</div>
+      <div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:10px auto 0;text-align:left;max-width:560px">
+        <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
+        <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
+        <div>${clk.ah.approvers.map((a) => `<button class="wbtn ahapW" data-appr="${a.id}" style="background:#2c2c2e;opacity:.75">${a.name}</button>`).join("")}</div>
+        <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
+        <div>${clk.ah.reasons.map((r) => `<button class="wbtn ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="background:#2c2c2e;opacity:.75">${r}</button>`).join("")}</div>
+        <input id="ahplanW" maxlength="200" placeholder="What are you here to get done?" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px"><br>
+        <button class="wbtn" style="background:#1d5a2d;margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
+        <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
+      </div>` : ""}`}</div>
   <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p>` : ""}
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
@@ -1468,7 +1512,29 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 <script>
   // Plain English: ask the browser's permission, install the tiny
   // service worker, get this device's push address, hand it to the server.
+  // Block 106: after hours the big button opens the questionnaire; the server
+  // enforces the three answers either way.
+  function wClockIn106(btn){
+    const p106 = document.getElementById("ahpW");
+    if (p106) { p106.style.display = "block"; return; }
+    wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0} }, btn);
+  }
+  window.__ahApW = ""; window.__ahReW = "";
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest(".ahapW"); if (a) { window.__ahApW = a.dataset.appr;
+      document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
+      a.style.opacity = "1"; a.style.outline = "2px solid #30d158"; }
+    const r = e.target.closest(".ahreW"); if (r) { window.__ahReW = r.dataset.ahreason;
+      document.querySelectorAll(".ahreW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
+      r.style.opacity = "1"; r.style.outline = "2px solid #30d158"; }
+  });
+  function ahGoW(btn){
+    wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0}, approved_by: window.__ahApW,
+      ah_reason: window.__ahReW, ah_plan: document.getElementById("ahplanW").value }, btn);
+  }
   async function wclk(u,p,b){
+    const w106 = document.getElementById("wrapW106");
+    if (w106 && w106.value.trim() && u.indexOf("/out") > -1) p.wrap_note = w106.value.trim();
     // Block 97: "Other (add note)" opens the note row first.
     if (p && p.reason && String(p.reason).indexOf("Other") === 0 && p.note === undefined) {
       window.__othW97 = p.reason; var r97 = document.getElementById("woth97");
@@ -5233,8 +5299,21 @@ http.createServer(async (req, res) => {
         const histW97 = await db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`);
         const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
         histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); });
+        // Block 106 (owner-rep live test): warehouse clocks in from THIS page,
+        // but the Q112 after-hours questionnaire only existed on the floor's
+        // home screen — an evening warehouse punch-in was flatly denied. Same
+        // three questions, same claim-then-confirm, now on this surface too.
+        const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
+        const ahNowW = isAfterHours(Date.now());
+        const ahApprW = ahNowW && !clockedInW106
+          ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
+        const ahReasW = ahNowW && !clockedInW106
+          ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
+        const [openAhW] = clockedInW106
+          ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
         return send(200, "text/html; charset=utf-8",
-          warehousePage(emp, Boolean(lastW && lastW.kind === "clock_in"), reasonsW, linesW, rowsW, histW97));
+          warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
+            { now: ahNowW, approvers: ahApprW.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW) }));
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
@@ -5245,7 +5324,15 @@ http.createServer(async (req, res) => {
         if (DEPT_LINE92[emp.department]) {
           const [lastC92] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
           const rs92 = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
-          clk92 = { show: true, clockedIn: Boolean(lastC92 && lastC92.kind === "clock_in"), reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department] };
+          // Block 106: Body + Build punch HERE — same Q112 after-hours
+          // questionnaire and wrap-note the floor and warehouse get.
+          const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
+          const ahNow92 = isAfterHours(Date.now());
+          const ahAp92 = ahNow92 && !in92 ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
+          const ahRe92 = ahNow92 && !in92 ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
+          const [openAh92] = in92 ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
+          clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department],
+            ah: { now: ahNow92, approvers: ahAp92.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) } };
         }
         return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
       }
