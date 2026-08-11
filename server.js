@@ -4919,6 +4919,32 @@ async function payrollData(startMs, endMs) {
     const d = phxDate(Math.max(iv.start, startMs));
     (worked[iv.emp] = worked[iv.emp] || {}); worked[iv.emp][d] = (worked[iv.emp][d] || 0) + h;
   }
+  // Block 111 (owner-rep): the Pay Worksheet is payroll's at-a-glance truth —
+  // an after-hours stint counts ONLY once an admin SIGNED OFF. Pending and
+  // DECLINED stints are pulled out of Regular/OT here and listed by name
+  // below the tables (declines carry the typed reason).
+  const nmP111 = {}; for (const e of emps) nmP111[e.id] = `${e.first_name} ${e.last_name}`;
+  const ahSess111 = await db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`);
+  const ahCut = {}; const ahNotes = [];
+  for (const sA of ahSess111) {
+    if (sA.signed_off_by) continue;
+    const sStart = new Date(sA.started_at).getTime();
+    const sEnd = sA.ended_at ? new Date(sA.ended_at).getTime() : nowMs;
+    if (sEnd <= startMs || sStart >= endMs) continue;
+    let cut111 = 0;
+    for (const iv of ivs) {
+      if (iv.emp !== sA.employee_id) continue;
+      const o = overlapHrs(iv, Math.max(sStart, startMs), Math.min(sEnd, endMs));
+      if (!o) continue;
+      cut111 += o;
+      const d = phxDate(Math.max(iv.start, startMs));
+      (ahCut[sA.employee_id] = ahCut[sA.employee_id] || {}); ahCut[sA.employee_id][d] = (ahCut[sA.employee_id][d] || 0) + o;
+    }
+    if (cut111 > 0.005) ahNotes.push({ name: nmP111[sA.employee_id] || "?", date: phxDate(sStart), hrs: roundQ(cut111),
+      declined: Boolean(sA.declined_by),
+      note: sA.declined_by ? `DECLINED by ${nmP111[sA.declined_by] || "admin"}: "${sA.decline_reason || ""}"` : "pending admin sign-off" });
+  }
+  for (const eid in ahCut) for (const d in ahCut[eid]) if (worked[eid] && worked[eid][d] != null) worked[eid][d] = Math.max(0, worked[eid][d] - ahCut[eid][d]);
   // approved time off overlapping the window -> per emp per work-day, by reason
   const off = {};
   const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []);
@@ -4928,23 +4954,24 @@ async function payrollData(startMs, endMs) {
     for (; ms < end; ms += 86400000) { const d = phxDate(ms); if (!workday[d]) continue; (off[r.employee_id] = off[r.employee_id] || {}); off[r.employee_id][d] = { type, reason: r.reason || "" }; }
   }
   const rows = emps.map((e) => {
-    const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0; const byDay = {};
+    const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0, ahx = 0; const byDay = {};
     for (const d of dates) {
+      const ax = roundQ((ahCut[e.id] || {})[d] || 0); ahx += ax;
       const h = roundQ(wk[d] || 0), r = Math.min(h, 8), o = Math.max(0, h - 8); reg += r; ot += o;
       let s = 0, u = 0, otherOff = null;
       if (of[d]) { if (of[d].type === "sick") s = PAY_STD_DAY; else if (of[d].type === "unpaid") u = PAY_STD_DAY; else otherOff = of[d].reason; }
       sick += s; unpaid += u;
-      if (h > 0 || s || u || otherOff) byDay[d] = { worked: h, reg: r, ot: o, sick: s, unpaid: u, otherOff };
+      if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: r, ot: o, sick: s, unpaid: u, otherOff, ahx: ax };
     }
-    return { id: e.id, name: `${e.first_name} ${e.last_name}`, reg, ot, sick, unpaid, total: reg + ot + sick + unpaid, byDay };
-  }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || Object.keys(r.byDay).length);
-  const totals = rows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, total: 0 });
-  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals };
+    return { id: e.id, name: `${e.first_name} ${e.last_name}`, reg, ot, sick, unpaid, ahx, total: reg + ot + sick + unpaid, byDay };
+  }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || r.ahx || Object.keys(r.byDay).length);
+  const totals = rows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, ahx: 0, total: 0 });
+  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes };
 }
 function payrollPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
-  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; return `<td class="c">${t}${marks.length && day.worked ? ' ' + marks.join(' ') : ''}</td>`; };
+  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Pay Worksheet</title>${style}
@@ -4979,9 +5006,9 @@ function payrollPage(d) {
   <div class="lane">
     <a class="csv" href="/payroll.csv?${d.qs}">⬇ CSV for payroll</a>
     <h3>Totals for the period</h3>
-    ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Unpaid</th><th class="num">Total</th></tr>
-      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
-      <tr style="border-top:2px solid var(--line)"><td><b>All (${d.rows.length})</b></td><td class="num"><b>${h1(d.totals.reg)}</b></td><td class="num"><b>${h1(d.totals.ot)}</b></td><td class="num"><b>${h1(d.totals.sick)}</b></td><td class="num"><b>${h1(d.totals.unpaid)}</b></td><td class="num"><b>${h1(d.totals.total)}</b></td></tr></table>`
+    ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Unpaid</th><th class="num">AH not counted</th><th class="num">Total</th></tr>
+      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num ${r.ahx ? "up" : "muted"}">${r.ahx ? h1(r.ahx) : "·"}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
+      <tr style="border-top:2px solid var(--line)"><td><b>All (${d.rows.length})</b></td><td class="num"><b>${h1(d.totals.reg)}</b></td><td class="num"><b>${h1(d.totals.ot)}</b></td><td class="num"><b>${h1(d.totals.sick)}</b></td><td class="num"><b>${h1(d.totals.unpaid)}</b></td><td class="num ${d.totals.ahx ? "up" : "muted"}"><b>${d.totals.ahx ? h1(d.totals.ahx) : "·"}</b></td><td class="num"><b>${h1(d.totals.total)}</b></td></tr></table>`
     : `<div class="muted">No hours in this pay period.</div>`}
   </div>
   ${d.rows.length ? `<div class="lane" style="overflow-x:auto">
@@ -4989,6 +5016,10 @@ function payrollPage(d) {
     <table><tr><th>Employee</th>${wd.map((ds) => `<th class="c">${dow(ds)}<br><span class="muted" style="font-weight:400">${ds.slice(5)}</span></th>`).join("")}<th class="num">Total</th></tr>
       ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td>${wd.map((ds) => cell(r.byDay[ds])).join("")}<td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
     </table>
+  </div>` : ""}
+  ${(d.ahNotes || []).length ? `<div class="lane" style="border-color:#7a5900">
+    <h3>After-hours not counted <span class="muted" style="font-weight:400;font-size:.85rem">(excluded from the hours above)</span></h3>
+    ${d.ahNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${esc(n.date)} · ${h1(n.hrs)}h — ${n.declined ? `<span class="up">${esc(n.note)}</span>` : `<span class="ot">${esc(n.note)}</span>`}</div>`).join("")}
   </div>` : ""}
   <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here.</p>
 </div></body></html>`;
@@ -4998,9 +5029,14 @@ function payrollCsv(d) {
   const L = [];
   L.push(["Shop Board — Pay Worksheet", d.label, d.rangeText].map(q).join(","));
   L.push("");
-  L.push(["Employee", "Regular", "Overtime", "Sick", "Unpaid", "Total"].map(q).join(","));
-  for (const r of d.rows) L.push([r.name, h1(r.reg), h1(r.ot), h1(r.sick), h1(r.unpaid), h1(r.total)].map(q).join(","));
-  L.push(["ALL", h1(d.totals.reg), h1(d.totals.ot), h1(d.totals.sick), h1(d.totals.unpaid), h1(d.totals.total)].map(q).join(","));
+  L.push(["Employee", "Regular", "Overtime", "Sick", "Unpaid", "AH not counted", "Total"].map(q).join(","));
+  for (const r of d.rows) L.push([r.name, h1(r.reg), h1(r.ot), h1(r.sick), h1(r.unpaid), h1(r.ahx || 0), h1(r.total)].map(q).join(","));
+  L.push(["ALL", h1(d.totals.reg), h1(d.totals.ot), h1(d.totals.sick), h1(d.totals.unpaid), h1(d.totals.ahx || 0), h1(d.totals.total)].map(q).join(","));
+  if ((d.ahNotes || []).length) {
+    L.push(""); L.push(q("After-hours not counted (excluded from hours above)"));
+    L.push(["Employee", "Date", "Hours", "Status"].map(q).join(","));
+    for (const n of d.ahNotes) L.push([n.name, n.date, h1(n.hrs), n.note].map(q).join(","));
+  }
   L.push(""); L.push(""); L.push(q("Day-by-day detail"));
   L.push(["Employee", "Date", "Weekday", "Worked", "Regular", "Overtime", "Sick", "Unpaid"].map(q).join(","));
   const dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
