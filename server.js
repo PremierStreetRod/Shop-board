@@ -1645,9 +1645,14 @@ const boardPage = (tv98 = false) => `<!doctype html>
       // Block 105 (owner-rep): a FAINT per-line hue so the lines read apart on
       // the dark theme — each tile and its UPCOMING queue share the wash.
       // Pace green/amber/red stays the only loud signal; this is background-only.
-      const LTBG = ["rgba(96,156,224,.09)", "rgba(58,178,166,.09)", "rgba(148,118,214,.11)", "rgba(214,150,64,.09)"];
-      const LTHD = ["#7fb3e8", "#5cc8bd", "#b09ae0", "#dcae6b"];
-      const lt = (id) => (Math.max(1, Number(id) || 1) - 1) % 4;
+      // Block 105b (owner-rep): FUTURE LINES inherit the treatment
+      // automatically — eight distinct hues, assigned by board POSITION (so
+      // id gaps from added/retired lines never scramble the colors), cycling
+      // only if the shop ever runs more than eight lines at once.
+      const LTBG = ["rgba(96,156,224,.09)", "rgba(58,178,166,.09)", "rgba(148,118,214,.11)", "rgba(214,150,64,.09)", "rgba(214,110,140,.09)", "rgba(110,200,220,.08)", "rgba(190,100,190,.09)", "rgba(160,150,130,.10)"];
+      const LTHD = ["#7fb3e8", "#5cc8bd", "#b09ae0", "#dcae6b", "#dc94ac", "#8ed4e4", "#d093d0", "#b8ad96"];
+      const hue105 = {}; s.lines.forEach((l2, i105) => { hue105[l2.id] = i105 % LTBG.length; });
+      const lt = (id) => hue105[id] || 0;
       document.getElementById("board").innerHTML = s.lines.map(l => \`
         <div class="tile \${l.cab ? "c-"+l.cab.color : "idle c-none"}" style="background:linear-gradient(\${LTBG[lt(l.id)]},\${LTBG[lt(l.id)]}),#1c1c1e\${l.cab && l.cab.badge ? ";border-style:dashed;border-color:#ff9f0a;border-left-width:8px" : ""}">
           \${l.closed ? \`<span style="float:right;background:#3a3a3c;color:#ddd;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">CLOSED</span>\` : ""}
