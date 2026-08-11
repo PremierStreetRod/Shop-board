@@ -1773,6 +1773,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
+    ${b.promised_finish && detail && detail.order && detail.order.ship && String(b.promised_finish) > detail.order.ship ? `<div class="kv"><b>&#9888; Ship risk</b><span style="color:#ff453a">Sold to ship ${escH(detail.order.ship)} &mdash; standard hours land ${escH(b.promised_finish)}</span></div>` : ""}
     ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
     ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
@@ -4746,6 +4747,49 @@ async function freezeAndStart(b, empId, startedAt) {
       }
     }
   } catch (e94) { logEvent("option.freeze_error", null, { build_id: b.id, error: String((e94 && e94.message) || e94) }); }
+  // Block 103: THE PROMISE — computed the moment the cab starts, from its FULL
+  // frozen hours (stock + upgrades) over the family's own day budget (template
+  // man-hours / template days — the crew basis is baked in) counted across
+  // OPEN shop days. Fixed once set (Q103-6); no padding — honest capacity.
+  // If Coyote's SOLD ship date can't be met on standard hours, the conflict
+  // flags the day the cab starts (managers + admins, Q106-sandboxed) instead
+  // of surfacing the week it ships late. Wrapped: never blocks a start.
+  try {
+    const frozen103 = await db(`task?select=man_hours&build_id=eq.${b.id}`);
+    const totalMh103 = frozen103.reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
+    const stepMh103 = steps.reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
+    const [tpl103] = await db(`build_template?select=total_days&id=eq.${prod.template_id}`);
+    const tplDays103 = tpl103 && Number(tpl103.total_days) > 0 ? Number(tpl103.total_days) : 0;
+    if (totalMh103 > 0 && stepMh103 > 0 && tplDays103 > 0) {
+      const dayBudget103 = stepMh103 / tplDays103;
+      const daysNeeded103 = Math.max(1, Math.ceil(totalMh103 / dayBudget103 - 1e-9));
+      let cursor103 = new Date(startedAt).getTime(); let counted103 = 0; let promised103 = null;
+      for (let i103 = 0; i103 < 240 && counted103 < daysNeeded103; i103++) {
+        const ds103 = phxDate(cursor103);
+        if (await isWorkDay(ds103)) { counted103++; promised103 = ds103; }
+        cursor103 += 86400000;
+      }
+      if (promised103) {
+        await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ promised_finish: promised103 }) });
+        const coyOrd103 = b.coyote_root || String(b.order_number || "").split(".")[0];
+        let ship103 = "";
+        if (coyOrd103) {
+          const [ci103] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd103)}&order=received_at.desc&limit=1`);
+          const o103 = ci103 && ci103.payload && ci103.payload.order;
+          ship103 = o103 ? String(o103.ship_date || "").slice(0, 10) : "";
+        }
+        const conflict103 = Boolean(ship103 && promised103 > ship103);
+        logEvent("build.promised", empId, { build_id: b.id, order_number: b.order_number, promised: promised103,
+          ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103 });
+        if (conflict103) {
+          const mg103 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e2) => e2.id);
+          await notify("build.promise_conflict", mg103, `ORDER ${b.order_number} — can't make the sold ship date`,
+            `Standard hours put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
+            "/order/" + encodeURIComponent(b.order_number));
+        }
+      }
+    }
+  } catch (e103) { logEvent("build.promise_error", null, { build_id: b.id, error: String((e103 && e103.message) || e103) }); }
   logEvent("build.start", empId, { build_id: b.id, order_number: b.order_number, tasks_frozen: steps.length, options_frozen: optCount94, option_flags: flagCount94 });
 }
 
@@ -6334,7 +6378,7 @@ http.createServer(async (req, res) => {
       const newPos = qMin.length && qMin[0].queue_pos != null ? Number(qMin[0].queue_pos) - 1 : 0;
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "upcoming", started_at: null, kit_delivered_at: null, kit_delivered_by: null,
-        options_sig: null, queue_pos: newPos, pace_alert_color: null }) });
+        options_sig: null, queue_pos: newPos, pace_alert_color: null, promised_finish: null }) });
       logEvent("build.unstarted", empU, { build_id, order_number: bU.order_number, line_id: bU.line_id,
         task_rows_removed: allT.length, open_flags_removed: openF.length, at: claimed_at || new Date().toISOString() });
       boardTick();
