@@ -2090,8 +2090,14 @@ const shellPage = `<!doctype html>
 // ============================================================
 const navBar95 = (isAdmin, showReports = false) => {
   const it = (h, t) => `<a href="${h}" style="display:block;color:#ddd;padding:9px 20px;text-decoration:none;white-space:nowrap">${t}</a>`;
+  // Block 114 (owner-rep): "split them to something that makes more
+  // sense" — the menu leads with the pages admin actually reaches for;
+  // the pipeline/diagnostic pages sit below a Plumbing divider. Those
+  // pages notify when they need a human — nobody has to watch them.
+  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tv", "TV screen"]];
+  const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = isAdmin
-    ? [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/intake", "Intake"], ["/mapper", "Mapper"], ["/feed", "Coyote feed"], ["/sync", "Sync"], ["/order", "Order history"], ["/integrity", "Integrity"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tv", "TV screen"]]
+    ? daily95
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tv", "TV screen"]]);
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
@@ -2105,6 +2111,7 @@ const navBar95 = (isAdmin, showReports = false) => {
       <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:30px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:80;min-width:185px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
         ${tools.map(([h, t]) => it(h, t)).join("")}
+        ${isAdmin ? `<div style="border-top:1px solid #3a3a3c;margin:6px 0 0;padding:8px 20px 3px;color:#6e6e73;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase">Plumbing</div>` + plumbing95.map(([h, t]) => it(h, t)).join("") : ""}
       </div>
     </details>
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
