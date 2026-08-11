@@ -530,7 +530,13 @@ function wifiGate(req) {
 // is UTC-7 year-round (no DST — Q82 America/Phoenix), so the math is plain.
 const PHX_OFFSET_MS = 7 * 60 * 60 * 1000;
 const DAY_END_HOUR_PHX = 16;   // 4:00 PM shop day end (Q82; admin-adjustable later)
-const SWEEP_GRACE_MS = 4 * 60 * 60 * 1000; // only close 4+ hrs past day end — never cuts real late work short
+// Block 109 (owner-rep): the shop day ENDS at close. Anyone still on the
+// clock gets swept out on the first pass ~15 min later — backdated to the
+// close minute, flagged "auto-closed" for manager eyes. Working later is
+// fine: clock back IN through the after-hours questionnaire (the sanctioned
+// overtime door, with its own wrap-up + admin sign-off). The old 4-hour
+// grace predates that flow and let punches idle open past close.
+const SWEEP_GRACE_MS = 15 * 60 * 1000; // sweep begins ~15 min past day end
 // 4:00 PM Phoenix on the same Phoenix DAY as the given timestamp, in ms UTC.
 function dayEndOf(ms, closeHour = DAY_END_HOUR_PHX) {
   const phxMidnight = Math.floor((ms - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
@@ -2159,8 +2165,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        earned-value math nets it out automatically (earned = completed
        steps, so un-completing IS the reversal; no side math to fix). -->
   <div class="lane"><h3>Recently checked off</h3>
-    ${recentDone.map((t) => `<div class="qrow">ORDER ${t.order_number} · step ${t.display_no} ${t.name}
-      <span style="opacity:.6">— by ${t.who} at ${t.hhmm}</span>
+    ${recentDone.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+      <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
   ${afterHours.length ? `
@@ -2307,16 +2313,26 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   // Plain global handler wired by onclick= on each button — sturdier than
   // delegated listeners under automation and on older shop tablets.
   async function act(kind, id, btn) {
-    btn.disabled = true; btn.textContent = "Working…";
+    btn.disabled = true; const orig109 = btn.textContent; btn.textContent = "Working…";
     try {
       const r = await fetch("/api/build/" + kind, { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString() }) });
+        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString(),
+          force: btn.dataset.force109 === "1" ? true : undefined }) });
       const out = await r.json();
       if (out.ok) return location.reload();
+      // Block 109: sign-off with OPEN steps is a deliberate two-tap — the
+      // first tap reports how many, the second (within 6 s) confirms it.
+      if (out.needs_force) {
+        btn.dataset.force109 = "1"; btn.disabled = false;
+        btn.textContent = "Sure? Steps still open — tap again to advance";
+        document.getElementById("err").textContent = out.error || "";
+        setTimeout(() => { btn.dataset.force109 = ""; btn.textContent = orig109; }, 6000);
+        return;
+      }
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
-    btn.disabled = false;
+    btn.disabled = false; btn.textContent = orig109;
   }
   // Q107 manager un-complete: backs a wrongly-finished step to In Progress.
   // Goes through the same /api/task/state engine as the floor (audited as
@@ -6133,7 +6149,8 @@ http.createServer(async (req, res) => {
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], line: lineOf99[t.build_id], who: nameOf[t.started_by] || "?", hhmm: phx(t.started_at) }));
         const dones = await db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`);
         recentDone = dones.filter((t) => t.completed_at)
-          .map((t) => ({ ...t, order_number: orderOf[t.build_id], who: nameOf[t.completed_by] || "?", hhmm: phx(t.completed_at) }));
+          .map((t) => ({ ...t, order_number: orderOf[t.build_id], line: lineOf99[t.build_id],
+            who: nameOf[t.completed_by] || "", hhmm: phx(t.completed_at) }));
       }
       // Reports link only if the admin has shared the page (Q65 toggle,
       // owner-rep 2026-07-29: reports are admin work by default).
@@ -6634,11 +6651,19 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { build_id, claimed_at } = await body(req);
+      const { build_id, claimed_at, force } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,fix_kind,fix_reason,fix_assigned_at&id=eq.${build_id}`);
       if (!b || (b.state !== "active" && b.state !== "awaiting_inspection"))
         return json(400, { ok: false, error: "Cab is not active or awaiting inspection" });
+      // Block 109 (owner-rep): advancing a cab to BODY with steps still open
+      // must never happen by accident. The manager override stays (block 99
+      // judgment call) but it is INFORMED now — the first tap reports how
+      // many steps are open, the second tap confirms; overrides are audited.
+      const openT109 = await db(`task?select=id&build_id=eq.${build_id}&state=neq.complete&is_background=is.false`);
+      if (openT109.length && !force)
+        return json(400, { ok: false, needs_force: true, error: `${openT109.length} step${openT109.length > 1 ? "s" : ""} still open on this cab — signing off advances it out of production anyway. Tap again to confirm.` });
+      if (openT109.length) logEvent("build.signoff_override", empId, { build_id, order_number: b.order_number, open_steps: openT109.length });
       // Q85: if this cab carried a fix job (fix_assigned_at set), signing off is
       // the RE-INSPECTION pass — close the fix episode and clear its fields.
       const wasFix = !!b.fix_assigned_at;
