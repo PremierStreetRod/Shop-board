@@ -4674,8 +4674,19 @@ async function syncRun(apply, actorId) {
               const [ci94d] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(t.coyote_root || t.order_number)}&order=received_at.desc&limit=1`);
               const det94d = ci94d && ci94d.payload ? parseCoyoteDetail(ci94d.payload, b.part_number, new Set(Object.keys(ctx.prodByPart))) : null;
               if (det94d) {
+                // Block 113: rebuild the signature under the SAME rule the
+                // freeze uses — a priced library match outranks stock-prefix —
+                // else every re-push of such a cab would false-flag "changed".
+                const pr113 = ctx.prodByPart[String(b.part_number || "").toUpperCase()];
+                const lib113 = pr113 && pr113.family ? await db(`option_item?select=match_text,man_hours&family=eq.${encodeURIComponent(pr113.family)}&retired=is.false&man_hours=gt.0`) : [];
+                const n113 = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+                const priced113 = new Set(); for (const o of lib113) priced113.add(n113(o.match_text));
                 const parts94d = [];
-                for (const f of det94d.features) if (!f.stock) parts94d.push((f.label ? f.label + ": " : "") + f.value);
+                for (const f of det94d.features) {
+                  const full113 = (f.label ? f.label + ": " : "") + f.value;
+                  if (f.stock && !(priced113.has(n113(full113)) || priced113.has(n113(f.value)))) continue;
+                  parts94d.push(full113);
+                }
                 for (const a of det94d.addons) parts94d.push("CUSTOM: " + a.desc);
                 let sgD = 0; const ssD = parts94d.sort().join("|"); for (let i = 0; i < ssD.length; i++) sgD = (sgD * 31 + ssD.charCodeAt(i)) >>> 0;
                 if (String(sgD) !== String(b.options_sig)) {
@@ -5076,10 +5087,14 @@ async function freezeAndStart(b, empId, startedAt) {
         const byText94 = {}; for (const o of lib94) byText94[norm94(o.match_text)] = o;
         const sig94 = []; let sort94 = 9000;
         for (const f of det94.features) {
-          if (f.stock) continue;
           const full = (f.label ? f.label + ": " : "") + f.value;
-          sig94.push(full);
           const hit = byText94[norm94(full)] || byText94[norm94(f.value)];
+          // Block 113 (owner-rep): a PRICED library match OUTRANKS the
+          // stock-prefix heuristic — "Stock Holes w/ Radius Front Edge"
+          // starts with the word Stock but carries real radius-edge labor,
+          // so it must pass through. Plain Stock/None values still skip.
+          if (f.stock && !(hit && Number(hit.man_hours) > 0)) continue;
+          sig94.push(full);
           if (hit) {
             // Block 102: a matched ZERO-hour entry is a KNOWN config choice
             // with no cab labor (year, floor style, bed hardware, scripts…) —
