@@ -913,7 +913,7 @@ const changePinPage = (first) => `<!doctype html>
 // Q90: your USUAL lines are the big one-tap buttons; other lines sit below.
 // Clock-out asks WHY from the admin-managed reason list (Q77).
 // `state` = { clockedIn: bool, lineName } derived from the latest clock event.
-const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null) => `<!doctype html>
+const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null, fixLane = { open: [] }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
@@ -921,6 +921,13 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
+    <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
+    ${fixLane.open.map((f) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0">
+      <span><b>ORDER ${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "kickback" : "return"}${f.reason ? " · " + f.reason : ""}${f.hours ? ` · ${f.hours} hr frame` : ""}</span>
+      <button class="name" data-fixclaim="${f.build_id}" style="margin-left:auto;width:auto;padding:8px 16px;background:#12233a;border-color:#4a90d9">Work this fix</button>
+    </div>`).join("")}
+  </div>` : ""}
 
   <!-- Block 98b (owner-rep): ONE general CLOCK IN — company time first, same
        habit as warehouse/Body/Build. It lands on the disabled "Production
@@ -1107,6 +1114,8 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     if (out.ok) location.reload();
     else { toSend.disabled = false; toSend.textContent = "Send request"; err.textContent = out.error || "Something went wrong"; }
   });
+  // Block 126 (M3): grab an open fix from the lane above (act() reloads on success).
+  document.addEventListener("click", (e) => { const fx = e.target.closest("[data-fixclaim]"); if (fx) act("/api/fix/claim", { build_id: fx.dataset.fixclaim }); });
 </script></body></html>`;
 
 // THE CAB TASK SCREEN — shown to a clocked-in Production tech/manager.
@@ -1114,7 +1123,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false }) => {
   const inRework = build.state === "rework";
   const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
   // Per-task documentation (file 11): count what's attached to each step.
@@ -1183,6 +1192,14 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <div class="note" style="background:#12233a;border-color:#4a90d9">
     ⟲ RETURNED FOR FIX — ${build.fix_kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${build.fix_reason || "see note"}${build.fix_hours ? ` · within ${Number(build.fix_hours)} hrs` : ""}
     ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
+  </div>` : ""}
+  ${inFix && fixLane.onFix ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
+  ${fixLane.open && fixLane.open.length ? `<div class="cabbar" style="border-color:#4a90d9">
+    <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
+    ${fixLane.open.map((f) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0">
+      <span><b>ORDER ${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "kickback" : "return"}${f.reason ? " · " + f.reason : ""}${f.hours ? ` · ${f.hours} hr frame` : ""}</span>
+      <button onclick="fixClaim('${f.build_id}',this)" style="margin-left:auto;background:#12233a;color:#fff;border:1px solid #4a90d9;border-radius:10px;padding:8px 16px;font-size:.9rem;cursor:pointer">Work this fix</button>
+    </div>`).join("")}
   </div>` : ""}
   ${days.map((d) => `
     <div class="dayhead">${d === 0 ? (inFix ? "FIX — do these first" : "REWORK — fix these first") : `DAY ${d}`}</div>
@@ -1393,6 +1410,20 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       document.getElementById("err").textContent = e.message;
       btn.disabled = false; btn.textContent = "Finished — send for inspection";
     }
+  }
+  // Block 126 (M3): grab a fix onto the Fix-work clock (any tech, any line), or
+  // step off a fix you're done with. Both reload to the true screen.
+  async function fixClaim(id, btn){
+    if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+    const out = await sbPost("/api/fix/claim", { build_id: id, claimed_at: new Date().toISOString() }, (m) => { document.getElementById("err").textContent = m; });
+    if (out.ok) return location.reload();
+    if (btn) { btn.disabled = false; btn.textContent = "Work this fix"; }
+  }
+  async function fixRelease(btn){
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    const out = await sbPost("/api/fix/release", { claimed_at: new Date().toISOString() }, (m) => { document.getElementById("err").textContent = m; });
+    if (out.ok) return location.reload();
+    if (btn) { btn.disabled = false; btn.textContent = "Done with this fix — back to my line"; }
   }
 </script></body></html>`;
 };
@@ -6001,9 +6032,16 @@ http.createServer(async (req, res) => {
       // Q111: Shop time (line 10) is disabled so it never appears in
       // allLines — name it by hand for the on-the-clock header.
       const lineName = clockedIn ? (last.line_id === SHOP_LINE_ID ? "Shop time"
+        : last.line_id === FIX_LINE_ID ? "Fix work"
         : last.line_id === 14 ? "no line yet — tap one below"
         : (allLines.find((l) => l.id === last.line_id) || {}).name || "") : "";
       const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+      // Block 126 (M3): every OPEN fix, offered to whoever's on shift — the fix
+      // lane any tech can grab from, on both the cab screen and the clock screen.
+      const openFixes126 = clockedIn
+        ? (await db(`build?select=id,order_number,cab_number,fix_kind,fix_reason,fix_hours&state=eq.fix_job&order=fix_assigned_at`))
+            .map((f) => ({ build_id: f.id, order: f.order_number, cab: f.cab_number, kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours }))
+        : [];
       // ?clockout=1 = the task screen's Clock-out button — show the reason picker.
       if (clockedIn && url.searchParams.get("clockout") !== "1") {
         // ON THE CLOCK: front-center cab = the active build on YOUR line (Q90).
@@ -6011,8 +6049,21 @@ http.createServer(async (req, res) => {
         // Q85: fix_job joins active/rework as a workable cab, but active/rework
         // WIN the screen — a fix job only appears when its line has no live
         // build (it "runs alongside", never displacing current work).
-        const cands = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours,fix_kind,fix_reason,fix_note,fix_hours&line_id=eq.${last.line_id}&state=in.(active,rework,fix_job)&order=started_at`);
-        const build = cands.find((x) => x.state === "active" || x.state === "rework") || cands.find((x) => x.state === "fix_job") || null;
+        // Block 126 (M3): a tech working a FIX sees THAT cab's checklist no matter
+        // their line. focus_build_id (set by "Work this fix") wins the screen; a
+        // stale focus (the fix already finished / signed off) is cleared and we
+        // fall back to the normal line pick.
+        let build = null, onFix126 = false;
+        const [meF126] = await db(`employee?select=focus_build_id&id=eq.${empId}`);
+        if (meF126 && meF126.focus_build_id) {
+          const [fB126] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours,fix_kind,fix_reason,fix_note,fix_hours&id=eq.${meF126.focus_build_id}`);
+          if (fB126 && fB126.state === "fix_job") { build = fB126; onFix126 = true; }
+          else await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
+        }
+        if (!build) {
+          const cands = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours,fix_kind,fix_reason,fix_note,fix_hours&line_id=eq.${last.line_id}&state=in.(active,rework,fix_job)&order=started_at`);
+          build = cands.find((x) => x.state === "active" || x.state === "rework") || cands.find((x) => x.state === "fix_job") || null;
+        }
         if (build) {
           // Q107: started_by/completed_by ride along so the screen can show
           // WHO is on a step — two techs sharing a cab see each other's work.
@@ -6035,7 +6086,7 @@ http.createServer(async (req, res) => {
           const photoMin = prodMin ? prodMin.photo_min : 1;
           // Completion photos already on the cab (incl. any sent from a phone) count toward the minimum.
           const cShots = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`);
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length));
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -6064,7 +6115,7 @@ http.createServer(async (req, res) => {
       // Block 98c: clocked ONTO a real line that has no workable cab — tell the
       // tech where the line stands instead of a bare clock-out screen.
       let lineStat98 = null;
-      if (clockedIn && last && last.line_id !== SHOP_LINE_ID && last.line_id !== 14) {
+      if (clockedIn && last && last.line_id !== SHOP_LINE_ID && last.line_id !== FIX_LINE_ID && last.line_id !== 14) {
         const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(active,rework,awaiting_inspection,upcoming)&order=created_at&limit=30`);
         // Block 124 (logic audit M5): only the "no cab to work" card when the
         // line has NO cab being worked. If an active/rework cab is on it, the
@@ -6080,7 +6131,7 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
           { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) },
-          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98));
+          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126 }));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
