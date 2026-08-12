@@ -912,7 +912,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
 
   <!-- Block 98b (owner-rep): ONE general CLOCK IN — company time first, same
@@ -1010,7 +1010,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
-    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
     <a href="/settings" style="color:#8e8e93;margin-right:24px">&#9881; My settings</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -1139,7 +1139,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/board" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1232,7 +1232,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <button class="back" id="clockout">Clock out</button> ·
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
     ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager cockpit</a> ·` : ""}
-    <a href="/board" style="color:#8e8e93">Shop board</a> ·
+    <a href="/shopboard" style="color:#8e8e93">Shop board</a> ·
     <a href="/settings" style="color:#8e8e93">&#9881; My settings</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -1406,7 +1406,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px"><a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
@@ -1471,7 +1471,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
   </div>
   <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+  <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -1606,7 +1606,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
       : `The ${emp.department} board is coming in a later phase — your login is ready for it.`}
   </p>
   <p style="text-align:center;margin-top:26px">
-    <a href="/board" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
+    <a href="/shopboard" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
   ${emp.role === "admin" ? navBar95(true) : ""}
   <!-- Block 23: web-push opt-in — one tap on each device that should get
@@ -1720,7 +1720,7 @@ const inboxPage = (emp, notes) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8962; Home</a></p>
   <h2>Notifications</h2>
   ${notes.length ? notes.map((n) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
@@ -1792,6 +1792,10 @@ const boardPage = (tv98 = false) => `<!doctype html>
 </style></head>
 <body>
   <div class="logo" style="margin-top:18px">SHOP <span>BOARD</span></div>
+  <!-- Block 118 (owner-rep loop report): the staff board had NO way home —
+       its only "Back" replayed browser history, which ping-pongs with the
+       cab card forever on a phone. Real links now; /tv stays link-free. -->
+  ${tv98 ? "" : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/settings" style="color:#8e8e93;margin-right:16px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
   <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
@@ -1813,7 +1817,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
     <span style="color:#ff453a">■</span> needs help &nbsp;
     <span style="color:#8e8e93">■</span> idle line &nbsp;
     <span style="color:#ff9f0a">▧</span> rework${tv98 ? "" : `&nbsp;·&nbsp;
-    <a href="#" onclick="history.back();return false" style="color:#8e8e93">← Back</a> &nbsp;·&nbsp;
+    <a href="/home" style="color:#8e8e93">&#8962; Home</a> &nbsp;·&nbsp;
     <a href="/logout" style="color:#8e8e93">Sign out</a>`}
   </div>
   ${tv98 ? `<div class="stamp" id="stamp"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
@@ -1976,7 +1980,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 .kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
-  <p style="text-align:center;margin:2px 0 12px"><a href="/board" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93">&#8962; Home</a></p>
+  <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93">&#8962; Home</a></p>
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -2049,7 +2053,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       <div style="opacity:.55;font-weight:700;margin-top:10px">${Number(d) === 0 ? "REWORK / FIX" : `DAY ${escH(d)}`}</div>
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)</span></div>`).join("")}`).join("")}
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
-  <p style="text-align:center"><a href="/board" style="color:#8e8e93">← Back to the board</a></p>
+  <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p>
   <script>
   async function unstart97(bid, btn){
     if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o97; }, 4000); return; }
@@ -2118,11 +2122,11 @@ const navBar95 = (isAdmin, showReports = false) => {
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tv", "TV screen"]];
+  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tvboard", "TV screen"]];
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = isAdmin
     ? daily95
-    : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tv", "TV screen"]]);
+    : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
@@ -2130,7 +2134,7 @@ const navBar95 = (isAdmin, showReports = false) => {
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager cockpit</a>
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>` : ""}
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
-    <a href="/board" style="color:#8e8e93;margin-right:16px">Shop board</a>
+    <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <details class="t95" style="display:inline-block;position:relative">
       <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:30px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:80;min-width:185px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
@@ -2407,7 +2411,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
     </div>`).join("")}
   <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+  <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -3139,7 +3143,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
 
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
-  <a href="/board" style="color:#8e8e93;margin-right:24px">Shop board</a>
+  <a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -4921,7 +4925,7 @@ function syncPage(d) {
     <p class="muted" style="margin:10px 0 0;font-size:.78rem">Runs the engine once, right now — places and updates the board exactly as previewed above. Safe to press again anytime (it's idempotent).</p>
   </div>
   <script>
-  function runSyncNow(){var b=document.getElementById('runsync'),o=document.getElementById('syncres');b.disabled=true;b.textContent='Running…';o.textContent='';fetch('/api/admin/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'apply'})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){o.innerHTML='<span style="color:#ff6b5e">Did not run: '+((j&&j.error)||'not authorized')+'</span>';b.textContent='Run sync now';b.disabled=false;return;}var s=j.summary||{};o.innerHTML='<b style="color:#5edb84">Done.</b> placed '+(s.placed||0)+' · updated '+(s.updated||0)+' · shipped '+(s.completed||0)+' · cancelled '+(s.cancelled||0)+' · parked '+(s.parked||0)+'. <a href="/board" style="color:#5eaeff">Open the board &rarr;</a>';b.textContent='Run again';b.disabled=false;}).catch(function(e){o.innerHTML='<span style="color:#ff6b5e">Error: '+e+'</span>';b.textContent='Run sync now';b.disabled=false;});}
+  function runSyncNow(){var b=document.getElementById('runsync'),o=document.getElementById('syncres');b.disabled=true;b.textContent='Running…';o.textContent='';fetch('/api/admin/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'apply'})}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){o.innerHTML='<span style="color:#ff6b5e">Did not run: '+((j&&j.error)||'not authorized')+'</span>';b.textContent='Run sync now';b.disabled=false;return;}var s=j.summary||{};o.innerHTML='<b style="color:#5edb84">Done.</b> placed '+(s.placed||0)+' · updated '+(s.updated||0)+' · shipped '+(s.completed||0)+' · cancelled '+(s.cancelled||0)+' · parked '+(s.parked||0)+'. <a href="/shopboard" style="color:#5eaeff">Open the board &rarr;</a>';b.textContent='Run again';b.disabled=false;}).catch(function(e){o.innerHTML='<span style="color:#ff6b5e">Error: '+e+'</span>';b.textContent='Run sync now';b.disabled=false;});}
   </script>` : ""}
   <p class="muted" style="margin-top:-6px;font-size:.85rem"><b>Parked</b> = an order the engine won't place because it can't map it cleanly (unrecognized part, or a cab whose build steps aren't finished). It's never guessed onto a line — add the part / finish the steps in <a href="/lines" style="color:#5eaeff">Lines &amp; parts</a> and it places itself on the next run.</p>
   <div class="lane">
@@ -6205,8 +6209,13 @@ http.createServer(async (req, res) => {
     // /tv = the standalone TV URL — no sign-in, nothing clickable, sleep
     // overlay on. /board = the staff shop board — sign-in required, every
     // order (current and upcoming) taps through to the cab card.
-    if (url.pathname === "/tv") return send(200, "text/html; charset=utf-8", boardPage(true));
-    if (url.pathname === "/board") {
+    // Block 118 (owner-rep): plain-English addresses — /tvboard is the wall
+    // TV (typed into its browser once; zero links, zero clicks) and
+    // /shopboard is the staff board. The old /tv and /board forward forever,
+    // so nothing bookmarked or already-typed ever breaks.
+    if (url.pathname === "/tv" || url.pathname === "/board") { res.writeHead(302, { Location: url.pathname === "/tv" ? "/tvboard" : "/shopboard" }); return res.end(); }
+    if (url.pathname === "/tvboard") return send(200, "text/html; charset=utf-8", boardPage(true));
+    if (url.pathname === "/shopboard") {
       const empB95 = await liveSession(req);
       if (!empB95) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       return send(200, "text/html; charset=utf-8", boardPage(false));
@@ -6221,7 +6230,7 @@ http.createServer(async (req, res) => {
       const ord = decodeURIComponent(url.pathname.slice(7));
       const [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
       if (!bO) return send(404, "text/html; charset=utf-8",
-        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/board" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
       const [prodO] = bO.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
       const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
       const tasksO = await db(`task?select=display_no,name,day_no,man_hours,state,is_background,source&build_id=eq.${bO.id}&order=day_no,sort_order`);
@@ -6477,8 +6486,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return send(403, "text/plain", "Manager or admin only");
+      if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
@@ -6603,7 +6611,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin")) return send(403, "text/plain", "Manager or admin only");
+      if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const prods = await db(`product?select=part_number,family`);
@@ -6644,7 +6652,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin")) return send(403, "text/plain", "Manager or admin only");
+      if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const N = 14, HORIZON = 180;   // grid shows 14 days; projection scans up to 180 ahead
       const phxMid = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
@@ -6692,7 +6700,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const period = payPeriod(url.searchParams);
       const data = await payrollData(period.startMs, period.endMs);
@@ -6709,14 +6717,13 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return send(403, "text/plain", "Manager or admin only");
+      if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       // Reports are ADMIN work (owner-rep 2026-07-29); a manager only gets in
       // if an admin flipped the "Managers can see Reports" switch (Q65).
       if (me.role === "manager") {
         const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
         if (!tog || !tog.enabled)
-          return send(403, "text/plain", "Reports are admin-only right now. An admin can share them from the console — Features, 'Managers can see Reports'.");
+          return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center;max-width:560px"><h2>Reports are admin-only right now</h2><p style="opacity:.7">An admin can share them with managers from the console &mdash; Features, "Managers can see Reports".</p><p><a href="/home" style="color:#8e8e93">&#8962; Home</a></p></div></body></html>`);
       }
       const period = reportPeriod(url.searchParams);
       const data = await reportData(period.startMs, period.endMs);
@@ -6742,7 +6749,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const period = reportPeriod(url.searchParams);
       const data = await integrityData(period.startMs, period.endMs);
@@ -6756,7 +6763,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await intakeInboxData();
       return send(200, "text/html; charset=utf-8", intakeInboxPage(data));
@@ -6768,7 +6775,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await mapperPreviewData();
       return send(200, "text/html; charset=utf-8", mapperPreviewPage(data));
@@ -6779,7 +6786,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await pushDiffData();
       return send(200, "text/html; charset=utf-8", pushDiffPage(data));
@@ -6790,7 +6797,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await feedMonitorData();
       return send(200, "text/html; charset=utf-8", feedMonitorPage(data));
@@ -6802,7 +6809,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await orderHistoryData(url.searchParams.get("n"));
       return send(200, "text/html; charset=utf-8", orderHistoryPage(data));
@@ -6815,7 +6822,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await linesManagerData();
       return send(200, "text/html; charset=utf-8", linesManagerPage(data));
@@ -6828,7 +6835,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const sum = await syncRun(false, empId);
       return send(200, "text/html; charset=utf-8", syncPage({ sum, preview: true }));
@@ -6842,7 +6849,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
-      if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return send(403, "text/plain", "Not allowed");
+      if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await reconcileData();
       const vaR90 = String(url.searchParams.get("viewas") || "").toLowerCase();
@@ -8121,7 +8128,7 @@ self.addEventListener("notificationclick", (e) => {
       const empT97 = await liveSession(req);
       if (!empT97) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [meT97] = await db(`employee?select=role&id=eq.${empT97}`);
-      if (!meT97 || meT97.role !== "admin") return send(403, "text/plain", "Admin only");
+      if (!meT97 || meT97.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118
       const isShared97 = /sb_shared=1/.test(req.headers.cookie || "");
       return send(200, "text/html; charset=utf-8", `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
