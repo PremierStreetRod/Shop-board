@@ -1456,8 +1456,8 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
         <div style="margin-top:6px"><input id="kn-${q.id}" value="${String(q.kit_note || "").replace(/"/g, "&quot;")}" placeholder="parts note — what's short, when it's expected (stays with warehouse)" style="width:60%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem"> <button class="b" onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button></div>
         ${i === 0 && q.kit_status === "verified" ? `
           <div class="pull">${q.kit_pull_started_at
-            ? (r.active
-              ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC. <span style="color:#ffd60a">Line busy — ORDER ${r.active.order_number} is still on it. Deliver unlocks when the line clears.</span>
+            ? ((r.active || r.awaiting[0] || r.rework[0])
+              ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC. <span style="color:#ffd60a">Line busy — ORDER ${(r.active || r.awaiting[0] || r.rework[0]).order_number} is still on it (${String((r.active || r.awaiting[0] || r.rework[0]).state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</span>
                <button class="b" onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
               : `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC — deliver when it's all on the line:
                <button class="b grn" onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">Delivered — start the cab</button>
@@ -7180,8 +7180,12 @@ http.createServer(async (req, res) => {
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,line_id,part_number,order_number&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
-      const clash = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
-      if (clash.length) return json(400, { ok: false, error: "That line already has an active cab" }); // one-per-line
+      // Block 121 (owner-rep): a line holds ONE cab until a manager SIGNS IT
+      // OFF — the finished cab stays on the line through inspection/rework and
+      // only leaves when it's signed off and carried to Body. So any cab that
+      // isn't yet signed off (active / awaiting_inspection / rework) holds it.
+      const clash = await db(`build?select=id,order_number,state&line_id=eq.${b.line_id}&state=in.(active,awaiting_inspection,rework)&limit=1`);
+      if (clash.length) return json(400, { ok: false, error: `That line still has ORDER ${clash[0].order_number} on it (${String(clash[0].state).replace(/_/g, " ")}) — it stays until a manager signs it off.` }); // one-per-line
       // Q113: a manually-closed line takes no new cabs (manager override = reopen first).
       const [lnGateB] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
       if (lnGateB && lnGateB.manually_closed)
@@ -7289,8 +7293,10 @@ http.createServer(async (req, res) => {
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
       if (b.kit_status !== "verified") return json(400, { ok: false, error: "Verify the kit first" });
       if (!b.kit_pull_started_at) return json(400, { ok: false, error: "Tap Pull started first" });
-      const clashW = await db(`build?select=id&line_id=eq.${b.line_id}&state=eq.active`);
-      if (clashW.length) return json(400, { ok: false, error: "That line still has an active cab" });
+      // Block 121 (owner-rep): the line isn't free until its current cab is
+      // signed off — active / awaiting_inspection / rework all hold it.
+      const clashW = await db(`build?select=id,order_number,state&line_id=eq.${b.line_id}&state=in.(active,awaiting_inspection,rework)&limit=1`);
+      if (clashW.length) return json(400, { ok: false, error: `That line still has ORDER ${clashW[0].order_number} on it (${String(clashW[0].state).replace(/_/g, " ")}) — it stays until a manager signs it off.` });
       // Q113: a manually-closed line takes no new cabs.
       const [lnGateD] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
       if (lnGateD && lnGateD.manually_closed)
