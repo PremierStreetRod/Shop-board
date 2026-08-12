@@ -1499,6 +1499,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
       ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; HELD — front office</span>' : ""}
         ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
+        ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div style="margin-top:6px;color:#ffd60a;font-size:.85rem">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
         <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px">
           ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
           ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
@@ -1507,7 +1508,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
           ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
         </div>
         <div style="margin-top:6px"><input id="kn-${q.id}" value="${String(q.kit_note || "").replace(/"/g, "&quot;")}" placeholder="parts note — what's short, when it's expected (stays with warehouse)" style="width:60%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem"> <button class="b" onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button></div>
-        ${i === 0 && q.kit_status === "verified" ? `
+        ${i === ((r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0) && q.kit_status === "verified" ? `
           <div class="pull">${q.kit_pull_started_at
             ? ((r.active || r.awaiting[0] || r.rework[0])
               ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC. <span style="color:#ffd60a">Line busy — ORDER ${(r.active || r.awaiting[0] || r.rework[0]).order_number} is still on it (${String((r.active || r.awaiting[0] || r.rework[0]).state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</span>
