@@ -2015,7 +2015,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     model, features, addons,
   };
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0) => {
   const real = tasks.filter((t) => !t.is_background);
   // Block 124 (logic audit L4): "standard hours" counts only the real
   // (non-background) steps — the finish gate ignores background steps, so a
@@ -2040,6 +2040,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
     <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
+    ${fixHrs > 0 ? `<div class="kv"><b>Fix labor</b>${fixHrs.toFixed(1)} hr on returns/kickbacks — this order's rework, on top of the build hours</div>` : ""}
     ${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
@@ -2401,7 +2402,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        deadline + hours bucket, re-inspection to close) and logs a sign-off
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
-    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hrs` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off below.</div>`}
+    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off below.</div>`}
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
       <b>Open a fix job on a returned cab:</b>
       <p>Order
@@ -3373,6 +3374,21 @@ const phxDate = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
 // Turn the raw clock_event stream (ascending) into closed work intervals:
 // a clock_in opens one on its line; the SAME employee's next clock_out of
 // any kind closes it. Still-open intervals clip at `now` so live work counts.
+// Block 127 (M3, B2): fix-labor hours per order. Pairs each Fix-work clock-in
+// (which carries fix_build_id) with the tech's next clock-out and sums the elapsed
+// time per build. Non-fix intervals are ignored; a still-open fix counts to now.
+function fixHoursByBuild(evs) {
+  const open = {}, sums = {}, now = Date.now();
+  const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === FIX_LINE_ID && o.fix) sums[o.fix] = (sums[o.fix] || 0) + (t - o.start); open[emp] = null; } };
+  for (const e of evs) {
+    const t = new Date(e.claimed_at).getTime();
+    if (e.kind === "clock_in") { close(e.employee_id, t); open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id }; }
+    else close(e.employee_id, t);
+  }
+  for (const emp in open) { const o = open[emp]; if (o && o.line === FIX_LINE_ID && o.fix) sums[o.fix] = (sums[o.fix] || 0) + (now - o.start); }
+  const out = {}; for (const k in sums) out[k] = sums[k] / 3600000;
+  return out;
+}
 function workIntervals(events, nowMs) {
   const open = {}; const out = [];
   for (const ev of events) {
@@ -6447,7 +6463,17 @@ http.createServer(async (req, res) => {
       const flags94 = await db(`option_flag?select=id,kind,flag_text&build_id=eq.${bO.id}&resolved=is.false&order=created_at.asc`);
       let canHours94 = false, isAdmin97r = false;
       if (empId86) { const [meH94] = await db(`employee?select=role&id=eq.${empId86}`); canHours94 = !!meH94 && (meH94.role === "admin" || meH94.role === "manager"); isAdmin97r = !!meH94 && meH94.role === "admin"; }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r));
+      // Block 127 (M3, B2): fix labor booked to THIS order (Fix-work bucket, line
+      // 15), so its history shows original build hours + any later rework. Scoped
+      // to the techs who clocked a fix on it — cheap, and only shows when > 0.
+      let fixHrs127 = 0;
+      const fixSeed127 = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&fix_build_id=eq.${bO.id}&kind=eq.clock_in&limit=2000`);
+      if (fixSeed127.length) {
+        const empsF127 = [...new Set(fixSeed127.map((s) => s.employee_id))];
+        const fmF127 = fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc&limit=20000`));
+        fixHrs127 = fmF127[bO.id] || 0;
+      }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
@@ -6785,12 +6811,19 @@ http.createServer(async (req, res) => {
         emps: tcEmps, reasons: toReasonsM };
       // Q85: fix jobs — the currently-open ones + the recent signed-off cabs a
       // manager can send back, + the fixjob reason list.
-      const fxOpenRows = await db(`build?select=order_number,cab_number,line_id,fix_kind,fix_reason,fix_hours,fix_note&state=eq.fix_job&order=fix_assigned_at`);
+      const fxOpenRows = await db(`build?select=id,order_number,cab_number,line_id,fix_kind,fix_reason,fix_hours,fix_note&state=eq.fix_job&order=fix_assigned_at`);
       const fxLineName = Object.fromEntries(lines.map((l) => [l.id, l.name]));
       const fxCompleted = await db(`build?select=id,order_number,cab_number&state=eq.production_complete&order=created_at.desc&limit=40`);
       const fxReasons = await db(`pick_list_item?select=label&list_key=eq.fixjob_reason&retired=is.false&order=sort_order`);
+      // Block 127 (M3, B2): hours-to-date per open fix — Fix-work punches summed by
+      // the order they were booked to (cheap: only techs who've clocked fix work).
+      const fxSeed127 = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&kind=eq.clock_in&limit=5000`);
+      const fxEmps127 = [...new Set(fxSeed127.map((s) => s.employee_id))];
+      const fxMap127 = fxEmps127.length
+        ? fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc&limit=20000`))
+        : {};
       const fixjob = {
-        open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note })),
+        open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0 })),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
       // Block 61: projected finish per in-progress cab, shown on each active
