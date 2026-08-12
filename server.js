@@ -2027,7 +2027,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     Hrs <input id="ah-h" style="width:64px"> Day <input id="ah-d" style="width:50px" value="1"> Reason <input id="ah-r" style="min-width:240px" placeholder="customer request / custom note…">
     <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','',this)">Add to this cab's clock</button>
   </div>` : ""}
-  ${isAdmin97 && b.state === "active" && b.started_at && new Date(b.started_at).toISOString().slice(0, 10) === new Date(Date.now() - 7 * 3600000).toISOString().slice(0, 10) ? `<div class="lane" style="border-color:#7a1d1d">
+  ${isAdmin97 && b.state === "active" && b.started_at && new Date(new Date(b.started_at).getTime() - 7 * 3600000).toISOString().slice(0, 10) === new Date(Date.now() - 7 * 3600000).toISOString().slice(0, 10) ? `<div class="lane" style="border-color:#7a1d1d">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">START WAS A MISTAKE? <span style="opacity:.5;font-weight:400;font-size:.8em">admin only · same day only · audited</span></div>
     <div style="opacity:.7;font-size:.9rem;margin-bottom:8px">Un-starts this cab: it returns to the FRONT of its line's queue (kit stays verified), the frozen checklist is cleared, and the clock resets. Warehouse re-delivers when ready.</div>
     <button class="b" style="background:#5a1d1d;border:none;border-radius:9px;color:#fff;padding:8px 16px;cursor:pointer" onclick="unstart97('${b.id}',this)">Undo start — back to the queue</button>
@@ -7107,7 +7107,9 @@ http.createServer(async (req, res) => {
       // Q85: if this cab carried a fix job (fix_assigned_at set), signing off is
       // the RE-INSPECTION pass — close the fix episode and clear its fields.
       const wasFix = !!b.fix_assigned_at;
-      const patchC = { state: "production_complete" };
+      // Block 123 (logic audit L12): a signed-off cab shouldn't keep stale
+      // rework fields — clear them too (a cab that never reworked has null).
+      const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null };
       if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
       logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix, by_role: me.role });
@@ -7163,8 +7165,12 @@ http.createServer(async (req, res) => {
       const phx97 = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
       if (!bU.started_at || phx97(new Date(bU.started_at).getTime()) !== phx97(Date.now()))
         return json(400, { ok: false, error: "Same-day only — this cab started on an earlier day" });
-      const doneU = await db(`task?select=id&build_id=eq.${build_id}&state=eq.complete&limit=1`);
-      if (doneU.length) return json(400, { ok: false, error: "Steps are already checked off — handle this with the manager tools instead" });
+      // Block 123 (logic audit M1): also refuse while a step is IN PROGRESS —
+      // a tech is actively working it. Un-starting would delete that task out
+      // from under them and leave their clock-in accruing against a cab with no
+      // tasks. Completed OR in-progress both send you to the manager tools.
+      const doneU = await db(`task?select=id,state&build_id=eq.${build_id}&state=in.(complete,in_progress)&limit=1`);
+      if (doneU.length) return json(400, { ok: false, error: doneU[0].state === "in_progress" ? "Someone's working a step right now — can't un-start. Have them stop first, or use the manager tools." : "Steps are already checked off — handle this with the manager tools instead" });
       const allT = await db(`task?select=id&build_id=eq.${build_id}`);
       await db(`task?build_id=eq.${build_id}`, { method: "DELETE" });
       const openF = await db(`option_flag?select=id&build_id=eq.${build_id}&resolved=is.false`);
@@ -7246,10 +7252,15 @@ http.createServer(async (req, res) => {
         return json(400, { ok: false, error: "Unknown kit status" });
       const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only an upcoming cab's kit gets verified" });
-      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+      const patchK = {
         kit_status: status, kit_note: status === "short" ? (note || null) : null,
         kit_verified_by: status === "verified" ? whoId : null,
-        kit_verified_at: status === "verified" ? new Date().toISOString() : null }) });
+        kit_verified_at: status === "verified" ? new Date().toISOString() : null };
+      // Block 123 (logic audit M7): leaving "verified" must also drop any pull
+      // in progress — else re-verifying shows the cab already-pulled (one tap
+      // from Deliver) and the pull-minutes metric spans the whole gap.
+      if (status !== "verified") { patchK.kit_pull_started_at = null; patchK.kit_pull_started_by = null; }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchK) });
       logEvent("kit.status", whoId, { build_id, order_number: b.order_number, status, note: note || "" });
       return json(200, { ok: true });
     }
@@ -7806,7 +7817,13 @@ self.addEventListener("notificationclick", (e) => {
       const patch = {};
       if (department !== undefined) { if (!DEPTS.includes(department)) return json(400, { ok: false, error: "Unknown department" }); patch.department = department; }
       if (role !== undefined) { if (!ROLES.includes(role)) return json(400, { ok: false, error: "Unknown role" }); patch.role = role; }
-      if (lines !== undefined) patch.lines = lines;
+      // Block 123 (logic audit M4): lines only make sense for Production —
+      // match the add path. A save that sets a non-Production department clears
+      // the line roster (else a moved-to-Warehouse person keeps stale lines and
+      // still receives that line's rework/fix-job alerts); Production keeps the
+      // integer-filtered list.
+      if (department !== undefined) patch.lines = (department === "Production" && Array.isArray(lines)) ? lines.map(Number).filter(Number.isInteger) : [];
+      else if (lines !== undefined) patch.lines = Array.isArray(lines) ? lines.map(Number).filter(Number.isInteger) : [];
       if (active !== undefined) patch.active = Boolean(active);
       await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) });
       // Deactivating someone still ON the clock used to leave their interval
