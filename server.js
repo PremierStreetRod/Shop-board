@@ -4852,7 +4852,7 @@ async function syncRun(apply, actorId) {
                 // else every re-push of such a cab would false-flag "changed".
                 const pr113 = ctx.prodByPart[String(b.part_number || "").toUpperCase()];
                 const lib113 = pr113 && pr113.family ? await db(`option_item?select=match_text,man_hours&family=eq.${encodeURIComponent(pr113.family)}&retired=is.false&man_hours=gt.0`) : [];
-                const n113 = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+                const n113 = (s) => String(s || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " "); // block 119b: same spaced-colon rule as the freeze
                 const priced113 = new Set(); for (const o of lib113) priced113.add(n113(o.match_text));
                 const parts94d = [];
                 for (const f of det94d.features) {
@@ -5256,7 +5256,11 @@ async function freezeAndStart(b, empId, startedAt) {
         const famMap94 = {}; for (const x of prodsAll94) famMap94[String(x.part_number).toUpperCase()] = x.family;
         const fam94 = famMap94[String(b.part_number || "").toUpperCase()] || "";
         const lib94 = fam94 ? await db(`option_item?select=match_text,man_hours,day_no&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
-        const norm94 = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+        // Block 119b: also collapse space BEFORE a colon — Coyote's raw text
+        // (and library rows pasted from it) can read "Floor : Large Hump
+        // Floor" while the rebuilt form reads "Floor: …"; both sides must
+        // normalize identically or a real option throws a bogus flag.
+        const norm94 = (s) => String(s || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
         const byText94 = {}; for (const o of lib94) byText94[norm94(o.match_text)] = o;
         const sig94 = []; let sort94 = 9000;
         for (const f of det94.features) {
