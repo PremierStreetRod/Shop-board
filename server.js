@@ -69,6 +69,13 @@ const SMS_READY = Boolean(TWILIO_SID && TWILIO_TOKEN && TWILIO_FROM);
 // here: paid from the first tap, invisible to the TV board, and never
 // charged to any cab's pace math — no cab ever lives on this line.
 const SHOP_LINE_ID = 10;
+// Block 125 (M3): "Fix work" — the clockable NON-PRODUCTION bucket for returned/
+// kickback cabs (line 15, same disabled-line pattern as Shop time 10; ids 9-14
+// were already taken). Paid, invisible to the TV board, never charged to a cab's
+// pace — and each punch is stamped with the order it was for
+// (clock_event.fix_build_id) so the hours roll up per order. Any tech can grab a
+// fix; grabbing one moves the clock here.
+const FIX_LINE_ID = 15;
 
 // ---------- tiny helpers ----------
 // Ask Supabase for rows. `path` is the REST query string.
@@ -3499,11 +3506,12 @@ async function reportData(startMs, endMs) {
     const day = phxDate(Math.max(iv.start, sinceMs));
     const k = iv.emp + "|" + day;
     const row = tcMap[k] || (tcMap[k] = { name: `${p.first_name} ${p.last_name}`, date: day,
-      firstIn: iv.start, lastOut: iv.end, paid: 0, shop: 0, flags: new Set() });
+      firstIn: iv.start, lastOut: iv.end, paid: 0, shop: 0, fix: 0, flags: new Set() });
     row.firstIn = Math.min(row.firstIn, iv.start); row.lastOut = Math.max(row.lastOut, iv.end);
     const hrs = overlapHrs(iv, sinceMs, winEnd);
     row.paid += hrs;
     if (iv.line === SHOP_LINE_ID) row.shop += hrs;
+    if (iv.line === FIX_LINE_ID) row.fix += hrs;   // Block 125 (M3): Fix-work bucket
   }
   for (const ev of events) {
     // Q111 pt 2: corrected/added punches STAMP the day — no silent fixes.
@@ -3520,7 +3528,7 @@ async function reportData(startMs, endMs) {
     if (t < sinceMs || t > winEnd) continue;
     const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
     if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
-    if (ev.reason && !["End of shift", "End of day", "Lunch", "Switched lines"].includes(ev.reason)) row.flags.add(ev.reason);
+    if (ev.reason && !["End of shift", "End of day", "Lunch", "Switched lines", "Switched to a fix job", "Done with the fix", "Fix finished"].includes(ev.reason)) row.flags.add(ev.reason);
   }
   // Q112 + block 107: after-hours sessions stamp their timecard rows — and a
   // session's hours are HELD off "paid" until a manager/admin SIGNS OFF on the
@@ -3544,6 +3552,7 @@ async function reportData(startMs, endMs) {
         if (!o107) continue;
         held107 += o107;
         if (iv.line === SHOP_LINE_ID) row.shop = Math.max(0, row.shop - o107);
+        if (iv.line === FIX_LINE_ID) row.fix = Math.max(0, row.fix - o107);
       }
       row.paid = Math.max(0, row.paid - held107);
       // Block 110: a DECLINED session keeps its hours off for good — the
@@ -3719,17 +3728,17 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <h3>Labor — clocked hours per person</h3>
     ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
       ${d.labor.map((r, i) => { const days = d.timecards.filter((t) => t.name === r.name); return `<tr class="drow" onclick="dtoggle('dl${i}')"><td>▸ ${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>
-      <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Paid</th><th class="num">Shop</th><th>Notes</th></tr>
-        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
+      <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Paid</th><th class="num">Shop</th><th class="num">Fix</th><th>Notes</th></tr>
+        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Coaching and coverage view — never shown on the floor board (file 12 privacy rule).</div>`
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=timecards&${d.qs}">⬇ CSV</a>
     <h3>Timecards — payroll (Q111)</h3>
-    ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th>Notes</th></tr>
-      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table>
-      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Paid = time on the clock (lunch is already out; waiting on a kit stays in). Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
+    ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th class="num">Fix work</th><th>Notes</th></tr>
+      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Paid = time on the clock (lunch is already out; waiting on a kit stays in). Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. Fix work = paid hours on a returned/kickback cab, tied to that order. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
     : `<div style="opacity:.6">No punches in this period.</div>`}
   </div>
   <div class="lane">
@@ -3769,9 +3778,9 @@ function reportCsv(which, d) {
     return row(["Employee", "Clocked hours", "Days present"]) +
       d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
   if (which === "timecards")
-    return row(["Employee", "Date", "First in", "Last out", "Paid hours", "Shop-time hours", "Notes / flags"]) +
+    return row(["Employee", "Date", "First in", "Last out", "Paid hours", "Shop-time hours", "Fix-work hours", "Notes / flags"]) +
       d.timecards.map((t) => row([t.name, t.date, phxHM(new Date(t.firstIn).toISOString()),
-        phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), t.flags])).join("");
+        phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), h1(t.fix), t.flags])).join("");
   return row(["Order #", "Cab #", "Product", "Line", "Standard hours", "Actual hours", "Variance %", "Started", "Signed off", "Signed off by", "Admin sign-off"]) +
     d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed, c.by, c.byAdmin ? "yes" : ""])).join("");
 }
@@ -6260,6 +6269,63 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Block 125 (M3): GRAB A FIX. Moves the tech's clock onto the Fix-work bucket
+    // (line 15) stamped with this order, and points their screen at the fix. Not a
+    // lock — two techs may share one fix. Fix-work is non-production: paid, never
+    // charged to a cab's pace.
+    if (url.pathname === "/api/fix/claim" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That fix reference isn't valid" });
+      const [fb] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      if (!fb || fb.state !== "fix_job")
+        return json(400, { ok: false, error: "That fix isn't open anymore — refresh the list" });
+      const [lastF] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastF || lastF.kind !== "clock_in")
+        return json(400, { ok: false, error: "Clock in first, then grab the fix" });
+      if (lastF.line_id === FIX_LINE_ID && lastF.fix_build_id === build_id) {
+        await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: build_id }) });
+        return json(200, { ok: true });
+      }
+      const whenF = new Date(claimed_at || Date.now());
+      // Close whatever they were on, then open the fix stint 1s later (same
+      // deterministic-replay rule as a line switch).
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: empId, line_id: lastF.line_id, kind: "clock_out_early",
+        reason: "Switched to a fix job", claimed_at: whenF.toISOString() }) });
+      await db("clock_event", { method: "POST", body: JSON.stringify({
+        employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_in", fix_build_id: build_id,
+        claimed_at: new Date(whenF.getTime() + 1000).toISOString() }) });
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: build_id }) });
+      logEvent("fix.claim", empId, { build_id, order_number: fb.order_number });
+      return json(200, { ok: true });
+    }
+
+    // Block 125 (M3): DONE WITH A FIX (manual release). Steps off the Fix-work
+    // bucket to "off the line" (still on the clock) and clears the focus so the
+    // screen returns to the normal line pick.
+    if (url.pathname === "/api/fix/release" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { claimed_at } = await body(req);
+      const [lastR] = await db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const whenR = new Date(claimed_at || Date.now());
+      if (lastR && lastR.kind === "clock_in" && lastR.line_id === FIX_LINE_ID) {
+        await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_out_early",
+          reason: "Done with the fix", claimed_at: whenR.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id: empId, line_id: 14, kind: "clock_in",
+          claimed_at: new Date(whenR.getTime() + 1000).toISOString() }) });
+      }
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
+      logEvent("fix.release", empId, {});
+      return json(200, { ok: true });
+    }
+
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     // Q120: the unread count for the notifications bell (any signed-in user).
     if (url.pathname === "/api/inbox/unread") {
@@ -6973,6 +7039,24 @@ http.createServer(async (req, res) => {
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
+      // Block 125 (M3): a finished FIX leaves the finisher's screen — drop their
+      // focus and step them off the Fix-work bucket to "off the line" so their
+      // clock stops accruing against a cab that's now at inspection. (Other techs
+      // who shared the fix auto-release: the cab screen ignores a focus whose
+      // build is no longer a fix_job.)
+      if (b.state === "fix_job") {
+        const [lastFF] = await db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        if (lastFF && lastFF.kind === "clock_in" && lastFF.line_id === FIX_LINE_ID) {
+          const nowFF = new Date(claimed_at || Date.now());
+          await db("clock_event", { method: "POST", body: JSON.stringify({
+            employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_out_early",
+            reason: "Fix finished", claimed_at: nowFF.toISOString() }) });
+          await db("clock_event", { method: "POST", body: JSON.stringify({
+            employee_id: empId, line_id: 14, kind: "clock_in",
+            claimed_at: new Date(nowFF.getTime() + 1000).toISOString() }) });
+        }
+        await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
+      }
       logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at });
       // Q109-7: heading-to-inspection IS warehouse's firm "go pull the next
       // kit" signal — the first real event on the notification matrix.
