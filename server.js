@@ -946,6 +946,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        straight in. Three quick things, then a completely normal session. -->
   ${ah.now && !state.clockedIn ? `
   <div id="ahp" style="display:none;background:var(--card);border:1px solid #7a5900;border-radius:14px;padding:16px;margin-top:14px">
+    ${ah.approvers.length && ah.reasons.length ? `
     <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Three quick things:</p>
     <p class="msg" style="margin-top:10px">Who approved it?</p>
     <div class="grid">${ah.approvers.map((a) => `<button class="name ahap" data-appr="${a.id}" style="opacity:.75">${a.name}</button>`).join("")}</div>
@@ -955,7 +956,14 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <p style="text-align:center;margin-top:12px">
       <button class="name" id="ahgo" style="display:inline-block;background:#1d5a2d">Clock in — after hours</button>
       <button class="back" id="ahback" style="margin-left:12px">cancel</button>
-    </p>
+    </p>` : `
+    <!-- Block 129 (logic audit L3): after-hours clock-in enforces approval by
+         design (Q112). If it isn't set up (no manager/admin to approve, or no
+         after-hours reason list), EXPLAIN instead of a dead blank panel and
+         don't offer the broken path — the approval safeguard stays intact. -->
+    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Not set up yet.</p>
+    <p class="msg" style="margin-top:8px">Clocking in after hours needs ${!ah.approvers.length ? "a manager or admin who can approve it" : ""}${(!ah.approvers.length && !ah.reasons.length) ? ", and " : ""}${!ah.reasons.length ? "an after-hours reason list" : ""}. Ask an admin to set ${(!ah.approvers.length && !ah.reasons.length) ? "these" : "that"} up in the console, then try again.</p>
+    <p style="text-align:center;margin-top:12px"><button class="back" id="ahback">back</button></p>`}
   </div>` : ""}
 
   <!-- Block 98c (owner-rep nav hard pass): if you're ON a line whose cab just
@@ -992,7 +1000,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <p class="msg" style="color:#ffd60a">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
     <p class="msg">Clocking out — what kind?</p>
     <div class="grid">
-      ${reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("")}
+      ${reasons.length ? reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("") : `<button class="name" data-reason="End of day">Clock out</button>`}
     </div>
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
@@ -1466,7 +1474,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
            <button class="b grn" style="margin-top:8px" onclick="wrapGoW107(this)">Submit wrap-up &amp; clock out</button>
          </div>
          <p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
-         ${reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("")}
+         ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
          <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — three quick questions, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
