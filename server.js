@@ -955,6 +955,10 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   </div><script>setInterval(() => { const f = document.activeElement, wp = document.getElementById("wrap107");
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp && wp.style.display !== "none") return;
+    // Block 124 (logic audit L2): don't wipe a half-entered time-off request —
+    // hold the refresh while any of its fields carry text.
+    const tof124 = ["to-start","to-end","to-note"].map((id) => document.getElementById(id)).filter(Boolean);
+    if (tof124.some((el) => el.value && el.value.trim())) return;
     location.reload(); }, 45000);</script>` : ""}
   <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
@@ -1115,8 +1119,11 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     t.state === "in_progress" && t.started_by ? `Started by ${people[t.started_by] || "?"} · ${phx(t.started_at)}` :
     t.state === "complete" && t.completed_by ? `Done by ${people[t.completed_by] || "?"} · ${phx(t.completed_at)}` : "";
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
-  const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
-  const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
+  // Block 124 (logic audit L4): "standard hours" counts only the real
+  // (non-background) steps — the finish gate ignores background steps, so a
+  // finishable cab reads a clean X of X, not X of a larger total.
+  const doneMh = tasks.filter((t) => !t.is_background && t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
+  const totalMh = tasks.filter((t) => !t.is_background).reduce((s, t) => s + Number(t.man_hours), 0);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1447,8 +1454,8 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
       ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; HELD — front office</span>' : ""}
         ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
         <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px">
-          ${i > 0 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
-          ${i < r.queue.length - 1 && !q.queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
+          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
+          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
           ${q.kit_status !== "verified" ? `<button class="b grn" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts ✓</button>` : ""}
           ${q.kit_status === "verified" ? `<button class="b" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo verify</button>` : ""}
           ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
@@ -1487,6 +1494,11 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
         body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }) });
       const out = await r.json();
       if (out.ok) return location.reload();
+      // Block 124 (logic audit M6): if the tap failed because we're no longer
+      // on the clock (day-end sweep or a manager clocked us out), this screen
+      // is stale — reload so it shows the real state, not a silent reject under
+      // a still-green "ON THE CLOCK" chip.
+      if (/on the clock|clock in first/i.test(out.error || "")) { location.reload(); return; }
       showErr97(btn, out.error || "Something went wrong");
     } catch (e) { showErr97(btn, "Network hiccup — try again"); }
     if (btn) btn.disabled = false;
@@ -1967,8 +1979,11 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
 }
 const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false) => {
   const real = tasks.filter((t) => !t.is_background);
-  const doneMh = tasks.filter((t) => t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
-  const totalMh = tasks.reduce((s, t) => s + Number(t.man_hours), 0);
+  // Block 124 (logic audit L4): "standard hours" counts only the real
+  // (non-background) steps — the finish gate ignores background steps, so a
+  // finishable cab reads a clean X of X, not X of a larger total.
+  const doneMh = tasks.filter((t) => !t.is_background && t.state === "complete").reduce((s, t) => s + Number(t.man_hours), 0);
+  const totalMh = tasks.filter((t) => !t.is_background).reduce((s, t) => s + Number(t.man_hours), 0);
   const pct = totalMh ? Math.round((doneMh / totalMh) * 100) : 0;
   const byDay = {};
   for (const t of tasks) (byDay[t.day_no] = byDay[t.day_no] || []).push(t);
@@ -4997,7 +5012,12 @@ function reconcileShape(open, famOf, lineName, hi) {
   for (const g of groups) {
     g.cabs.sort((a, b) => rank(a.rawState) - rank(b.rawState) || (a.qp == null ? 1e9 : a.qp) - (b.qp == null ? 1e9 : b.qp) || (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
     const up = g.cabs.filter((c) => c.rawState === "upcoming");
-    up.forEach((c, i) => { c.reorderable = true; c.isFirst = i === 0; c.isLast = i === up.length - 1; c.ondeck = i === 0; });
+    up.forEach((c, i) => { c.reorderable = true; c.isFirst = i === 0; c.isLast = i === up.length - 1; c.ondeck = i === 0;
+      // Block 124 (logic audit L7): a pinned cab can't move, and you can't move
+      // a cab INTO a pinned neighbor's slot — dim those arrows so they never
+      // point at a guaranteed rejection.
+      c.noUp = c.isFirst || c.pinned || (i > 0 && up[i - 1].pinned);
+      c.noDown = c.isLast || c.pinned || (i < up.length - 1 && up[i + 1].pinned); });
   }
   const total = cabs.length;
   const numbered = cabs.filter((c) => c.numbered).length;
@@ -5032,7 +5052,7 @@ function reconcilePage(d, role) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
   const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
-    <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
+    <td class="mvc">${c.reorderable && admin ? `${c.noUp ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.noDown ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
     <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}${c.coyoteStatus && c.coyoteStatus !== "Queued" && c.coyoteStatus !== "Processed" ? ` <span class="flag" style="background:#3a1520;color:#ff8fa3">Coyote: ${esc(c.coyoteStatus)}</span>` : ""}</td>
     <td class="muted">${esc(c.customer) || "—"}</td>
     <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
@@ -6036,11 +6056,17 @@ http.createServer(async (req, res) => {
       // tech where the line stands instead of a bare clock-out screen.
       let lineStat98 = null;
       if (clockedIn && last && last.line_id !== SHOP_LINE_ID && last.line_id !== 14) {
-        const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(awaiting_inspection,upcoming)&order=created_at&limit=30`);
-        const up98 = lnB98.filter((b) => b.state === "upcoming").sort((a, b) => ((a.queue_pos ?? 9999) - (b.queue_pos ?? 9999)) || (a.created_at < b.created_at ? -1 : 1));
-        lineStat98 = { name: lineName,
-          awaiting: (lnB98.find((b) => b.state === "awaiting_inspection") || {}).order_number || null,
-          ondeck: (up98[0] || {}).order_number || null };
+        const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(active,rework,awaiting_inspection,upcoming)&order=created_at&limit=30`);
+        // Block 124 (logic audit M5): only the "no cab to work" card when the
+        // line has NO cab being worked. If an active/rework cab is on it, the
+        // tech just opened the clock-out view by choice — no false card.
+        const hasWork98 = lnB98.some((b) => b.state === "active" || b.state === "rework");
+        if (!hasWork98) {
+          const up98 = lnB98.filter((b) => b.state === "upcoming").sort((a, b) => ((a.queue_pos ?? 9999) - (b.queue_pos ?? 9999)) || (a.created_at < b.created_at ? -1 : 1));
+          lineStat98 = { name: lineName,
+            awaiting: (lnB98.find((b) => b.state === "awaiting_inspection") || {}).order_number || null,
+            ondeck: (up98[0] || {}).order_number || null };
+        }
       }
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
