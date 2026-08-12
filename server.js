@@ -4593,7 +4593,12 @@ async function linesManagerData() {
   })).sort((a, b) => a.family.localeCompare(b.family));
   const usage = {}; for (const l of lines) usage[l.id] = [];
   for (const f of families) for (const lid of f.lines) if (usage[lid]) usage[lid].push(f.family);
-  return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [] })), families };
+  // Block 122 (owner-rep): which lines still have a not-signed-off cab on them,
+  // so disabling one WARNS (but still allows — a temporary line-down is fine;
+  // re-enabling restores the cab exactly). One cab per line, so first wins.
+  const onLine122 = await db(`build?select=order_number,line_id,state&state=in.(active,awaiting_inspection,rework)&limit=1000`);
+  const occ122 = {}; for (const b of onLine122) if (b.line_id != null && !occ122[b.line_id]) occ122[b.line_id] = b.order_number;
+  return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [], occupant: occ122[l.id] || null })), families };
 }
 function linesManagerPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -4607,7 +4612,7 @@ function linesManagerPage(d) {
     <td>${l.families.length ? l.families.map(esc).join(", ") : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap">
       <button class="b" onclick="renameLine(${l.id},this)">Save name</button>
-      <button class="b" onclick="toggleLine(${l.id},${l.enabled ? "false" : "true"},this)">${l.enabled ? "Disable" : "Enable"}</button>
+      <button class="b" onclick="toggleLine(${l.id},${l.enabled ? "false" : "true"},this,${l.occupant ? `'${esc(l.occupant)}'` : "''"})">${l.enabled ? "Disable" : "Enable"}</button>
     </td></tr>`;
   const famCard = (f, i) => `<div class="lane">
     <h3 style="margin-bottom:4px">${esc(f.family)} ${!f.hasTemplate ? '<span class="flag amber">no template</span>' : f.ready ? '<span class="st p">Ready</span>' : '<span class="flag amber">Draft — held off the board</span>'}</h3>
@@ -4698,7 +4703,13 @@ function linesManagerPage(d) {
   function ckl(name){ return [].slice.call(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(c){return Number(c.value);}); }
   function addLine(b){ if(!v("newline").trim())return alert("Name the line"); post("/api/admin/line",{action:"add",name:v("newline")},b); }
   function renameLine(id,b){ if(!v("ln-"+id).trim())return alert("Name can't be empty"); post("/api/admin/line",{action:"rename",id:id,name:v("ln-"+id)},b); }
-  function toggleLine(id,to,b){ post("/api/admin/line",{action:"toggle",id:id,enabled:to},b); }
+  function toggleLine(id,to,b,occ){
+    // Block 122 (owner-rep, warn-and-allow): disabling a line that still has a
+    // cab on it is ALLOWED (a temporary line-down; re-enabling restores it),
+    // but never silent — confirm first, and point at the lighter daily tool.
+    if(to==="false" && occ){ if(!confirm("This line still has ORDER "+occ+" on it. Disabling hides and pauses that cab until you re-enable the line — it isn't lost, and it comes right back when you turn the line back on.\n\nFor a quick pause instead, use “Down for today” in the Manager cockpit.\n\nDisable this line anyway?")) return; }
+    post("/api/admin/line",{action:"toggle",id:id,enabled:to},b);
+  }
   function routeFam(i,b){ var L=ckl("rt-"+i); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"route",family:FAM[i],lines:L},b); }
   function addPart(i,b){ if(!v("pn-"+i).trim())return alert("Enter a part number"); var L=ckl("rt-"+i); if(!L.length)return alert("Check the line(s) it routes to, above"); post("/api/admin/catalog",{action:"add-part",part_number:v("pn-"+i),family:FAM[i],lines:L},b); }
   function addCab(b){ if(!v("nc-pn").trim()||!v("nc-fam").trim())return alert("Part number and cab/family both needed"); var L=ckl("nc-lines"); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"add-part",part_number:v("nc-pn"),family:v("nc-fam"),lines:L},b); }
