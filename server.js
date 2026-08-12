@@ -1987,6 +1987,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
     <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
+    ${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
     ${b.promised_finish && detail && detail.order && detail.order.ship && String(b.promised_finish) > detail.order.ship ? `<div class="kv"><b>&#9888; Ship risk</b><span style="color:#ff453a">Sold to ship ${escH(detail.order.ship)} &mdash; standard hours land ${escH(b.promised_finish)}</span></div>` : ""}
@@ -4750,7 +4751,7 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await db(`build?select=id,order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig&limit=100000`);
+  const builds = await db(`build?select=id,order_number,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status&limit=100000`);
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   const allNums = await db(`build?select=cab_number&cab_number=not.is.null&limit=100000`);
   const hi = {}; for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
@@ -4816,8 +4817,18 @@ async function syncRun(apply, actorId) {
     }
     if (it.action === "cancel") {
       const b = ctx.buildByOrder[it.orderNo];
-      if (b && b.state !== "cancelled") { if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "cancelled" }) }); sum.cancelled++; A(it.orderNo, "mark cancelled"); }
-      else sum.noop++;
+      if (b && b.started_at) {
+        // Block 120 (owner-rep): a cab already IN PRODUCTION stays put on the
+        // board no matter what Coyote says — we finish it (and sell it
+        // ourselves if the customer walks). Cancel is NOTED, never a move.
+        if (apply && (b.coyote_status || null) !== "Cancel") await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ coyote_status: "Cancel" }) });
+        sum.noop++; A(it.orderNo, "cancel NOTED on started cab — stays in production", { started: true });
+      } else if (b && b.state !== "cancelled") {
+        // Not started yet → SET ASIDE (off the line-up, shown on the White
+        // Board, ready to drop back in if Coyote returns it to Queued).
+        if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "cancelled", coyote_status: "Cancel" }) });
+        sum.cancelled++; A(it.orderNo, "set aside — cancelled before production");
+      } else sum.noop++;
       if (it.stamp) stampIds.push(...it.rowIds); continue;
     }
     if (it.action === "place") {
@@ -4825,14 +4836,19 @@ async function syncRun(apply, actorId) {
         const b = ctx.buildByOrder[t.order_number];
         if (!b) {
           const cn = nextCabNumber(ctx, t.part_number);
-          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged }) });
+          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null }) });
           sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state, cab: cn });
         } else if (b.started_at) {
           const patch = {};
           if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch.invoice_note = t.invoice_note; patch.note_flagged = t.note_flagged; }
           if ((b.customer_name || "") !== (t.customer_name || "")) patch.customer_name = t.customer_name;
           if ((b.destination || "") !== (t.destination || "")) patch.destination = t.destination;
-          if (t.state === "on_hold" && b.state !== "on_hold" && b.state !== "cancelled" && b.state !== "production_complete") patch.state = "on_hold";
+          // Block 120 (owner-rep): a STARTED cab never leaves its spot on a
+          // Coyote status change. Hold/Cancel are NOTED (coyote_status), never
+          // a state move; only "Processed" (shipped) removes it, handled
+          // above. Queued clears the note (back to normal).
+          const cs120 = t.state === "on_hold" ? "Hold" : (t.state === "upcoming" ? null : (b.coyote_status || null));
+          if ((b.coyote_status || null) !== cs120) patch.coyote_status = cs120;
           const disruptive = (b.line_id !== t.line_id) || (String(b.part_number) !== String(t.part_number));
           if (apply && Object.keys(patch).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
           if (disruptive) { sum.flagged++; if (apply) logEvent("sync.started_cab_flag", actorId || null, { order_number: t.order_number, from_line: b.line_id, to_line: t.line_id, from_part: b.part_number, to_part: t.part_number }); A(t.order_number, "update started cab — line/part change FLAGGED, not relocated", { started: true }); }
@@ -4873,9 +4889,12 @@ async function syncRun(apply, actorId) {
             } catch (eD) { logEvent("option.change_check_error", null, { order_number: t.order_number, error: String((eD && eD.message) || eD) }); }
           }
         } else {
-          const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged };
+          // Block 120: a NOT-started cab follows Coyote — Hold sets it aside
+          // (state on_hold, off the line-up), Queued returns it to upcoming in
+          // its line's queue and clears the note.
+          const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
-          sum.updated++; A(t.order_number, "update", { line: t.line_id });
+          sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
         }
       }
       if (it.stamp) stampIds.push(...it.rowIds);
@@ -4957,7 +4976,7 @@ function reconcileShape(open, famOf, lineName, hi) {
       rawState: String(b.state || ""), state: String(b.state || "").replace(/_/g, " "),
       customer: b.customer_name || "", dest: b.destination || "", promised: b.promised_finish || "",
       noteFlag: !!b.note_flagged, hint, qp: (b.queue_pos == null ? null : Number(b.queue_pos)), createdAt: b.created_at || "", pinned: !!b.queue_pinned,
-      numbered: !!b.cab_number, fromCoyote: !!b.coyote_root, reorderable: false, ondeck: false, isFirst: false, isLast: false,
+      numbered: !!b.cab_number, fromCoyote: !!b.coyote_root, coyoteStatus: b.coyote_status || "", reorderable: false, ondeck: false, isFirst: false, isLast: false,
     };
   });
   const rank = (s) => (s === "upcoming" ? 1 : 0); // active / awaiting / rework rise to the top; upcoming = the queue
@@ -4975,7 +4994,7 @@ function reconcileShape(open, famOf, lineName, hi) {
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
 async function reconcileData() {
-  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
+  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
   const lines = await db("line?select=id,name&order=id");
@@ -4983,7 +5002,19 @@ async function reconcileData() {
   const allNums = await db("build?select=cab_number&cab_number=not.is.null&limit=100000");
   const hi = {};
   for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
-  return reconcileShape(open, famOf, lineName, hi);
+  const shaped = reconcileShape(open, famOf, lineName, hi);
+  // Block 120 (owner-rep): the SET-ASIDE list — cabs pulled from the line-up
+  // by a Coyote Hold/Cancel BEFORE they started. Shown here so they're noted;
+  // each returns to its line's queue automatically if Coyote flips it back to
+  // Queued (the sync handles it). Started cabs are NEVER set aside.
+  const aside = await db("build?select=order_number,part_number,cab_number,state,customer_name,coyote_status,created_at&state=in.(on_hold,cancelled)&started_at=is.null&order=created_at.desc&limit=1000");
+  shaped.setAside = aside.map((b) => ({
+    order: b.order_number || "—", part: b.part_number || "", family: famOf[String(b.part_number || "").toUpperCase()] || "",
+    cab: b.cab_number || "", customer: b.customer_name || "",
+    why: (b.coyote_status === "Cancel" || b.state === "cancelled") ? "Cancelled" : "On hold",
+    when: String(b.created_at || "").slice(0, 10),
+  }));
+  return shaped;
 }
 function reconcilePage(d, role) {
   const admin = role === "admin";
@@ -4991,7 +5022,7 @@ function reconcilePage(d, role) {
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
   const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
     <td class="mvc">${c.reorderable && admin ? `${c.isFirst ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.isLast ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
-    <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}</td>
+    <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}${c.coyoteStatus && c.coyoteStatus !== "Queued" && c.coyoteStatus !== "Processed" ? ` <span class="flag" style="background:#3a1520;color:#ff8fa3">Coyote: ${esc(c.coyoteStatus)}</span>` : ""}</td>
     <td class="muted">${esc(c.customer) || "—"}</td>
     <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
     <td class="muted">${esc(c.state)}</td>
@@ -5041,6 +5072,12 @@ function reconcilePage(d, role) {
     ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
   </div>
   ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
+  ${(d.setAside && d.setAside.length) ? `<div class="lane" style="border-color:#5a2a3a">
+    <h3 style="margin:0 0 6px">Set aside <span class="muted" style="font-weight:400;font-size:.8em">&mdash; Coyote hold / cancel, before production (${d.setAside.length})</span></h3>
+    <p class="muted" style="margin:-2px 0 10px;font-size:.85rem">These were pulled from the line-up by a Coyote status change before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.</p>
+    <table><tr><th>Order #</th><th>Customer</th><th>Family</th><th>Cab #</th><th>Why</th><th>Since</th></tr>
+    ${d.setAside.map((s) => `<tr><td><b><a href="/order/${encodeURIComponent(s.order)}" style="color:inherit">${esc(s.order)}</a></b></td><td class="muted">${esc(s.customer) || "&mdash;"}</td><td>${esc(s.family) || esc(s.part) || "?"}</td><td>${esc(s.cab) || "&mdash;"}</td><td><span class="flag" style="background:#3a1520;color:#ff8fa3">${esc(s.why)}</span></td><td class="muted">${esc(s.when)}</td></tr>`).join("")}</table>
+  </div>` : ""}
   <p class="muted" style="font-size:.8rem;text-align:center">Oldest-first by default; the order you set here (or the warehouse sets for kit-readiness) drives what's on deck. Every move is logged. Cab numbers are never shared or reused.</p>
   <script>
   function recount(){var rows=document.querySelectorAll('tr[data-cab]');var done=0,tot=rows.length;rows.forEach(function(r){var inp=r.querySelector('input.cn');if(inp&&inp.value.trim())done++;});var a=document.getElementById('kpi-num');if(a)a.textContent=done;var b=document.getElementById('kpi-un');if(b)b.textContent=(tot-done);}
