@@ -2482,18 +2482,42 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           force: btn.dataset.force109 === "1" ? true : undefined }) });
       const out = await r.json();
       if (out.ok) return location.reload();
-      // Block 109: sign-off with OPEN steps is a deliberate two-tap — the
-      // first tap reports how many, the second (within 6 s) confirms it.
+      // Block 128 (logic audit L1): sign-off with OPEN steps is a DELIBERATE
+      // override — but the confirm is now a SEPARATE button, so a blind
+      // double-tap on "Sign off" (a laggy tablet) can't advance a cab with open
+      // steps. The sign-off button resets to normal; a distinct red "Advance
+      // anyway" button appears beside it and clears itself after 8 s.
       if (out.needs_force) {
-        btn.dataset.force109 = "1"; btn.disabled = false;
-        btn.textContent = "Sure? Steps still open — tap again to advance";
+        btn.disabled = false; btn.textContent = orig109;
+        var pid128 = "fc128-" + id;
+        var old128 = document.getElementById(pid128); if (old128) old128.remove();
+        var c128 = document.createElement("button");
+        c128.id = pid128; c128.className = btn.className;
+        c128.style.marginLeft = "8px"; c128.style.background = "#7a1d1d"; c128.style.borderColor = "#ff453a";
+        c128.textContent = "Advance anyway — " + out.open + " step" + (out.open > 1 ? "s" : "") + " still open";
+        c128.onclick = function () { c128.disabled = true; c128.textContent = "Advancing…"; forceComplete128(id, c128); };
+        btn.insertAdjacentElement("afterend", c128);
         document.getElementById("err").textContent = out.error || "";
-        setTimeout(() => { btn.dataset.force109 = ""; btn.textContent = orig109; }, 6000);
+        setTimeout(function () { var x = document.getElementById(pid128); if (x) x.remove(); }, 8000);
         return;
       }
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = orig109;
+  }
+  // Block 128 (logic audit L1): the SEPARATE override button's advance call —
+  // reached only by a deliberate tap on the distinct red button, never by a
+  // reflexive double-tap on Sign off.
+  async function forceComplete128(id, c) {
+    try {
+      const r = await fetch("/api/build/complete", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString(), force: true }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+      if (c) c.remove();
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; if (c) { c.disabled = false; c.textContent = "Advance anyway"; } }
   }
   // Q107 manager un-complete: backs a wrongly-finished step to In Progress.
   // Goes through the same /api/task/state engine as the floor (audited as
@@ -7296,7 +7320,7 @@ http.createServer(async (req, res) => {
       // many steps are open, the second tap confirms; overrides are audited.
       const openT109 = await db(`task?select=id&build_id=eq.${build_id}&state=neq.complete&is_background=is.false`);
       if (openT109.length && !force)
-        return json(400, { ok: false, needs_force: true, error: `${openT109.length} step${openT109.length > 1 ? "s" : ""} still open on this cab — signing off advances it out of production anyway. Tap again to confirm.` });
+        return json(400, { ok: false, needs_force: true, open: openT109.length, error: `${openT109.length} step${openT109.length > 1 ? "s" : ""} still open on this cab — signing off advances it out of production anyway.` });
       if (openT109.length) logEvent("build.signoff_override", empId, { build_id, order_number: b.order_number, open_steps: openT109.length });
       // Q85: if this cab carried a fix job (fix_assigned_at set), signing off is
       // the RE-INSPECTION pass — close the fix episode and clear its fields.
