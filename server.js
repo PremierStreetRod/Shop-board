@@ -1402,6 +1402,19 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString() },
         (m) => { err.textContent = m; });
       if (out.ok) return location.reload();
+      // Block 159 (owner-rep F1): the soft cap's nudge. OK starts it anyway
+      // (the server logs the override for the manager); Cancel leaves it be.
+      if (out.nudge159) {
+        if (confirm(out.error + "\n\nOK starts it anyway — the manager sees the count.")) {
+          const out2 = await sbPost("/api/task/state",
+            { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString(), confirm159: true },
+            (m) => { err.textContent = m; });
+          if (out2.ok) return location.reload();
+          err.textContent = out2.error || "Something went wrong";
+        } else { err.textContent = ""; }
+        b.disabled = false;
+        return;
+      }
       err.textContent = out.error || "Something went wrong";
       b.disabled = false;
     }
@@ -2417,7 +2430,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
        button is for catching it sooner. Audited (who forced it is logged). -->
   <div class="lane" id="oc"><h3>On the clock</h3>
-    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}
+    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
   </div>` : ""}
@@ -6518,9 +6531,9 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/task/state" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
-      const { task_id, to, claimed_at } = await body(req);
+      const { task_id, to, claimed_at, confirm159 } = await body(req);
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
-      const [t] = await db(`task?select=id,state,build_id,display_no&id=eq.${task_id}`);
+      const [t] = await db(`task?select=id,state,build_id,display_no,is_background&id=eq.${task_id}`);
       if (!t) return json(404, { ok: false, error: "Task not found" });
       const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastCk || lastCk.kind !== "clock_in") {
@@ -6536,6 +6549,25 @@ http.createServer(async (req, res) => {
       const legal = { not_started: ["in_progress"], in_progress: ["complete"], complete: ["in_progress"] };
       if (!(legal[t.state] || []).includes(to))
         return json(400, { ok: false, error: `Can't go ${t.state} → ${to}` });
+      // Block 159 (owner-rep F1 ruling): SOFT cap on concurrent open steps.
+      // Starting tasks can NOT inflate pace (pace is labor-based — an open
+      // step earns nothing until COMPLETED), so this guards data quality:
+      // per-step timing stays honest and the floor shows what's really being
+      // worked. A fresh start (not an undo) with 2+ non-background steps
+      // already in progress under this person's name gets a "finish one
+      // first?" nudge; a confirmed second tap proceeds and is LOGGED
+      // (task.cap_override) so a repeat hoarder is visible to the manager.
+      // Background steps (paint dry, cure) neither count nor get nudged —
+      // running alongside is their whole point.
+      if (to === "in_progress" && t.state === "not_started" && !t.is_background) {
+        const open159 = await db(`task?select=id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const n159 = (open159 || []).filter((x) => !x.is_background).length;
+        if (n159 >= 2) {
+          if (confirm159 !== true)
+            return json(200, { ok: false, nudge159: true, open: n159, error: `You've got ${n159} steps going — finish one first?` });
+          logEvent("task.cap_override", empId, { task_id, build_id: t.build_id, display_no: t.display_no, open_before: n159 });
+        }
+      }
       const patch = { state: to };
       if (to === "in_progress" && t.state === "not_started") { patch.started_by = empId; patch.started_at = claimed_at || new Date().toISOString(); }
       if (to === "complete") { patch.completed_by = empId; patch.completed_at = claimed_at || new Date().toISOString(); }
@@ -7093,10 +7125,17 @@ http.createServer(async (req, res) => {
       const latestCk = {};
       for (const ev of recentCk) if (!latestCk[ev.employee_id]) latestCk[ev.employee_id] = ev;
       const empNames = await db("employee?select=id,first_name,last_name&active=is.true");
+      // Block 159 (owner-rep F1): each on-clock person's OPEN (in-progress,
+      // non-background) step count rides their row — a hoarder shows at a
+      // glance, amber at 3+. Pairs with the soft cap on /api/task/state.
+      const open159 = await db("task?select=started_by,is_background&state=eq.in_progress");
+      const openBy159 = {};
+      for (const t159 of open159 || []) if (t159.started_by && !t159.is_background) openBy159[t159.started_by] = (openBy159[t159.started_by] || 0) + 1;
       const onClock = Object.values(latestCk).filter((e) => e.kind === "clock_in")
         .map((e) => { const emp = empNames.find((x) => x.id === e.employee_id);
           return emp ? { id: e.employee_id, name: `${emp.first_name} ${emp.last_name}`,
             line: (lines.find((l) => l.id === e.line_id) || {}).name || "",
+            open: openBy159[e.employee_id] || 0,
             // HH:MM in Phoenix time (UTC-7 fixed, Q82) — rendered server-side.
             since_hhmm: new Date(new Date(e.claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) } : null; })
         .filter(Boolean);
