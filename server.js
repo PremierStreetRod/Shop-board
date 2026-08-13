@@ -1762,7 +1762,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p>` : ""}
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
-    ${emp.department === "Owner" || emp.department === "Admin" || emp.role === "admin"
+    ${emp.department === "Owner" || emp.role === "admin"
       ? "Watch the floor in real time below."
       : `The ${emp.department} board is coming in a later phase — your login is ready for it.`}
   </p>
@@ -3062,7 +3062,7 @@ function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
 // hours, day, reorder, retire, add — template edits NEVER touch a started
 // cab, its task list froze at start) · FEATURES (the Q65 plain-language
 // switches; data keeps computing while OFF, flips are audit-logged).
-const DEPTS = ["Production", "Admin", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "Marketing"];
+const DEPTS = ["Production", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "Marketing"]; // Block 158 (owner-rep E3): "Admin" removed — it is a ROLE (with Team Member, Manager), not a department. DB verified: zero employees carried it.
 const ROLES = ["production", "manager", "admin"];
 // Block 25 (owner-rep): "production" read wrong as a ROLE next to real
 // departments ("Body Shop / production"?). The everyday role now DISPLAYS
@@ -6822,7 +6822,7 @@ http.createServer(async (req, res) => {
       if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
       let canFull86 = false;
       const empId86 = empView88;
-      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Admin" || me86.department === "Owner";
+      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Owner";
         // Block 90 (owner-rep): admin-gated role PREVIEW for checking work while
         // building — ?viewas=production|build|body|warehouse|accounting renders
         // this page as that tier sees it. Real admin session required; rendering
