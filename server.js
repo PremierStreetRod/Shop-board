@@ -4333,7 +4333,7 @@ async function mapperPreviewData() {
       const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
-      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && it.quantity != null ? String(it.quantity).trim() : "" }); }
+      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */ }); }
     }
     const status = String(o.status ?? "").trim() || "—";
     const noteRaw = String(o.invoice_note ?? "").trim();
@@ -5056,7 +5056,7 @@ function reduceFresh(ctx) {
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
       const pr = ctx.prodByPart[up];
-      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && it.quantity != null ? String(it.quantity).trim() : "" }); }
+      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */ }); }
       else unknownParts.push(num);
     }
     const col151 = collapseCabs151(cabParts);   // Block 151: dup rows -> one cab + a report
