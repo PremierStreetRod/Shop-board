@@ -3121,13 +3121,14 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
   <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
   <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th><th></th><th></th></tr>
-  ${optItems.map((o) => `<tr${o.retired ? ' style="opacity:.45"' : ""}>
+  ${optItems.filter((o) => !o.kit_only).map((o) => `<tr${o.retired ? ' style="opacity:.45"' : ""}>
     <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${o.match_text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</code></td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
     <td><input class="num" id="op-d-${o.id}" value="${o.day_no}"></td>
     <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
   </tr>`).join("")}</table>
+  ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
   <p style="margin-top:10px">Add an option:
     <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
     Hrs <input class="num" id="op-new-hrs" value="1"> Day <input class="num" id="op-new-day" value="1">
@@ -8208,7 +8209,7 @@ self.addEventListener("notificationclick", (e) => {
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = (tplId && isUuid(tplId)) ? await db(`step_template?select=id,display_no,name,day_no,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
-      const optItems94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,retired&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [];
+      const optItems94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [];
       const toggles = await db("feature_toggle?select=key,enabled&order=key");
       // Q110: the cab-number editor works the OPEN cabs (upcoming through
       // rework) — signed-off history is corrected by support, not this page.
