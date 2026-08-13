@@ -5094,7 +5094,7 @@ function collapseCabs151(cabParts) {
   }
   for (const e of seen.values()) {
     for (let i = 0; i < e.qty; i++) out.push(e.cp);
-    if (e.rows > 1 || e.qty > 1) dupes.push({ part: e.cp.part, rows: e.rows, qty: e.qty });
+    if (e.rows > 1) dupes.push({ part: e.cp.part, rows: e.rows, qty: e.qty });   // Block 161 (owner-rep ruling): a clean qty>1 is TRUSTED data — split .1/.2 silently, no flag; only a part duplicated across ROWS (source contradicting its own qty convention, the 23305 edit pattern) is worth a human's eyes
   }
   return { cabs: out, dupes };
 }
@@ -5216,14 +5216,18 @@ async function syncRun(apply, actorId) {
           sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
         }
       }
-      // Block 151: a collapsed duplicate (or a real quantity > 1) gets called
-      // out to a human — "verify the count" — instead of silently doubling the
-      // board. Flag rides the order's (first) placed cab; idempotent per text,
-      // never blocks the placement itself.
+      // Block 151 → 161 (owner-rep ruling): a clean qty of 2+ places .1/.2
+      // AUTOMATICALLY with no flag — the quantity field is trusted data (v160).
+      // Only the contradictory case — the same cab part duplicated across ROWS
+      // (an office-edit artifact, the 23305 pattern) — gets the "verify" flag,
+      // because the source is disagreeing with its own quantity convention.
+      // The board still acts on its own either way (collapse to the qty count;
+      // the phantom row never propagates); the flag just tells the office to
+      // clean the Coyote order. Idempotent per text, never blocks placement.
       if (it.dupCabs && it.dupCabs.length && it.targets.length) {
         for (const d151 of it.dupCabs) {
           try {
-            const txt151 = ("Coyote lists cab part " + d151.part + " on " + d151.rows + " row" + (d151.rows === 1 ? "" : "s") + (d151.qty > 1 ? " with quantity " + d151.qty : " (quantity blank)") + " — the board placed " + (d151.qty > 1 ? d151.qty + " cabs" : "ONE cab") + ". Verify the real count with the office; if the customer truly ordered more identical cabs, have the office fix the Coyote order and re-push.").slice(0, 300);
+            const txt151 = ("Coyote lists cab part " + d151.part + " on " + d151.rows + " separate rows (qty says " + d151.qty + ") — duplicate rows are usually an office-edit artifact, so the board placed " + (d151.qty > 1 ? d151.qty + " cabs" : "ONE cab") + " per the quantity field and dropped the extra row. Have the office clean the duplicated rows in Coyote; if the customer truly ordered more cabs, fix the quantity there and re-push.").slice(0, 300);
             sum.flagged++; A(it.orderNo, "duplicate cab-part rows — verify the count", { part: d151.part, rows: d151.rows });
             if (!apply) continue;
             const [b151] = await db(`build?select=id&order_number=eq.${encodeURIComponent(it.targets[0].order_number)}`);
