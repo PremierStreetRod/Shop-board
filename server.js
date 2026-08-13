@@ -804,6 +804,49 @@ const style = `<style>
         a.appendChild(b);
       }
       document.body.appendChild(a);
+      // Block 154 (owner-rep D8): the ⚙ gear rides beside the bell on every
+      // app screen — the text "My settings" links are gone.
+      var g = document.createElement("a");
+      g.href = "/settings"; g.title = "My settings";
+      g.style.cssText = "position:fixed;top:10px;right:64px;z-index:60;text-decoration:none;background:#1c1c1e;border:1px solid #2c2c2e;border-radius:20px;padding:6px 12px;color:#fff;font-size:1.05rem;line-height:1";
+      g.textContent = "\u2699\uFE0F";
+      document.body.appendChild(g);
+      // Block 154 (owner-rep D7 + B4): PUSH IS AUTOMATIC. A device that
+      // already allowed notifications re-subscribes silently on every visit
+      // (harmless upsert). A brand-new device gets ONE small banner — the tap
+      // is the permission gesture the browser demands — then never again
+      // (once answered, permission is no longer "default"). Denied = quiet;
+      // the bell inbox catches every notice regardless.
+      try {
+        var NP154 = "${VAPID_PUB}";
+        if (NP154 && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window) {
+          var sub154 = function(){
+            var pad = "=".repeat((4 - NP154.length % 4) % 4);
+            var raw = atob((NP154 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+            var key = Uint8Array.from(raw.split("").map(function(c){ return c.charCodeAt(0); }));
+            navigator.serviceWorker.register("/sw.js").then(function(){ return navigator.serviceWorker.ready; })
+              .then(function(reg){ return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }); })
+              .then(function(sb){ var j = sb.toJSON();
+                return fetch("/api/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }) }); })
+              .catch(function(){});
+          };
+          if (Notification.permission === "granted") sub154();
+          else if (Notification.permission === "default" && !sessionStorage.getItem("push154later")) {
+            var bar = document.createElement("div");
+            bar.style.cssText = "position:fixed;bottom:0;left:0;right:0;z-index:70;background:#12233a;border-top:1px solid #4a90d9;padding:10px 14px;text-align:center;color:#fff;font-size:.95rem";
+            var go = document.createElement("button");
+            go.textContent = "\uD83D\uDD14 Turn on notifications on this device";
+            go.style.cssText = "background:#0a6cff;border:none;border-radius:10px;color:#fff;padding:10px 16px;font-weight:700;cursor:pointer";
+            var no = document.createElement("button");
+            no.textContent = "Not now";
+            no.style.cssText = "background:none;border:none;color:#8e8e93;padding:10px 12px;cursor:pointer;margin-left:8px";
+            go.onclick = function(){ Notification.requestPermission().then(function(pm){ if (pm === "granted") sub154(); bar.remove(); }); };
+            no.onclick = function(){ sessionStorage.setItem("push154later", "1"); bar.remove(); };
+            bar.appendChild(go); bar.appendChild(no); document.body.appendChild(bar);
+          }
+        }
+      } catch(e){}
     }).catch(function(){});
   });
 })();
@@ -941,7 +984,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
   ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
@@ -1059,7 +1102,6 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
     ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
-    <a href="/settings" style="color:#8e8e93;margin-right:24px">&#9881; My settings</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1230,7 +1272,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/settings" style="color:#8e8e93;margin-right:18px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1332,7 +1374,6 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
     ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager cockpit</a> ·` : ""}
     <a href="/shopboard" style="color:#8e8e93">Shop board</a> ·
-    <a href="/settings" style="color:#8e8e93">&#9881; My settings</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1729,14 +1770,9 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
     <a href="/shopboard" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
   ${emp.role === "admin" ? navBar95(true) : ""}
-  <!-- Block 23: web-push opt-in — one tap on each device that should get
-       pinged. While the Q106 sandbox is on, only the owner-rep RECEIVES
-       anything, no matter who subscribes here. -->
-  <p style="text-align:center;margin-top:18px">
-    <button id="nbtn" style="background:#3a3a3c;border:none;border-radius:10px;color:#fff;padding:12px 20px;font-size:.95rem;cursor:pointer">🔔 Notifications on this device</button>
-    ${emp.role === "admin" ? `<button id="ntest" style="background:#1d5a2d;border:none;border-radius:10px;color:#fff;padding:12px 20px;font-size:.95rem;cursor:pointer;margin-left:10px">Send a test push</button>` : ""}
-  </p>
-  <p style="text-align:center;opacity:.6;font-size:.85rem" id="nmsg"></p>
+  <!-- Block 154 (owner-rep D7): the enable + test-push buttons are GONE —
+       push is automatic (shared bell script: granted devices re-subscribe
+       silently; a new device gets the one-time tap banner). -->
   <p style="text-align:center"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
@@ -1800,36 +1836,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
       document.getElementById("werr").textContent = o.error || "Something went wrong";
     } catch (e) { document.getElementById("werr").textContent = "Network hiccup — try again"; }
     b.disabled = false; }
-  const NPUB = "${VAPID_PUB}";
-  const nmsg = (t) => { document.getElementById("nmsg").textContent = t; };
-  function nkey(s){ const pad = "=".repeat((4 - s.length % 4) % 4);
-    const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
-    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); }
-  document.getElementById("nbtn").onclick = async () => {
-    try {
-      if (!NPUB) return nmsg("Push keys aren't configured on the server yet.");
-      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return nmsg("This browser can't do notifications.");
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") return nmsg("Notifications are blocked for this site — allow them in browser settings, then tap again.");
-      const reg = await navigator.serviceWorker.register("/sw.js");
-      await navigator.serviceWorker.ready; // v23.1: don't subscribe until the worker is ACTIVE (first-tap race fix)
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: nkey(NPUB) });
-      const j = sub.toJSON();
-      const r = await fetch("/api/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }) });
-      const out = await r.json();
-      nmsg(out.ok ? "This device is on the list. ✓" : (out.error || "Something went wrong"));
-    } catch (e) { nmsg("Couldn't finish: " + e.message); }
-  };
-  const ntestBtn = document.getElementById("ntest");
-  if (ntestBtn) ntestBtn.onclick = async () => {
-    ntestBtn.disabled = true;
-    try { const r = await fetch("/api/push/test", { method: "POST" });
-      const out = await r.json();
-      nmsg(out.ok ? "Test sent — it should pop on your subscribed device in a few seconds." : (out.error || "Something went wrong"));
-    } catch (e) { nmsg("Network hiccup — try again"); }
-    ntestBtn.disabled = false;
-  };
+  // Block 154: push subscribe/test moved to the shared bell script (automatic).
 </script></body></html>`;
 
 // Q120: the per-person NOTIFICATION INBOX — their own notification history,
@@ -1915,7 +1922,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
   <!-- Block 118 (owner-rep loop report): the staff board had NO way home —
        its only "Back" replayed browser history, which ping-pongs with the
        cab card forever on a phone. Real links now; /tv stays link-free. -->
-  ${tv98 ? "" : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/settings" style="color:#8e8e93;margin-right:16px">&#9881; My settings</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}
+  ${tv98 ? "" : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
   <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
@@ -2251,7 +2258,7 @@ const navBar95 = (isAdmin, showReports = false) => {
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/tvboard", "TV screen"]];
+  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Email & text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = isAdmin
     ? daily95
@@ -2271,7 +2278,6 @@ const navBar95 = (isAdmin, showReports = false) => {
         ${isAdmin ? `<div style="border-top:1px solid #3a3a3c;margin:6px 0 0;padding:8px 20px 3px;color:#6e6e73;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase">Plumbing</div>` + plumbing95.map(([h, t]) => it(h, t)).join("") : ""}
       </div>
     </details>
-    <a href="/settings" style="color:#8e8e93;margin-left:16px">&#9881; My settings</a>
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
   </div>
   <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
@@ -2306,8 +2312,9 @@ const settingsPage117 = (me) => `<!doctype html>
   <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px">
     <b>How notices reach me</b>
     <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Critical notices (pay decisions, inspection hand-offs) always come through.</p>
-    ${[["push", "Phone / web push", "Pops up on this device once you allow notifications (the bell)."],
-       ["sms", "Text message", "Sent to the mobile number above."],
+    <div style="padding:10px 0;border-top:1px solid var(--line)"><b>Phone / web push</b> — <b style="color:#30d158">always on</b><br>
+      <small style="opacity:.55">Every notice pops on your allowed devices and ALWAYS lands in your \uD83D\uDD14 inbox — nothing to set up.</small></div>
+    ${[["sms", "Text message", "Sent to the mobile number above."],
        ["email", "Email", "Sent to the email address above."]].map(([ch, label, note]) => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)">
       <div style="flex:1"><b>${label}</b><br><small style="opacity:.55">${note}</small></div>
@@ -3110,7 +3117,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#people" style="color:#fff;font-weight:700;margin-right:16px">People</a>
     <a href="#steps" style="color:#fff;font-weight:700;margin-right:16px">Build steps</a>
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
-    <a href="#cabnums" style="color:#fff;font-weight:700;margin-right:16px">Cab #s</a>
+    <a href="#setup154" onclick="var d=document.getElementById('setup154');if(d)d.open=true" style="color:#fff;font-weight:700;margin-right:16px">Setup</a>
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
     <a href="#calendar" style="color:#fff;font-weight:700;margin-right:16px">Shop calendar</a>
     <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
@@ -3163,7 +3170,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Block 117: the admin side of ⚙ My settings — every person's channel
        switches AND contact info, controllable from one table. -->
   <div class="panel" id="channels117"><h3>Notification channels &amp; contact — per person</h3>
-  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own from &#9881; My settings on their home screen.</p>
+  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own text/email from the &#9881; gear beside the bell; push is always on (block 154).</p>
   <table><tr><th>Name</th><th>Push</th><th>Text</th><th>Email</th><th>Mobile #</th><th>Email address</th><th></th></tr>
   ${emps.filter((e) => e.active).map((e) => `<tr>
     <td><b>${e.first_name} ${e.last_name}</b></td>
@@ -3229,6 +3236,10 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
        this panel only shows whether they are present and fires ONE explicit
        test to a typed address/number. Day-to-day routing stays behind the
        Features switches above. -->
+  <!-- Block 154 (owner-rep D6): the two set-once panels collapse behind a
+       "Setup" fold at the bottom of daily life; the Tools menu deep-links
+       here (a hash visit auto-opens the fold). -->
+  <details id="setup154"><summary style="cursor:pointer;color:#8e8e93;font-weight:700;padding:10px 0">Setup — rarely needed (Email &amp; text · Cab numbers)</summary>
   <div class="panel" id="channels116"><h3>Email &amp; text setup</h3>
   <div class="tglrow"><div style="flex:1"><b>Email — sends from info@premierstreetrod.com</b>
     <small>${EMAIL_READY ? "Credentials are on file. Send yourself a test to prove the mailbox works." : "Waiting on credentials — add SMTP_USER and SMTP_PASS on Railway; the app picks them up on its next deploy."}</small></div>
@@ -3266,6 +3277,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Q113: the shop day, as settings. Everything derives from these two
        numbers — the day-end sweeper, after-hours detection, the board's
        master chip. Phoenix time, 24-hour numbers. -->
+  </details>
   <div class="panel" id="hours"><h3>Shop hours</h3>
   <p>Open <input class="num" id="sh-open" value="${shopHrs.open}"> &nbsp; Close <input class="num" id="sh-close" value="${shopHrs.close}">
     <button class="b" onclick="saveHours(this)">Save</button>
@@ -3456,6 +3468,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: v("new-day"), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
+  // Block 154 (D6): a #setup154 / #channels116 / #cabnums deep link opens the Setup fold.
+  if (["#setup154", "#channels116", "#cabnums"].indexOf(location.hash) > -1) { var d154 = document.getElementById("setup154"); if (d154) { d154.open = true; setTimeout(function(){ var t154 = document.getElementById(location.hash.slice(1)); if (t154) t154.scrollIntoView(); }, 50); } }
   // Block 117: per-person channels + contact, and the sample-set button.
   function chan117(id, ch, to, btn){ post("/api/admin/channels", { employee_id: id, channel: ch, enabled: to === true || to === "true" }, btn); }
   function contact117(id, btn){ post("/api/admin/contact", { employee_id: id, mobile: v("cm-"+id), email: v("ce-"+id) }, btn); }
@@ -8308,7 +8322,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const p117 = await body(req);
       const ch117 = String(p117.channel || "");
-      if (!["push", "sms", "email"].includes(ch117)) return json(400, { ok: false, error: "Unknown channel" });
+      if (!["sms", "email"].includes(ch117)) return json(400, { ok: false, error: ch117 === "push" ? "Push is always on — every notice also lands in your inbox." : "Unknown channel" });   // Block 154 (B4): staff can't mute push
       const on117 = p117.enabled === true || p117.enabled === "true";
       await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
       logEvent("settings.channel", empId, { channel: ch117, enabled: on117, by: "self" });
