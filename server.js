@@ -6334,17 +6334,11 @@ http.createServer(async (req, res) => {
       const [lnGate] = await db(`line?select=manually_closed,down_today&id=eq.${line_id}`);
       if (lnGate && lnGate.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
-      // Q83/Q84: clocking into a line held "down for today" resumes it —
-      // working-while-held is impossible, so the hold releases itself.
-      if (lnGate && lnGate.down_today) {
-        await closeOpenDowns(line_id, empId, "clock_in");
-        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
-          down_today: false, down_reason: null, down_by: null, down_at: null }) });
-        logEvent("line.down_resumed", empId, { line_id, cause: "clock_in" });
-        // Block 133 (L9): a production clock-in resumes a held line — start any
-        // cab whose kit warehouse dropped while the line was down.
-        await startDeliveredWaiting(line_id, empId);
-      }
+      // Q83/Q84 + Block 133/134 (L9): clocking into a line held "down for today"
+      // RESUMES it — but the resume (close the timed hold, clear the flag, start
+      // any delivered-but-held cab) now runs AFTER the clock_event insert below,
+      // so an after-hours reject can't tear down the hold + start a cab while
+      // recording no clock-in. lnGate.down_today was read above; used again there.
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
       const hrsIn = await shopHours();
       if (isAfterHours(inAtMs, hrsIn)) {
@@ -6367,6 +6361,17 @@ http.createServer(async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
       logEvent("clock.in", empId, { line_id });
+      // Block 134 (L9 audit fix): the clock-in is now recorded — safe to resume a
+      // held line. Close the timed hold, clear the flag, and start any cab whose
+      // kit warehouse dropped while the line was down. Runs post-insert, so a
+      // rejected clock-in above never resumes the line or starts a cab.
+      if (lnGate && lnGate.down_today) {
+        await closeOpenDowns(line_id, empId, "clock_in");
+        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
+          down_today: false, down_reason: null, down_by: null, down_at: null }) });
+        logEvent("line.down_resumed", empId, { line_id, cause: "clock_in" });
+        await startDeliveredWaiting(line_id, empId);
+      }
       return json(200, { ok: true });
     }
 
@@ -6632,6 +6637,12 @@ http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/board-state") {
+      // Block 134 (L9 audit fix): the free-typed down reason can carry personal
+      // info ("out sick"), so it must NOT ride in the PUBLIC board JSON (the TV
+      // board /tvboard is unauthenticated). Include it only for a signed-in
+      // viewer; the public tile shows a "DOWN TODAY" badge with no reason anyway.
+      const sessB133 = await liveSession(req);
+      const showDownReason133 = Boolean(sessB133);
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const emps = await db(`employee?select=id,first_name&active=is.true`);
       const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
@@ -6750,13 +6761,13 @@ http.createServer(async (req, res) => {
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
-          return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
+          return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
             cab: { order: w.order_number, family: familyOf[w.part_number] || "", customer: who88(w), dest: dest88(w),
               done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
               day: 0, total_days: 0 } };
         }
-        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], cab: null, ondeck: deck, upcoming: upcoming95 };
+        if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], cab: null, ondeck: deck, upcoming: upcoming95 };
         const a = agg[b.id] || { done: 0, total: 0 };
         const startMs = new Date(b.started_at).getTime();
         // Clip this line's coverage to the cab's life (Q103-2).
@@ -6817,7 +6828,7 @@ http.createServer(async (req, res) => {
           rcolor = !frame ? "amber" : elapsedH > frame ? "red" : elapsedH > frame * 0.75 ? "amber" : "green";
           rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${elapsedH.toFixed(1)} of ${frame || "—"} hrs`;
         }
-        return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? { reason: l.down_reason || "" } : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
+        return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
             done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
             pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
@@ -6996,7 +7007,7 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
-      const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
+      const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`, { headers: { cookie: req.headers.cookie || "" } }).then((r) => r.json()).catch(() => null);
       const prods = await db(`product?select=part_number,family`);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
       const lns = await db(`line?select=id,name`);
