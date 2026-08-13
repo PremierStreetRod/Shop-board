@@ -2142,7 +2142,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   ${flags.length ? `<div class="lane" style="border-color:#ffd60a">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS A RULING \u2014 UPGRADE HOURS &amp; NOTE ITEMS</div>
     ${canHours
-      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : "option not in library"})</span><br>
+      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : f.kind === "count" ? "cab count — verify" : "option not in library"})</span><br>
         Hrs <input id="fh-${f.id}" style="width:64px"> Day <input id="fd-${f.id}" style="width:50px" value="1"> Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
         <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button>
         <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'body_build')">Body/Build \u2014 push along</button>
@@ -4245,20 +4245,26 @@ async function mapperPreviewData() {
       const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
-      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)) }); }
+      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && it.quantity != null ? String(it.quantity).trim() : "" }); }
     }
     const status = String(o.status ?? "").trim() || "—";
-    const note = String(o.invoice_note ?? "").trim();
-    const cls = classifyOrder({ status, cabPartsCount: cabParts.length, hasBlazerTop: blazerTop });
+    const noteRaw = String(o.invoice_note ?? "").trim();
+    // Block 151: the preview mirrors the engine — duplicate same-part rows
+    // collapse to one cab and the preview says so right in the Note column.
+    const col151 = collapseCabs151(cabParts);
+    const cabs151 = col151.cabs;
+    const dup151 = col151.dupes.map((d) => "⚠ " + d.part + " on " + d.rows + " rows" + (d.qty > 1 ? " (quantity " + d.qty + ")" : "") + " — one cab placed, verify the count").join(" · ");
+    const note = noteRaw + (dup151 ? (noteRaw ? " · " : "") + dup151 : "");
+    const cls = classifyOrder({ status, cabPartsCount: cabs151.length, hasBlazerTop: blazerTop });
     let group = cls.group, propState = cls.state, reason = cls.reason;
-    if (group === "place" && cabParts.some((cp) => tmplReady[cp.family] === false)) {
+    if (group === "place" && cabs151.some((cp) => tmplReady[cp.family] === false)) {
       group = "review"; propState = "held";
       reason = "New cab — its build steps aren't finished, so it's held off the board until the template is marked ready.";
     }
-    const splits = cabParts.length > 1 ? cabParts.map((cp, i) => ({ sub: `${ordNo}.${i + 1}`, part: cp.part, line: cp.lines.join(", ") })) : [];
+    const splits = cabs151.length > 1 ? cabs151.map((cp, i) => ({ sub: `${ordNo}.${i + 1}`, part: cp.part, line: cp.lines.join(", ") })) : [];
     orders.push({ order: ordNo || "—", customer: custName, status, group, propState, reason,
       date: String(o.date ?? "").slice(0, 10), ship: String(o.ship_date ?? "").slice(0, 10),
-      parts: cabParts, lines: [...new Set(cabParts.flatMap((cp) => cp.lines))], family: [...new Set(cabParts.map((cp) => cp.family))].join(", "),
+      parts: cabs151, lines: [...new Set(cabs151.flatMap((cp) => cp.lines))], family: [...new Set(cabs151.map((cp) => cp.family))].join(", "),
       note, hasNote: !!note, blazerTop, splits });
   }
   const rank = { place: 0, review: 1, "needs-setup": 2, shipped: 3, excluded: 4 };
@@ -4962,12 +4968,38 @@ function reduceFresh(ctx) {
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
       const pr = ctx.prodByPart[up];
-      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true }); }
+      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && it.quantity != null ? String(it.quantity).trim() : "" }); }
       else unknownParts.push(num);
     }
-    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts, unknownParts, blazerTop, rowIds: [r.id] });
+    const col151 = collapseCabs151(cabParts);   // Block 151: dup rows -> one cab + a report
+    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts: col151.cabs, dupCabs: col151.dupes, unknownParts, blazerTop, rowIds: [r.id] });
   }
   return [...byKey.values()];
+}
+// Block 151 (owner-rep, the 23305 double): ONE CAB PER DISTINCT CAB PART.
+// Coyote's line-item quantity arrives BLANK today, so the same part on two
+// rows is a leftover of a Coyote-side order edit far more often than a real
+// second cab — 23305 proved it (an office edit re-added the cab + Guniwheel
+// rows without removing the originals and the board silently built two cabs,
+// inventing 162.5C). Rule: duplicate same-part rows collapse to ONE cab and
+// are REPORTED so placement raises a manager "verify the count" flag — the
+// system calls the double out instead of a human having to catch it. The
+// moment Coyote starts sending a real quantity > 1, THAT expands honestly
+// into that many cabs (still reported, as a heads-up). Distinct parts keep
+// the normal dotted split, unchanged.
+function collapseCabs151(cabParts) {
+  const seen = new Map(); const out = []; const dupes = [];
+  for (const cp of cabParts) {
+    const k = String(cp.part || "").toUpperCase();
+    const qn = Math.floor(Number(cp.qty151)); const qty = Number.isFinite(qn) && qn > 0 ? qn : 1;
+    if (!seen.has(k)) seen.set(k, { cp, rows: 1, qty });
+    else { const e = seen.get(k); e.rows++; e.qty = Math.max(e.qty, qty); }
+  }
+  for (const e of seen.values()) {
+    for (let i = 0; i < e.qty; i++) out.push(e.cp);
+    if (e.rows > 1 || e.qty > 1) dupes.push({ part: e.cp.part, rows: e.rows, qty: e.qty });
+  }
+  return { cabs: out, dupes };
 }
 function buildSyncPlan(ctx) {
   const items = [];
@@ -4982,7 +5014,7 @@ function buildSyncPlan(ctx) {
         customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
       }));
     }
-    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts });
+    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts, dupCabs: o.dupCabs || [] });
   }
   return items;
 }
@@ -5085,6 +5117,28 @@ async function syncRun(apply, actorId) {
           const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
           sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
+        }
+      }
+      // Block 151: a collapsed duplicate (or a real quantity > 1) gets called
+      // out to a human — "verify the count" — instead of silently doubling the
+      // board. Flag rides the order's (first) placed cab; idempotent per text,
+      // never blocks the placement itself.
+      if (it.dupCabs && it.dupCabs.length && it.targets.length) {
+        for (const d151 of it.dupCabs) {
+          try {
+            const txt151 = ("Coyote lists cab part " + d151.part + " on " + d151.rows + " row" + (d151.rows === 1 ? "" : "s") + (d151.qty > 1 ? " with quantity " + d151.qty : " (quantity blank)") + " — the board placed " + (d151.qty > 1 ? d151.qty + " cabs" : "ONE cab") + ". Verify the real count with the office; if the customer truly ordered more identical cabs, have the office fix the Coyote order and re-push.").slice(0, 300);
+            sum.flagged++; A(it.orderNo, "duplicate cab-part rows — verify the count", { part: d151.part, rows: d151.rows });
+            if (!apply) continue;
+            const [b151] = await db(`build?select=id&order_number=eq.${encodeURIComponent(it.targets[0].order_number)}`);
+            if (!b151) continue;
+            const have151 = await db(`option_flag?select=flag_text&build_id=eq.${b151.id}&kind=eq.count`);
+            if (have151.some((f) => f.flag_text === txt151)) continue;
+            await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b151.id, kind: "count", flag_text: txt151 }) });
+            await db(`build?id=eq.${b151.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
+            const adm151 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+            await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number));
+            logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
+          } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
         }
       }
       if (it.stamp) stampIds.push(...it.rowIds);
