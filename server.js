@@ -984,7 +984,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
   ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
@@ -1101,7 +1101,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 
   <div class="msg err" id="err" style="margin-top:14px"></div>
   <p style="text-align:center;margin-top:22px">
-    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
+    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:24px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
 </div>
@@ -1272,7 +1272,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager cockpit</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1372,7 +1372,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <p style="text-align:center;margin:22px 0">
     <button class="back" id="clockout">Clock out</button> ·
     ${otherLines.length ? `<button class="back" onclick="document.getElementById('swpick').hidden=!document.getElementById('swpick').hidden">Switch line</button> ·` : ""}
-    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager cockpit</a> ·` : ""}
+    ${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93">Manager console</a> ·` : ""}
     <a href="/shopboard" style="color:#8e8e93">Shop board</a> ·
     <a href="/logout" style="color:#8e8e93">Sign out</a>
   </p>
@@ -2290,7 +2290,7 @@ const navBar95 = (isAdmin, showReports = false) => {
   <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
-    <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager cockpit</a>
+    <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>   <!-- Block 157 (owner-rep E2): Manager cockpit -> Manager console, matching "Admin console" -->
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
@@ -3051,7 +3051,7 @@ function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
     return `<div class="crow"><div class="cwhen"><span class="dot ${cls}"></span>${esc(c.order)}</div><div class="cmid"><span class="muted">${esc(c.line)}${c.family ? " · " + esc(c.family) : ""}</span> — ${right}</div></div>`;
   }).join("") : `<div class="muted" style="padding:8px 0">No cabs in progress.</div>`}
   </div>
-  <p class="muted" style="font-size:.85em;text-align:center"><span class="dot g"></span>full crew &nbsp; <span class="dot a"></span>someone out &nbsp; <span class="dot r"></span>thin coverage &nbsp; <span class="dot n"></span>closed. &nbsp; Time off is managed in the Manager cockpit; closed days in the Admin shop calendar.</p>
+  <p class="muted" style="font-size:.85em;text-align:center"><span class="dot g"></span>full crew &nbsp; <span class="dot a"></span>someone out &nbsp; <span class="dot r"></span>thin coverage &nbsp; <span class="dot n"></span>closed. &nbsp; Time off is managed in the Manager console; closed days in the Admin shop calendar.</p>
 </div></body></html>`;
 }
 
@@ -3159,7 +3159,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       <div style="margin-top:8px">${s.confirmed ? "" : `<button class="b" onclick="ahConf108('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<button class="b grn" onclick="arm(this,()=>ahSign108('${s.id}',this))">Sign off — count the hours</button> <button class="b red" onclick="document.getElementById('dc-${s.id}').style.display='block';document.getElementById('dcr-${s.id}').focus()">Decline</button>` : ""}</div>
       ${s.ended ? `<div id="dc-${s.id}" style="display:none;margin-top:6px"><input id="dcr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px"> <button class="b red" onclick="arm(this,()=>ahDecl110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
     </div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Signing off releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Managers can confirm the approval claim from the cockpit; the sign-off itself is yours.</div>
+    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Signing off releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Managers can confirm the approval claim from the Manager console; the sign-off itself is yours.</div>
   </div>` : ""}
 
   <div class="panel" id="people"><h3>People</h3>
@@ -3376,7 +3376,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   </div>
 
   <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager cockpit</a>
+  <p style="text-align:center"><a href="/manager" style="color:#8e8e93;margin-right:24px">Manager console</a>
   <a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
@@ -4964,7 +4964,7 @@ function linesManagerPage(d) {
     // Block 122 (owner-rep, warn-and-allow): disabling a line that still has a
     // cab on it is ALLOWED (a temporary line-down; re-enabling restores it),
     // but never silent — confirm first, and point at the lighter daily tool.
-    if(to==="false" && occ){ if(!confirm("This line still has ORDER "+occ+" on it. Disabling hides and pauses that cab until you re-enable the line — it isn't lost, and it comes right back when you turn the line back on.\n\nFor a quick pause instead, use “Down for today” in the Manager cockpit.\n\nDisable this line anyway?")) return; }
+    if(to==="false" && occ){ if(!confirm("This line still has ORDER "+occ+" on it. Disabling hides and pauses that cab until you re-enable the line — it isn't lost, and it comes right back when you turn the line back on.\n\nFor a quick pause instead, use “Down for today” in the Manager console.\n\nDisable this line anyway?")) return; }
     post("/api/admin/line",{action:"toggle",id:id,enabled:to},b);
   }
   function routeFam(i,b){ var L=ckl("rt-"+i); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"route",family:FAM[i],lines:L},b); }
@@ -6596,7 +6596,7 @@ http.createServer(async (req, res) => {
         const adminsA = await db(`employee?select=id&active=is.true&role=eq.admin`);
         notify("afterhours.claimed", [...new Set([approved_by, ...adminsA.map((a) => a.id)])],
           `After hours: ${me2 ? me2.first_name + " " + ((me2.last_name || "")[0] || "") + "." : "someone"} clocked in`,
-          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved. Plan: ${String(ah_plan).trim()}. Confirm from the cockpit.`, "/manager");
+          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved. Plan: ${String(ah_plan).trim()}. Confirm from the Manager console.`, "/manager");
       }
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
@@ -7558,7 +7558,7 @@ http.createServer(async (req, res) => {
       const mgrsI99 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
         `ORDER ${b.order_number} — ready for inspection`,
-        `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the cockpit: sign off, or send it back with a reason and hours.`, "/manager");
+        `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the Manager console: sign off, or send it back with a reason and hours.`, "/manager");
       // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
@@ -8661,8 +8661,8 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/notify/samples" && req.method === "POST") {
       const [adminId118, fail118] = await requireAdmin(); if (fail118) return fail118;
       const set117 = [
-        ["build.ready_inspection", "ORDER 23417 — ready for inspection", "Production finished its checklist on Line 1. Sign off in the Manager cockpit, or send it back with a reason.", "/manager"],
-        ["afterhours.claimed", "After hours: Jonathan is clocking in", "Reason: Making up hours — plan: finish crating 23445. Confirm in the cockpit if this is approved.", "/manager"],
+        ["build.ready_inspection", "ORDER 23417 — ready for inspection", "Production finished its checklist on Line 1. Sign off in the Manager console, or send it back with a reason.", "/manager"],
+        ["afterhours.claimed", "After hours: Jonathan is clocking in", "Reason: Making up hours — plan: finish crating 23445. Confirm in the Manager console if this is approved.", "/manager"],
         ["afterhours.wrapped", "After hours ended: Jonathan, 2.1h", "Wrap note: \"Finished the crate, swept bay 2.\" 1 photo attached. An ADMIN signs off in the Admin console before the hours count.", "/admin"],
         ["build.promise_conflict", "ORDER 23536 — can't make the sold ship date", "The math says this cab finishes after the date it was sold to ship. Day one is the time to re-plan or re-promise.", "/order/23536"],
         ["pace.warn", "Line 2: TEST-23702 needs help", "This cab just crossed into RED — it's 4.5 hours behind its checklist. A look now beats a surprise at 4pm.", "/board"],
