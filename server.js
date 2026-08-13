@@ -647,7 +647,12 @@ async function sweepForgottenClockOuts() {
       const end = dayEndOf(inMs, hrsS.close);
       // Clock-in AFTER day end (opt-in Saturday / evening, Q82): give that
       // stint its own day-end at +8h so it can never run forever either.
-      const closeAt = inMs >= end ? inMs + 8 * 3600000 : end;
+      // v148 (owner-rep): NOBODY crosses midnight — an evening stint closes at
+      // +8h OR 11:59 PM of its own Phoenix day, whichever comes first, so no
+      // punch pair can ever straddle a day and the timecard math never sees an
+      // overnight span (M2 closed structurally).
+      const mid148 = Math.floor((inMs - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS + (23 * 60 + 59) * 60000;
+      const closeAt = Math.min(inMs >= end ? inMs + 8 * 3600000 : end, mid148);
       if (now < closeAt + SWEEP_GRACE_MS) continue; // still plausibly working — leave it
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: ev.employee_id, line_id: ev.line_id, kind: "clock_out_auto",
@@ -672,6 +677,18 @@ async function sweepForgottenClockOuts() {
             `After hours auto-closed — ${whoAh107 ? whoAh107.first_name : "?"} left no wrap-up`,
             "The session closed itself at day end with no wrap-up note. Its hours are HELD off the timecard until an ADMIN signs off in the Admin console.", "/manager");
         } catch (e) { console.error("ah sweep notify failed:", e.message); }
+      } else {
+        // v148 (owner-rep): EVERY system clock-out tells the admins — the machine
+        // closed the day, a human should glance before payroll. (An after-hours
+        // auto-close already sends its own held-hours notice above.)
+        try {
+          const [whoA148] = await db(`employee?select=first_name,last_name&id=eq.${ev.employee_id}`);
+          const admins148 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+          notify("clock.auto_out", admins148.map((a) => a.id),
+            `System clocked out ${whoA148 ? whoA148.first_name + " " + ((whoA148.last_name || "")[0] || "") + "." : "someone"}`,
+            `No clock-out was recorded — the day closed it at ${phxHHMM(new Date(closeAt).toISOString())}. Worth a glance before payroll; fix the punches if the time is wrong.`,
+            `/manager?tc_emp=${ev.employee_id}&tc_date=${phxDate(new Date(ev.claimed_at).getTime())}#timecorrections`);
+        } catch (e) { console.error("auto-out notify failed:", e.message); }
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
     }
@@ -3619,7 +3636,7 @@ async function reportData(startMs, endMs) {
     const t = new Date(ev.claimed_at).getTime();
     if (t < sinceMs || t > winEnd) continue;
     const row = tcMap[ev.employee_id + "|" + phxDate(t)]; if (!row) continue;
-    if (ev.kind === "clock_out_auto") row.flags.add("auto-closed");
+    if (ev.kind === "clock_out_auto") { row.flags.add("auto-closed"); row.tcfix = `/manager?tc_emp=${ev.employee_id}&tc_date=${phxDate(t)}#timecorrections`; }   // v148: flag -> one-tap fix
     if (ev.reason && !["End of shift", "End of day", "Lunch", "Switched lines", "Switched to a fix job", "Done with the fix", "Fix finished"].includes(ev.reason)) row.flags.add(ev.reason);
   }
   // Q112 + block 107: after-hours sessions stamp their timecard rows — and a
@@ -3821,7 +3838,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
       ${d.labor.map((r, i) => { const days = d.timecards.filter((t) => t.name === r.name); return `<tr class="drow" onclick="dtoggle('dl${i}')"><td>▸ ${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>
       <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Paid</th><th class="num">Shop</th><th class="num">Fix</th><th>Notes</th></tr>
-        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
+        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Coaching and coverage view — never shown on the floor board (file 12 privacy rule).</div>`
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
@@ -3829,7 +3846,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
     <a class="csv" href="/reports.csv?which=timecards&${d.qs}">⬇ CSV</a>
     <h3>Timecards — payroll (Q111)</h3>
     ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th class="num">Fix work</th><th>Notes</th></tr>
-      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}</td></tr>`).join("")}</table>
+      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Paid = time on the clock (lunch is already out; waiting on a kit stays in). Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. Fix work = paid hours on a returned/kickback cab, tied to that order. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
     : `<div style="opacity:.6">No punches in this period.</div>`}
   </div>
@@ -5319,7 +5336,14 @@ async function payrollData(startMs, endMs) {
     return { id: e.id, name: `${e.first_name} ${e.last_name}`, reg, ot, sick, unpaid, ahx, total: reg + ot + sick + unpaid, byDay };
   }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || r.ahx || Object.keys(r.byDay).length);
   const totals = rows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, ahx: 0, total: 0 });
-  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes };
+  // v148 (owner-rep): every SYSTEM clock-out in the window gets a named note on
+  // payroll's sheet — the machine closed someone's day, a human should glance
+  // at it before the pay run (and can fix the punches in one tap).
+  const auto148 = await db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`);
+  const autoNotes = auto148.map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
+    name: nmP111[a.employee_id] || "?", date: d148, at: phxHHMM(a.claimed_at),
+    link: `/manager?tc_emp=${a.employee_id}&tc_date=${d148}#timecorrections` }; });
+  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes, autoNotes };
 }
 function payrollPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -5374,6 +5398,10 @@ function payrollPage(d) {
     <h3>After-hours not counted <span class="muted" style="font-weight:400;font-size:.85rem">(excluded from the hours above)</span></h3>
     ${d.ahNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${esc(n.date)} · ${h1(n.hrs)}h — ${n.declined ? `<span class="up">${esc(n.note)}</span>` : `<span class="ot">${esc(n.note)}</span>`}</div>`).join("")}
   </div>` : ""}
+  ${(d.autoNotes || []).length ? `<div class="lane" style="border-color:#7a5900">
+    <h3>System clock-outs <span class="muted" style="font-weight:400;font-size:.85rem">(no clock-out was recorded — the day closed it; check before payroll)</span></h3>
+    ${d.autoNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${esc(n.date)} · closed at ${esc(n.at)} <a href="${n.link}" style="color:#8e8e93;margin-left:10px">Fix punches</a></div>`).join("")}
+  </div>` : ""}
   <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here.</p>
 </div></body></html>`;
 }
@@ -5389,6 +5417,11 @@ function payrollCsv(d) {
     L.push(""); L.push(q("After-hours not counted (excluded from hours above)"));
     L.push(["Employee", "Date", "Hours", "Status"].map(q).join(","));
     for (const n of d.ahNotes) L.push([n.name, n.date, h1(n.hrs), n.note].map(q).join(","));
+  }
+  if ((d.autoNotes || []).length) {
+    L.push(""); L.push(q("System clock-outs (no clock-out recorded — day auto-closed; verify before payroll)"));
+    L.push(["Employee", "Date", "Auto-closed at"].map(q).join(","));
+    for (const n of d.autoNotes) L.push([n.name, n.date, n.at].map(q).join(","));
   }
   L.push(""); L.push(""); L.push(q("Day-by-day detail"));
   L.push(["Employee", "Date", "Weekday", "Worked", "Regular", "Overtime", "Sick", "Unpaid"].map(q).join(","));
@@ -7926,6 +7959,11 @@ http.createServer(async (req, res) => {
         if (!Number.isFinite(toMs)) return json(400, { ok: false, error: "Bad time" });
         if (toMs > nowP) return json(400, { ok: false, error: "Can't punch the future" });
         if (tooOld(fromMs) || tooOld(toMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        // v148: a punch stays on its own Phoenix day (days end at 11:59 PM), so
+        // a move can never drag half a pair across midnight. Wrong day entirely?
+        // Void the pair and re-add it on the right date.
+        if (phxDate(toMs) !== phxDate(fromMs))
+          return json(400, { ok: false, error: "A punch stays on its own day — days end at 11:59 PM. To move a stint to another day, void the pair and re-add it" });
         const moved = { id: p.id, kind: p.kind, claimed_at: new Date(toMs).toISOString() };
         let sane = await daySane(p.employee_id, toMs, (evs) => [...evs.filter((e) => e.id !== p.id), moved]);
         if (sane && phxDate(toMs) !== phxDate(fromMs))
@@ -7944,6 +7982,21 @@ http.createServer(async (req, res) => {
         if (tooOld(atMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
         const sane = await daySane(p.employee_id, atMs, (evs) => evs.filter((e) => e.id !== p.id));
         if (!sane) return json(400, { ok: false, error: "Voiding that would tangle the day — fix its partner too" });
+        // v148 (M2): the one tangle the DAY window can't see — voiding an OUT can
+        // leave its IN dangling OPEN (ghost "on the clock", hours balloon or
+        // vanish, the sweeper may re-close the stint fatter). Rule: a void may
+        // never leave a PAST day ending in an open clock-in, and never splice
+        // two clock-ins together. Erasing a whole past stint: void its IN
+        // first, then the OUT. Fixing a wrong time: that's Move.
+        if (p.kind !== "clock_in") {
+          const [prevV] = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=lt.${p.claimed_at}&order=claimed_at.desc&limit=1`);
+          const [nextV] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=gt.${p.claimed_at}&order=claimed_at.asc&limit=1`);
+          const prevIn148 = prevV && prevV.kind === "clock_in";
+          if (prevIn148 && nextV && nextV.kind === "clock_in")
+            return json(400, { ok: false, error: "That would splice two clock-ins together — to erase the stint, void its clock-in first, then this one; to fix a wrong time, use Move" });
+          if (prevIn148 && !nextV && phxDate(new Date(prevV.claimed_at).getTime()) !== phxDate(nowP))
+            return json(400, { ok: false, error: `That would leave ${phxDate(new Date(prevV.claimed_at).getTime())} ending in an open clock-in — void its clock-in first, then this one (or use Move to fix the time)` });
+        }
         await db(`clock_event?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({
           voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.voided", meId, { punch_id: p.id, employee_id: p.employee_id, at: p.claimed_at, note });
@@ -7955,6 +8008,9 @@ http.createServer(async (req, res) => {
         if (!Number.isFinite(inMs) || (out_at && !Number.isFinite(outMs))) return json(400, { ok: false, error: "Bad time" });
         if (inMs > nowP || (outMs && outMs > nowP)) return json(400, { ok: false, error: "Can't punch the future" });
         if (outMs && outMs <= inMs) return json(400, { ok: false, error: "OUT has to come after IN" });
+        // v148: days end at 11:59 PM — no pair may straddle Phoenix midnight.
+        if (outMs && phxDate(outMs) !== phxDate(inMs))
+          return json(400, { ok: false, error: "Days end at 11:59 PM — enter each day as its own IN and OUT" });
         if (tooOld(inMs)) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
         if (!outMs && phxDate(inMs) !== phxDate(nowP)) return json(400, { ok: false, error: "A past day needs BOTH times — an open punch only makes sense today" });
         // (kind must satisfy the DB's check: out-kinds are _shift/_lunch/_early/_auto —
