@@ -1929,7 +1929,13 @@ const boardPage = (tv98 = false) => `<!doctype html>
        left-hand UPCOMING rail; the staff board (phones / iPads) tiles the
        LINES first, full width, and the upcoming queue reads BELOW them. -->
   ${tv98 ? `<div style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
-    <div id="rail" style="padding:12px 4px 12px 16px"></div>
+    <!-- Block 155 (owner-rep D9): the rail is a CLIPPED viewport that slowly
+         auto-scrolls and loops, so every line's upcoming cabs cycle into
+         view no matter how long the queue gets. Height reserves the top
+         header and the legend strip. -->
+    <div id="railview" style="overflow:hidden;height:calc(100vh - 188px)">
+      <div id="rail" style="padding:12px 4px 12px 16px"></div>
+    </div>
     <div class="board" id="board"></div>
   </div>` : `<div class="board" id="board"></div>
   <div id="rail" style="padding:6px 26px 30px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:0 20px;align-items:start"></div>`}
@@ -1938,7 +1944,10 @@ const boardPage = (tv98 = false) => `<!doctype html>
   <!-- Block 101b (owner-rep): the pinned legend sat ON TOP of the queue on
        tablets/phones. TV keeps the fixed corners (nothing scrolls there); the
        staff board's legend + stamp join the page flow below the content. -->
-  <div style="${tv98 ? "position:fixed;bottom:12px;left:18px;" : "padding:12px 18px 4px;text-align:center;"}font-size:.9rem;opacity:.75">
+  <!-- Block 155 (owner-rep D9): the TV legend gets its OWN full-width strip
+       (background + top border) instead of floating over the rail — content
+       can never sit under it, and the rail viewport stops above it. -->
+  <div style="${tv98 ? "position:fixed;bottom:0;left:0;right:0;padding:14px 18px;background:#0b0b0d;border-top:1px solid #1f1f22;z-index:5;" : "padding:12px 18px 4px;text-align:center;"}font-size:.9rem;opacity:.75">
     <span style="color:#30d158">■</span> on pace &nbsp;
     <span style="color:#ffd60a">■</span> running behind &nbsp;
     <span style="color:#ff453a">■</span> needs help &nbsp;
@@ -1947,7 +1956,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
     <a href="/home" style="color:#8e8e93">&#8962; Home</a> &nbsp;·&nbsp;
     <a href="/logout" style="color:#8e8e93">Sign out</a>`}
   </div>
-  ${tv98 ? `<div class="stamp" id="stamp"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
+  ${tv98 ? `<style>body{padding-bottom:56px}</style><div class="stamp" id="stamp" style="z-index:6"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
   <!-- Q86: TV SLEEP overlay — a near-black dim screen shown outside working
        hours / on closed days (burn-in + power). Tap anywhere to peek for 20s. -->
   <div id="sleep" style="display:none;position:fixed;inset:0;background:#000;z-index:9999;text-align:center;cursor:pointer" onclick="peek()">
@@ -2017,6 +2026,20 @@ const boardPage = (tv98 = false) => `<!doctype html>
       lastState = s; applySleep(s);
     }catch(e){ /* board never crashes; next poll retries */ }
   }
+  // Block 155 (owner-rep D9): the rail's slow loop — 1px per 60ms (~17px/s),
+  // hold 5s at the bottom, snap to the top, hold 5s, repeat. Runs only when
+  // the queue actually overflows the viewport; a re-render keeps the scroll
+  // position because only the rail's children change, not the viewport.
+  var railHold155 = 0, railAtEnd155 = false;
+  if (TVMODE) setInterval(function(){
+    var v = document.getElementById("railview"); if (!v) return;
+    var max = v.scrollHeight - v.clientHeight;
+    if (max <= 4) { v.scrollTop = 0; railAtEnd155 = false; return; }
+    var now = Date.now(); if (now < railHold155) return;
+    if (railAtEnd155) { v.scrollTop = 0; railAtEnd155 = false; railHold155 = now + 5000; return; }
+    v.scrollTop += 1;
+    if (v.scrollTop >= max - 1) { railAtEnd155 = true; railHold155 = now + 5000; }
+  }, 60);
   // Q86: TV sleep overlay control. The server says whether the board should be
   // asleep (outside hours / closed day); a tap peeks for 20s. A dim, slowly
   // drifting clock keeps it low-power and burn-in-safe.
