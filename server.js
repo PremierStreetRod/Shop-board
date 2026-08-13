@@ -1148,6 +1148,44 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   document.addEventListener("click", (e) => { const fx = e.target.closest("[data-fixclaim]"); if (fx) act("/api/fix/claim", { build_id: fx.dataset.fixclaim }); });
 </script></body></html>`;
 
+// Block 138 (owner-rep ruling, B1): THE FLOOR NEVER SEES MONEY. A Coyote
+// order note is split on its own line breaks (and dot/semicolon separators)
+// and any clause carrying a money signal is dropped before a production
+// surface renders it. Managers/admins and the canFull tier (Warehouse /
+// Accounting / office) always see the verbatim note. When money is welded
+// into the same line as shop info, the whole line dies — leak-proof default.
+const SPLIT138 = /[\n\r]+|\s*[\u00b7;|]\s*/;
+const MONEY138 = /\$|\b(deposit|discount|fee|fees|savings|payment|payments|pay|paid|prepaid|owes?|owed|balance|bill|billing|invoice|invoiced|price|priced|pricing|cost|costs|charge|charged|charges|quote|quoted|refund|refunded|wire|financed?|financing)\b|\d+\s*%\s*down\b|\bdown\s+payment\b/i;
+function scrubMoney138(text) {
+  if (!text) return "";
+  return String(text).split(SPLIT138).map((s) => s.trim()).filter((s) => s && !MONEY138.test(s)).join(" \u00b7 ");
+}
+// Block 138 (owner-rep, B1): NOTE TRIAGE — each non-money line of the order
+// note becomes a needs-a-ruling item (option_flag kind 'note') a manager
+// routes with one tap: production hours, Body/Build push-along, or no
+// action. Money lines are office matter and never prompt. Idempotent per
+// line — a re-push or note edit only surfaces NEW lines; ruled lines keep
+// their ruling.
+async function noteTriage138(buildId, noteText, orderNumber) {
+  const lines = String(noteText || "").split(SPLIT138).map((s) => s.trim()).filter((s) => s && !MONEY138.test(s));
+  if (!lines.length) return 0;
+  const have = await db(`option_flag?select=flag_text&build_id=eq.${buildId}&kind=eq.note`);
+  const seen = new Set(have.map((f) => f.flag_text));
+  let added = 0;
+  for (const ln of lines) {
+    if (seen.has(ln)) continue;
+    await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: buildId, kind: "note", flag_text: ln.slice(0, 300) }) });
+    added++;
+  }
+  if (added) {
+    const adm = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    notify("note.triage", adm, `Order ${orderNumber}: ${added} order-note item${added === 1 ? "" : "s"} need a ruling`,
+      "The order note has lines a human should route — production hours, Body/Build push-along, or no action. Open the order to rule on them.", "/order/" + encodeURIComponent(orderNumber));
+    logEvent("note.triage", null, { build_id: buildId, order_number: orderNumber, added });
+  }
+  return added;
+}
+
 // THE CAB TASK SCREEN — shown to a clocked-in Production tech/manager.
 // One cab front-center (Q90: ORDER # + LINE is the identity), Mike's
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
@@ -1202,7 +1240,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
     <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
   </div>
-  ${build.note_flagged && build.invoice_note ? `<div class="note">⚠ ORDER NOTE: ${build.invoice_note}</div>` : ""}
+  ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor -->
   ${inRework ? `
   <!-- REWORK BANNER (files 11/18): the manager sent this cab back with a
        reason + a time frame. The fix tasks sit in the REWORK group below
@@ -2047,6 +2085,9 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
   };
 }
 const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0) => {
+  // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
+  // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
+  const note138 = (x) => canFull ? String(x == null ? "" : x) : scrubMoney138(x);
   const real = tasks.filter((t) => !t.is_background);
   // Block 124 (logic audit L4): "standard hours" counts only the real
   // (non-background) steps — the finish gate ignores background steps, so a
@@ -2079,7 +2120,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
     ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
-    ${b.invoice_note && !(detail && detail.order.note) ? `<div class="kv"><b>Invoice note</b>${escH(b.invoice_note)}</div>` : ""}
+    ${(() => { const n138 = note138(b.invoice_note); return n138 && !(detail && detail.order.note) ? `<div class="kv"><b>Invoice note</b>${escH(n138)}</div>` : ""; })()}
   </div>
   ${detail ? `<div class="lane">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">OWNER</div>
@@ -2099,12 +2140,13 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   </div>
   ${detail.addons.length ? `<div class="lane"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD-ONS &amp; EXTRAS</div>${detail.addons.map((a) => `<div style="padding:3px 0;font-size:1.03rem">&#9656; ${escH(a.desc)}</div>`).join("")}</div>` : ""}` : ""}
   ${flags.length ? `<div class="lane" style="border-color:#ffd60a">
-    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; UPGRADE WORK NEEDING HOURS</div>
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS A RULING \u2014 UPGRADE HOURS &amp; NOTE ITEMS</div>
     ${canHours
-      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : "option not in library"})</span><br>
+      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : "option not in library"})</span><br>
         Hrs <input id="fh-${f.id}" style="width:64px"> Day <input id="fd-${f.id}" style="width:50px" value="1"> Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
         <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button>
-        <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this)">Not production</button></div>`).join("")
+        <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'body_build')">Body/Build \u2014 push along</button>
+        <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'none')">No action</button></div>`).join("")
       : `<div style="opacity:.75">${flags.length} item${flags.length === 1 ? "" : "s"} awaiting hours from the front office — the clock does not include them yet.</div>`}
   </div>` : ""}
   ${canHours ? `<div class="lane">
@@ -2123,7 +2165,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
        way, and the whole lane disappears when it truly has nothing to say. -->
   ${(() => {
     const opts = tasks.filter((t) => t.source === "option");
-    const cnote = detail && detail.order.note ? detail.order.note : "";
+    const cnote = note138(detail && detail.order.note ? detail.order.note : "");   // Block 138: scrubbed for the floor
     if (!opts.length && !cnote) return "";
     const above = opts.length
       ? opts.map((o) => `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(o.name)} <span style="opacity:.5">(+${Number(o.man_hours)}h)</span></div>`).join("")
@@ -2155,12 +2197,12 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   // Block 104c: one tap routes a custom OUT of production scope — the work is
   // Build/Body's or ships with the order. Resolves the flag, adds NO cab
   // hours, and the routing is stored for the future Build-department board.
-  function notProd104(bid, fid, btn){
+  function notProd104(bid, fid, btn, scope138){
     if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o104 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o104; }, 4000); return; }
     btn.disabled = true;
     fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ build_id: bid, flag_id: fid, hours: 0, day_no: 1, scope: "other",
-        reason: "Not production — handled by Build/Body or ships with the order" }) })
+      body: JSON.stringify({ build_id: bid, flag_id: fid, hours: 0, day_no: 1, scope: scope138 || "other",
+        reason: scope138 === "body_build" ? "Pushed along — Build/Body work, not the production floor" : "No action — nothing for the floor" }) })
       .then(function(r){ return r.json(); })
       .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
       .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; });
@@ -4985,7 +5027,10 @@ async function syncRun(apply, actorId) {
           sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state, cab: cn });
         } else if (b.started_at) {
           const patch = {};
-          if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch.invoice_note = t.invoice_note; patch.note_flagged = t.note_flagged; }
+          if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch.invoice_note = t.invoice_note; patch.note_flagged = t.note_flagged;
+            // Block 138: a changed note re-triages — NEW non-money lines become
+            // needs-a-ruling items; already-ruled lines keep their ruling.
+            if (apply) { try { await noteTriage138(b.id, t.invoice_note, t.order_number); } catch (e138) { console.error("note triage:", (e138 && e138.message) || e138); } } }
           if ((b.customer_name || "") !== (t.customer_name || "")) patch.customer_name = t.customer_name;
           if ((b.destination || "") !== (t.destination || "")) patch.destination = t.destination;
           // Block 120 (owner-rep): a STARTED cab never leaves its spot on a
@@ -5605,6 +5650,12 @@ async function freezeAndStart(b, empId, startedAt) {
       }
     }
   } catch (e94) { logEvent("option.freeze_error", null, { build_id: b.id, error: String((e94 && e94.message) || e94) }); }
+  // Block 138 (owner-rep, B1): triage the order note the moment the cab
+  // starts — non-money lines become needs-a-ruling items. Never blocks a start.
+  try {
+    const [bn138] = await db(`build?select=invoice_note&id=eq.${b.id}`);
+    if (bn138 && bn138.invoice_note) await noteTriage138(b.id, bn138.invoice_note, b.order_number);
+  } catch (e138) { logEvent("note.triage_error", null, { build_id: b.id, error: String((e138 && e138.message) || e138) }); }
   // Block 103: THE PROMISE — computed the moment the cab starts, from its FULL
   // frozen hours (stock + upgrades) over the family's own day budget (template
   // man-hours / template days — the crew basis is baked in) counted across
@@ -8528,7 +8579,8 @@ self.addEventListener("notificationclick", (e) => {
       if (!zeroFlag104) await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
         name: "EXTRA — " + reason, day_no: day, man_hours: hrs, is_background: false,
         source: "manual", state: "not_started", sort_order: 9500 }) });
-      const scope104 = zeroFlag104 ? (String(p.scope || "") === "other" ? "other" : "none") : "production";
+      const s138 = String(p.scope || "");   // Block 138: body_build = pushed along (kept for the future dept boards); none = no action
+      const scope104 = zeroFlag104 ? (s138 === "other" || s138 === "body_build" ? s138 : "none") : "production";
       if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true, scope: scope104 }) });
       logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, day_no: day, reason, flag_id: p.flag_id || null, scope: scope104 });
       return json(200, { ok: true });
