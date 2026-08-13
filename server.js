@@ -1405,7 +1405,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       // Block 159 (owner-rep F1): the soft cap's nudge. OK starts it anyway
       // (the server logs the override for the manager); Cancel leaves it be.
       if (out.nudge159) {
-        if (confirm(out.error + "\n\nOK starts it anyway — the manager sees the count.")) {
+        if (confirm(out.error + "\\n\\nOK starts it anyway — the manager sees the count.")) {
           const out2 = await sbPost("/api/task/state",
             { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString(), confirm159: true },
             (m) => { err.textContent = m; });
