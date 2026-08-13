@@ -675,12 +675,17 @@ async function sweepForgottenClockOuts() {
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
     }
-    // Q83: "Down for today" holds auto-clear when the calendar day rolls —
-    // a hold set yesterday must not silence today's genuinely-empty line.
-    // (PHX is UTC-7 fixed, Q82; same midnight formula dayEndOf uses.)
+    // Block 133 (logic audit L9): a down is now a TIMED, reasoned hold that
+    // persists until a manager lifts it or a production role clocks in — it no
+    // longer auto-clears at the day roll (it PAUSES overnight and resumes at open,
+    // computed from shop hours). Only an ORPHAN hold with no open timed record
+    // (e.g. a legacy quick-hold from before this change) still gets the old
+    // stale-clear, so nothing can stick silently forever.
     const phxMidToday = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
     const staleDown = await db(`line?select=id&down_today=is.true&down_at=lt.${new Date(phxMidToday).toISOString()}`);
     for (const ln of staleDown) {
+      const openRec133 = await db(`line_down?select=id&line_id=eq.${ln.id}&up_at=is.null&limit=1`);
+      if (openRec133.length) continue;   // a live timed hold — leave it up across the roll
       await db(`line?id=eq.${ln.id}`, { method: "PATCH", body: JSON.stringify({
         down_today: false, down_reason: null, down_by: null, down_at: null }) });
       logEvent("line.down_cleared", null, { line_id: ln.id, cause: "day_roll" });
@@ -1930,7 +1935,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
-          : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today — " + l.down.reason : "Idle line"}</div>\`}
+          : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today" : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
             ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\`
             : "ON DECK: — nothing queued"}</div>
@@ -2434,13 +2439,16 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <!-- Q83: "Down for today" quick-hold — expected-idle only (no active cab,
            not hard-closed). Down = calm slate on the TV + quiet alerts. -->
       ${r.line.down_today
-        ? `<div style="margin:-4px 0 8px;font-size:.85rem;color:#9db4c8">Down for today — ${r.line.down_reason}
+        ? `<div style="margin:-4px 0 8px;font-size:.85rem;color:#9db4c8">Down — ${r.line.down_reason}
              <button class="btn gray" style="padding:4px 10px;margin-left:8px" onclick="lineDown(${r.line.id},false,null)">Back up</button></div>`
-        : (!r.active && !r.line.manually_closed
-          ? `<div style="margin:-4px 0 8px;font-size:.85rem">
-               <select id="dr-${r.line.id}" style="padding:4px">${downReasons.map((d) => `<option>${d}</option>`).join("")}</select>
-               <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Down for today</button></div>`
-          : "")}
+        : (r.line.manually_closed ? ""
+          : `<!-- Block 133 (logic audit L9): a line can be put DOWN whether or not a
+                  cab is running (a production role out sick/vacation). The manager
+                  TYPES the reason (no pick-list) — it rides with the order and the
+                  hold is timed until Back up or a production clock-in. -->
+             <div style="margin:-4px 0 8px;font-size:.85rem">
+               <input id="dr-${r.line.id}" placeholder="Why down? (rides with the order)" maxlength="120" style="padding:5px;width:58%;min-width:210px;background:#111;color:#fff;border:1px solid var(--line);border-radius:6px">
+               <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Put line down</button></div>`)}
       ${(r.awaiting || []).map((w) => `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
@@ -2468,6 +2476,10 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         </div>`).join("")}
       ${r.active ? `
         <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active${proj[r.active.order_number] ? ` · ${projPhrase(proj[r.active.order_number])}` : ""}</div>
+        ${(r.active.downs && r.active.downs.length) ? `<div style="margin:4px 0;padding:6px 8px;border-left:3px solid #9db4c8;background:#151a1f;border-radius:6px;font-size:.85rem;color:#c8d6e2">
+          ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
+          ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
+        </div>` : ""}
         <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
       : `<div style="opacity:.6">No active cab</div>
         ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
@@ -5411,6 +5423,57 @@ async function revertStrandedPull(lineId, actorId) {
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
 // tap (the normal way now) and the manager's manual override. Freezes the
 // template into the cab's own task list (Q97) and stamps the start.
+// ---------- Block 133 (logic audit L9): line "down" with a live/held cab ----------
+// Owner-rep ruling: a manager may put a line DOWN even with a cab running (a tech
+// out). The manager TYPES a reason; it rides with the order and the down is TIMED.
+// Because pace/day math is pure clocked-labor (no wall clock ticks against an idle
+// cab), the hold pauses the cab's production time on its own — this just records
+// and reports it. The hold PAUSES outside shop hours and persists across days
+// until a manager lifts it OR a production role clocks in. Warehouse may DELIVER a
+// kit to a down line, but the clock does NOT start — the cab waits for resume.
+
+// Working-time overlap of [downMs,upMs] with shop-open windows (Q113 hours, Q91
+// calendar): closed hours + non-work days never count, so an overnight hold
+// pauses at close and resumes at open. ovMap = calendarOverrides() result.
+function downWorkingMs(downMs, upMs, hrs, ovMap) {
+  if (!(upMs > downMs)) return 0;
+  let total = 0;
+  let dayMid = Math.floor((downMs - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+  const lastMid = Math.floor((upMs - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
+  for (; dayMid <= lastMid; dayMid += 86400000) {
+    const dateStr = new Date(dayMid).toISOString().slice(0, 10);
+    let work;
+    if (dateStr in ovMap) work = ovMap[dateStr];
+    else { const dow = new Date(dateStr + "T12:00:00Z").getUTCDay(); work = dow >= 1 && dow <= 5; }
+    if (!work) continue;
+    const s = Math.max(downMs, dayMid + hrs.open * 3600000);
+    const e = Math.min(upMs, dayMid + hrs.close * 3600000);
+    if (e > s) total += e - s;
+  }
+  return total;
+}
+
+// Close every OPEN (up_at null) hold on a line — the resume stamps end + who/cause.
+async function closeOpenDowns(lineId, actorId, cause) {
+  await db(`line_down?line_id=eq.${lineId}&up_at=is.null`, { method: "PATCH",
+    body: JSON.stringify({ up_at: new Date().toISOString(), up_by: actorId || null, up_cause: cause }) });
+}
+
+// When a down line comes back up, START the cab whose kit warehouse already
+// delivered while it was held (state still upcoming, kit_delivered_at set, not
+// yet started). Only the on-deck cab can be in that state (L5/L6 gates), so there
+// is at most one. The clock starts NOW — never backdated to the drop. A defensive
+// clash guard keeps the one-active-per-line invariant.
+async function startDeliveredWaiting(lineId, actorId) {
+  const clash = await db(`build?select=id&line_id=eq.${lineId}&state=in.(active,awaiting_inspection,rework)&limit=1`);
+  if (clash.length) return;
+  const waiting = await db(`build?select=id,part_number,order_number,coyote_root&line_id=eq.${lineId}&state=eq.upcoming&kit_delivered_at=not.is.null&started_at=is.null&order=queue_pos.asc.nullslast,created_at.asc&limit=1`);
+  if (!waiting.length) return;
+  const w = waiting[0];
+  await freezeAndStart(w, actorId, new Date().toISOString());
+  logEvent("build.started_after_down", actorId, { build_id: w.id, order_number: w.order_number, line_id: lineId });
+}
+
 async function freezeAndStart(b, empId, startedAt) {
   await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt, queue_pinned: false }) });
   const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
@@ -6274,9 +6337,13 @@ http.createServer(async (req, res) => {
       // Q83/Q84: clocking into a line held "down for today" resumes it —
       // working-while-held is impossible, so the hold releases itself.
       if (lnGate && lnGate.down_today) {
+        await closeOpenDowns(line_id, empId, "clock_in");
         await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
           down_today: false, down_reason: null, down_by: null, down_at: null }) });
         logEvent("line.down_resumed", empId, { line_id, cause: "clock_in" });
+        // Block 133 (L9): a production clock-in resumes a held line — start any
+        // cab whose kit warehouse dropped while the line was down.
+        await startDeliveredWaiting(line_id, empId);
       }
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
       const hrsIn = await shopHours();
@@ -6796,6 +6863,34 @@ http.createServer(async (req, res) => {
           .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming")
           .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
+      // Block 133 (logic audit L9): a line put DOWN with a live/held cab carries a
+      // TYPED reason that rides with the ORDER + a TIMED hold (paused outside shop
+      // hours). Load each active cab's down history, total the WORKING minutes the
+      // hold cost, and pre-escape here (the cockpit page has no esc of its own).
+      const escM133 = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      const actIds133 = rows.map((row133) => row133.active && row133.active.id).filter(Boolean);
+      if (actIds133.length) {
+        const dnRows133 = await db(`line_down?select=build_id,reason,down_at,up_at&build_id=in.(${actIds133.join(",")})&order=down_at.asc`);
+        if (dnRows133.length) {
+          const hrs133 = await shopHours();
+          const ov133 = await calendarOverrides();
+          const fmtMin133 = (mins) => { const m = Math.max(0, Math.round(mins)); const h = Math.floor(m / 60), rm = m % 60; return h ? `${h}h ${rm}m` : `${rm}m`; };
+          const byB133 = {};
+          for (const d of dnRows133) {
+            const upMs = d.up_at ? new Date(d.up_at).getTime() : Date.now();
+            const mins = downWorkingMs(new Date(d.down_at).getTime(), upMs, hrs133, ov133) / 60000;
+            (byB133[d.build_id] = byB133[d.build_id] || []).push({ open: !d.up_at, mins, reason: d.reason || "" });
+          }
+          for (const row133 of rows) {
+            if (!row133.active || !byB133[row133.active.id]) continue;
+            const list133 = byB133[row133.active.id];
+            row133.active.downs = list133.map((d) => ({ open: d.open, label: `${fmtMin133(d.mins)} · ${escM133(d.reason)}` }));
+            row133.active.downTotalLabel = list133.length > 1 ? fmtMin133(list133.reduce((s, d) => s + d.mins, 0)) : null;
+          }
+        }
+      }
+      // L9: escape the raw typed down reason for the line header/badge too.
+      for (const row133 of rows) if (row133.line && row133.line.down_reason) row133.line = { ...row133.line, down_reason: escM133(row133.line.down_reason) };
       // Q107: two quiet watchdogs over the working cabs' tasks.
       //   LONG-RUNNERS — a step In Progress 4+ hrs with no completion. Zero
       //   crew taps required; the manager glances, sees who started it and
@@ -7588,15 +7683,26 @@ http.createServer(async (req, res) => {
       // signed off — active / awaiting_inspection / rework all hold it.
       const clashW = await db(`build?select=id,order_number,state&line_id=eq.${b.line_id}&state=in.(active,awaiting_inspection,rework)&limit=1`);
       if (clashW.length) return json(400, { ok: false, error: `That line still has ORDER ${clashW[0].order_number} on it (${String(clashW[0].state).replace(/_/g, " ")}) — it stays until a manager signs it off.` });
-      // Q113: a manually-closed line takes no new cabs.
-      const [lnGateD] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
+      // Q113: a manually-closed line takes no new cabs. Q83/L9: read the down
+      // hold too — a down line still takes the kit drop but NOT the clock.
+      const [lnGateD] = await db(`line?select=manually_closed,down_today&id=eq.${b.line_id}`);
       if (lnGateD && lnGateD.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — reopen it first" });
       const when = claimed_at || new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         kit_delivered_at: when, kit_delivered_by: whoId }) });
-      await freezeAndStart(b, whoId, when);
       const pullMin = Math.round((new Date(when) - new Date(b.kit_pull_started_at)) / 60000);
+      if (lnGateD && lnGateD.down_today) {
+        // Block 133 (logic audit L9): the line is DOWN — warehouse drops the kit
+        // nearby (delivered, warehouse is clear) but the clock does NOT start. The
+        // cab waits; it starts the moment a manager clears the down or a production
+        // role clocks in. Attach the running hold to THIS order so the down time
+        // rides with it.
+        await db(`line_down?line_id=eq.${b.line_id}&up_at=is.null&build_id=is.null`, { method: "PATCH", body: JSON.stringify({ build_id }) });
+        logEvent("kit.delivered_held", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
+        return json(200, { ok: true, held: true });
+      }
+      await freezeAndStart(b, whoId, when);
       logEvent("kit.delivered", whoId, { build_id, order_number: b.order_number, pull_minutes: pullMin });
       return json(200, { ok: true });
     }
@@ -7616,16 +7722,33 @@ http.createServer(async (req, res) => {
       const [lnD] = await db(`line?select=id,name&id=eq.${line_id}`);
       if (!lnD) return json(404, { ok: false, error: "Line not found" });
       if (down) {
-        const okReasons = await db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false`);
-        if (!reason || !okReasons.some((r) => r.label === reason))
-          return json(400, { ok: false, error: "Pick a reason" });
+        // Block 133 (logic audit L9, owner-rep ruling): a down ALWAYS carries a
+        // TYPED free-text reason (no pick-list) and opens a TIMED record that
+        // rides with whatever cab is on the line — the ACTIVE one, or a cab whose
+        // kit warehouse already delivered while the line was held. The hold pauses
+        // that cab's production time (labor-based pace accrues nothing with no one
+        // clocked in) until Back up or a production clock-in.
+        const why = String(reason || "").trim();
+        if (why.length < 2) return json(400, { ok: false, error: "Type a reason — it rides with the order" });
+        const openRec133 = await db(`line_down?select=id&line_id=eq.${line_id}&up_at=is.null&limit=1`);
+        if (!openRec133.length) {
+          const [cab133] = await db(`build?select=id,order_number&line_id=eq.${line_id}&state=in.(active,awaiting_inspection,rework)&limit=1`);
+          let held133 = cab133;
+          if (!held133) { const [w133] = await db(`build?select=id,order_number&line_id=eq.${line_id}&state=eq.upcoming&kit_delivered_at=not.is.null&started_at=is.null&order=queue_pos.asc.nullslast,created_at.asc&limit=1`); held133 = w133; }
+          await db("line_down", { method: "POST", body: JSON.stringify({
+            line_id, build_id: held133 ? held133.id : null, reason: why, down_by: empId, down_at: new Date().toISOString() }) });
+          logEvent("line.down", empId, { line_id, name: lnD.name, reason: why, order_number: held133 ? held133.order_number : null });
+        }
         await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
-          down_today: true, down_reason: reason, down_by: empId, down_at: new Date().toISOString() }) });
-        logEvent("line.down", empId, { line_id, name: lnD.name, reason });
+          down_today: true, down_reason: why, down_by: empId, down_at: new Date().toISOString() }) });
       } else {
+        // Back up (manual): close the open timed hold, clear the flag, then start
+        // any cab whose kit was delivered while the line was held.
+        await closeOpenDowns(line_id, empId, "manual");
         await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
           down_today: false, down_reason: null, down_by: null, down_at: null }) });
         logEvent("line.down_cleared", empId, { line_id, name: lnD.name, cause: "manual" });
+        await startDeliveredWaiting(line_id, empId);
       }
       return json(200, { ok: true });
     }
