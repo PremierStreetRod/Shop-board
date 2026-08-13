@@ -1560,7 +1560,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
@@ -2291,7 +2291,7 @@ const navBar95 = (isAdmin, showReports = false) => {
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager cockpit</a>
-    ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">White Board</a>` : ""}
+    ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <details class="t95" style="display:inline-block;position:relative">
@@ -5368,7 +5368,7 @@ function reconcilePage(d, role) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — White Board</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Order Queue</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
@@ -5398,7 +5398,7 @@ function reconcilePage(d, role) {
 <body><div class="wrap" style="max-width:1000px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${role === "admin" || role === "manager" ? navBar95(role === "admin") : ""}
-  <h2>White Board <span class="muted" style="font-size:.6em;font-weight:400">— the production lines${admin ? "" : " (view only)"}</span></h2>
+  <h2>Order Queue <span class="muted" style="font-size:.6em;font-weight:400">— the production lines${admin ? "" : " (view only)"}</span></h2>   <!-- Block 156 (owner-rep E1): named by Daniel -->
   <p class="muted" style="margin-top:-8px">Each line lists its cabs oldest-first — the top upcoming cab is <b>on deck</b> next. ${admin ? "Use the &#9650;&#9660; arrows to move a cab up or down the queue; type a cab its wall number and Save." : "This is a live view — the warehouse and admin control the order; it refreshes here on its own."} Changes on another screen show up here within a few seconds.</p>
   <div id="freshnote" style="display:none">The queue just changed on another screen — this page will refresh as soon as you're done typing.</div>
   <div style="margin:14px 0">
@@ -6794,6 +6794,7 @@ http.createServer(async (req, res) => {
     // /shopboard is the staff board. The old /tv and /board forward forever,
     // so nothing bookmarked or already-typed ever breaks.
     if (url.pathname === "/tv" || url.pathname === "/board") { res.writeHead(302, { Location: url.pathname === "/tv" ? "/tvboard" : "/shopboard" }); return res.end(); }
+    if (url.pathname === "/orderqueue") { res.writeHead(302, { Location: "/reconcile" }); return res.end(); }   // Block 156 (E1): the new name is typable
     if (url.pathname === "/tvboard") return send(200, "text/html; charset=utf-8", boardPage(true));
     if (url.pathname === "/shopboard") {
       const empB95 = await liveSession(req);
