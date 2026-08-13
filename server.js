@@ -2365,14 +2365,22 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- Block 99b (owner-rep): the cockpit got long — one-tap section jumps,
        same sticky pattern as the admin console. Anchors are harmless when a
        lane isn't rendered that day. -->
+  <!-- Block 153 (owner-rep D4/D5): the jump-nav mirrors the page's new order
+       and Lines is a DROPDOWN naming each line so a manager lands on the one
+       they want, not the top of the section. -->
   <div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;text-align:center;border-bottom:1px solid var(--line)">
     <a href="#oc" style="color:#fff;font-weight:700;margin-right:14px">On the clock</a>
     <a href="#rl" style="color:#fff;font-weight:700;margin-right:14px">Running long</a>
-    <a href="#lines99" style="color:#fff;font-weight:700;margin-right:14px">Lines</a>
-    <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
+    <a href="#insp153" style="color:#fff;font-weight:700;margin-right:14px">Inspection</a>
+    <details class="t95" style="display:inline-block;position:relative;margin-right:14px"><summary style="color:#fff;font-weight:700;cursor:pointer;display:inline-block;list-style:none">Lines &#9662;</summary>
+      <div style="position:absolute;left:50%;transform:translateX(-50%);top:26px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:90;min-width:180px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
+        ${rows.map((r) => `<a href="#line99-${r.line.id}" onclick="this.closest('details').open=false" style="display:block;padding:8px 14px;color:#e8e8ed;text-decoration:none">${r.line.name}</a>`).join("")}
+      </div></details>
     <a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
+    <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
     <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>
   </div>
+  <style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <h2>Manager</h2>
   ${onClock.length ? `
   <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
@@ -2417,6 +2425,32 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     </div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
   </div>` : ""}
+  ${rows.some((r) => (r.awaiting || []).length) ? `
+  <!-- Block 153 (owner-rep D2): the sign-off / send-back used to live only
+       inside each line's lane — a long scroll from the top. Every cab
+       awaiting inspection now ALSO surfaces here, one glance from the top,
+       with the SAME controls (input ids carry a T prefix so the two copies
+       never collide; sendBack takes the prefix). The per-line copy stays. -->
+  <div class="lane" style="border-color:#ffd60a" id="insp153"><h3>Needs inspection — sign off or send back</h3>
+    ${rows.flatMap((r) => (r.awaiting || []).map((w) => `
+    <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
+      <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · AWAITING INSPECTION
+      ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
+      ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
+        `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
+        : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
+      <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
+        <select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+          ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}
+        </select>
+        Hrs <input id="Trh-${w.id}" value="2" style="width:3.4em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+        <input id="Trn-${w.id}" placeholder="What needs fixing (shows on the tech's screen)"
+          style="width:100%;margin-top:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
+        <button class="btn gray" onclick="sendBack('${w.id}',this,'T')">Send back — rework</button>
+      </div>
+    </div>`)).join("")}
+  </div>` : ""}
   ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
        denial can carry a short note back to the person. Approved time shows
@@ -2427,72 +2461,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0;margin-left:8px" onclick="toDecide('${t.id}','approve',this)">Approve</button>
       <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="toDecide('${t.id}','deny',this)">Deny</button></div>`).join("")}
   </div>` : ""}
-  <!-- Q92: enter time off for anyone directly (lands already approved) + the
-       upcoming "who's out and when" list. -->
-  <div class="lane" id="to99"><h3>Time off</h3>
-    ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
-      <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
-      From <input type="date" id="toa-start"> To <input type="date" id="toa-end">
-      <select id="toa-reason">${(timeoff.reasons || []).map((r) => `<option>${r}</option>`).join("")}</select>
-      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="toAdd()">Add time off</button></p>` : ""}
-    ${timeoff.upcoming.length ? `<div style="margin-top:6px"><div style="opacity:.6;margin-bottom:4px">Who's out (approved, upcoming)</div>
-      ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
-      : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
-  </div>
-  ${tc ? `
-  <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
-       clock can retire. Pick a person and a Phoenix day; MOVE a punch that
-       has the wrong time, VOID one that shouldn't exist, ADD a forgotten
-       pair. Every change needs a note, is audited, and stamps the timecard. -->
-  <div class="lane" id="timecorrections"><h3>Time corrections</h3>
-    <p>
-      <select id="tc-emp">${tc.emps.map((e) => `<option value="${e.id}" ${tc.selEmp === e.id ? "selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}</select>
-      <input type="date" id="tc-date" value="${tc.date}">
-      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="tcLoad()">Load day</button>
-    </p>
-    ${tc.selEmp ? `
-      ${tc.punches.length ? `<table style="width:100%;border-collapse:collapse;font-size:.95rem">
-        <tr><th style="text-align:left;opacity:.55">Time</th><th style="text-align:left;opacity:.55">Punch</th><th style="text-align:left;opacity:.55">Line</th><th style="text-align:left;opacity:.55">Correction</th><th></th><th></th></tr>
-        ${tc.punches.map((p) => `<tr style="${p.voided ? "text-decoration:line-through;opacity:.45" : ""}">
-          <td>${p.hhmm}</td>
-          <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}</td>
-          <td>${p.lineName}</td>
-          <td style="opacity:.7">${p.voided ? "VOIDED" : p.corrected ? "corrected" : p.added ? "added" : ""}${p.note ? `: ${p.note}` : ""}</td>
-          <td>${p.voided ? "" : `<input type="time" id="tcm-${p.id}" value="${p.hhmm}" step="60"> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcMove('${p.id}'))">Move</button>`}</td>
-          <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
-        </tr>`).join("")}</table>` : `<div style="opacity:.6">No punches that day.</div>`}
-      <p style="margin-top:12px">Add a missed punch pair:
-        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
-        IN <input type="time" id="tca-in" step="60"> OUT <input type="time" id="tca-out" step="60">
-        <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
-        <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
-      <p>Why: <input id="tc-note" style="min-width:280px" placeholder="required — e.g. forgot to clock out"></p>
-      <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days; older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
-    ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
-  </div>` : ""}
-  <!-- Q85 FIX JOB: a signed-off cab came back (Body Shop kickback / customer
-       return). Opening one re-opens its ORIGINAL record as a fix job (own
-       deadline + hours bucket, re-inspection to close) and logs a sign-off
-       escape. It "runs alongside" — it doesn't force-pause a live build. -->
-  <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
-    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off below.</div>`}
-    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
-      <b>Open a fix job on a returned cab:</b>
-      <p>Order
-        <select id="fx-cab">${fixjob.completed.length ? fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
-        <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
-        <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
-      </p>
-      <p>On line <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
-        · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
-      <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
-      <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
-      <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off below.</span>
-    </div>
-  </div>
   <div id="lines99"></div>
   ${rows.map((r) => `
-    <div class="lane">
+    <div class="lane" id="line99-${r.line.id}">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
       <!-- Q83: "Down for today" quick-hold — expected-idle only (no active cab,
@@ -2546,6 +2517,72 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number}${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number}
           ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
     </div>`).join("")}
+  <!-- Block 153 (owner-rep D3/D5): Time off + Time corrections now live
+       BELOW the lines, and the rarely-used Returned-for-fix lane is LAST —
+       the jump-nav above mirrors this exact order. -->
+  <!-- Q92: enter time off for anyone directly (lands already approved) + the
+       upcoming "who's out and when" list. -->
+  <div class="lane" id="to99"><h3>Time off</h3>
+    ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
+      <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
+      From <input type="date" id="toa-start"> To <input type="date" id="toa-end">
+      <select id="toa-reason">${(timeoff.reasons || []).map((r) => `<option>${r}</option>`).join("")}</select>
+      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="toAdd()">Add time off</button></p>` : ""}
+    ${timeoff.upcoming.length ? `<div style="margin-top:6px"><div style="opacity:.6;margin-bottom:4px">Who's out (approved, upcoming)</div>
+      ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
+      : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
+  </div>
+  ${tc ? `
+  <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
+       clock can retire. Pick a person and a Phoenix day; MOVE a punch that
+       has the wrong time, VOID one that shouldn't exist, ADD a forgotten
+       pair. Every change needs a note, is audited, and stamps the timecard. -->
+  <div class="lane" id="timecorrections"><h3>Time corrections</h3>
+    <p>
+      <select id="tc-emp">${tc.emps.map((e) => `<option value="${e.id}" ${tc.selEmp === e.id ? "selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}</select>
+      <input type="date" id="tc-date" value="${tc.date}">
+      <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="tcLoad()">Load day</button>
+    </p>
+    ${tc.selEmp ? `
+      ${tc.punches.length ? `<table style="width:100%;border-collapse:collapse;font-size:.95rem">
+        <tr><th style="text-align:left;opacity:.55">Time</th><th style="text-align:left;opacity:.55">Punch</th><th style="text-align:left;opacity:.55">Line</th><th style="text-align:left;opacity:.55">Correction</th><th></th><th></th></tr>
+        ${tc.punches.map((p) => `<tr style="${p.voided ? "text-decoration:line-through;opacity:.45" : ""}">
+          <td>${p.hhmm}</td>
+          <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}</td>
+          <td>${p.lineName}</td>
+          <td style="opacity:.7">${p.voided ? "VOIDED" : p.corrected ? "corrected" : p.added ? "added" : ""}${p.note ? `: ${p.note}` : ""}</td>
+          <td>${p.voided ? "" : `<input type="time" id="tcm-${p.id}" value="${p.hhmm}" step="60"> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcMove('${p.id}'))">Move</button>`}</td>
+          <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
+        </tr>`).join("")}</table>` : `<div style="opacity:.6">No punches that day.</div>`}
+      <p style="margin-top:12px">Add a missed punch pair:
+        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+        IN <input type="time" id="tca-in" step="60"> OUT <input type="time" id="tca-out" step="60">
+        <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
+        <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
+      <p>Why: <input id="tc-note" style="min-width:280px" placeholder="required — e.g. forgot to clock out"></p>
+      <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days; older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
+    ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
+  </div>` : ""}
+  <!-- Q85 FIX JOB: a signed-off cab came back (Body Shop kickback / customer
+       return). Opening one re-opens its ORIGINAL record as a fix job (own
+       deadline + hours bucket, re-inspection to close) and logs a sign-off
+       escape. It "runs alongside" — it doesn't force-pause a live build. -->
+  <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
+    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off on its line (above).</div>`}
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <b>Open a fix job on a returned cab:</b>
+      <p>Order
+        <select id="fx-cab">${fixjob.completed.length ? fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
+        <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
+        <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
+      </p>
+      <p>On line <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+        · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
+      <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
+      <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
+      <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off on its line (above).</span>
+    </div>
+  </div>
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -2731,15 +2768,16 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       line_id: Number(document.getElementById("tca-line").value),
       in_at: tcIso(d,i), out_at: o ? tcIso(d,o) : null }); }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
-  async function sendBack(id, btn) {
+  async function sendBack(id, btn, pfx) {   // Block 153: pfx picks which copy's inputs (top lane vs line lane)
     btn.disabled = true; btn.textContent = "Working…";
+    const g153 = (base) => document.getElementById((pfx || "") + base + id);
     try {
       const r = await fetch("/api/build/rework", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ build_id: id,
-          reason: document.getElementById("rr-" + id).value,
-          note: document.getElementById("rn-" + id).value,
-          hours: Number(document.getElementById("rh-" + id).value),
+          reason: g153("rr-").value,
+          note: g153("rn-").value,
+          hours: Number(g153("rh-").value),
           claimed_at: new Date().toISOString() }) });
       const out = await r.json();
       if (out.ok) return location.reload();
