@@ -5474,6 +5474,23 @@ async function startDeliveredWaiting(lineId, actorId) {
   logEvent("build.started_after_down", actorId, { build_id: w.id, order_number: w.order_number, line_id: lineId });
 }
 
+// Block 135 (owner-rep ruling on the T1 walkthrough find): resume a "down for
+// today" hold once a punch ONTO the line is RECORDED — close the timed hold,
+// clear the flag, and start any cab whose kit warehouse delivered while the
+// line was held. Shared by /api/clock/in AND /api/clock/switch: since block
+// 98b the floor's everyday line tap is a SWITCH (the paycheck punch lands on
+// company time 14 first), so without this the normal morning taps never
+// lifted an L9 hold. Runs only AFTER the punch insert — the v146 lesson.
+async function resumeDownLine135(lineId, empId) {
+  const [lnR] = await db(`line?select=down_today&id=eq.${lineId}`);
+  if (!lnR || !lnR.down_today) return;
+  await closeOpenDowns(lineId, empId, "clock_in");
+  await db(`line?id=eq.${lineId}`, { method: "PATCH", body: JSON.stringify({
+    down_today: false, down_reason: null, down_by: null, down_at: null }) });
+  logEvent("line.down_resumed", empId, { line_id: lineId, cause: "clock_in" });
+  await startDeliveredWaiting(lineId, empId);
+}
+
 async function freezeAndStart(b, empId, startedAt) {
   await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt, queue_pinned: false }) });
   const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
@@ -6365,13 +6382,7 @@ http.createServer(async (req, res) => {
       // held line. Close the timed hold, clear the flag, and start any cab whose
       // kit warehouse dropped while the line was down. Runs post-insert, so a
       // rejected clock-in above never resumes the line or starts a cab.
-      if (lnGate && lnGate.down_today) {
-        await closeOpenDowns(line_id, empId, "clock_in");
-        await db(`line?id=eq.${line_id}`, { method: "PATCH", body: JSON.stringify({
-          down_today: false, down_reason: null, down_by: null, down_at: null }) });
-        logEvent("line.down_resumed", empId, { line_id, cause: "clock_in" });
-        await startDeliveredWaiting(line_id, empId);
-      }
+      if (lnGate && lnGate.down_today) await resumeDownLine135(line_id, empId);
       return json(200, { ok: true });
     }
 
@@ -6464,6 +6475,9 @@ http.createServer(async (req, res) => {
         employee_id: empId, line_id, kind: "clock_in",
         claimed_at: new Date((halfSwitched ? new Date(last.claimed_at).getTime() : when.getTime()) + 1000).toISOString() }) });
       logEvent("clock.switch", empId, { from_line: last.line_id, to_line: line_id });
+      // Block 135: switching ONTO a "down for today" line resumes it, exactly
+      // like a direct clock-in — the punch above is recorded, so it's safe.
+      await resumeDownLine135(line_id, empId);
       return json(200, { ok: true });
     }
 
