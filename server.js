@@ -5385,6 +5385,29 @@ function payrollCsv(d) {
   return L.join("\n");
 }
 
+// Block 131 (logic audit L6): the ON-DECK cab of a line's upcoming queue — the
+// front cab, or (L5) the first fully-kitted cab past a stuck pin. This is the ONE
+// cab that may start a kit pull; a pull can't live anywhere else.
+async function onDeckId(lineId) {
+  const up = await db(`build?select=id,queue_pinned,kit_status&line_id=eq.${lineId}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`);
+  if (!up.length) return null;
+  const idx = (up[0].queue_pinned && up[0].kit_status !== "verified") ? up.findIndex((z) => z.kit_status === "verified") : 0;
+  return idx >= 0 && up[idx] ? up[idx].id : null;
+}
+// Block 131 (L6, owner-rep ruling): a pull belongs to the on-deck cab only. When
+// the on-deck changes (a reorder moves another cab ahead, or a stuck pin's kit
+// finally verifies), any pull left on a now-not-on-deck cab REVERTS — the kit is
+// un-pulled and the warehouse starts fresh on whatever's now on deck.
+async function revertStrandedPull(lineId, actorId) {
+  const deck = await onDeckId(lineId);
+  const pulled = await db(`build?select=id,order_number&line_id=eq.${lineId}&state=eq.upcoming&kit_pull_started_at=not.is.null`);
+  for (const p of pulled) {
+    if (p.id !== deck) {
+      await db(`build?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ kit_pull_started_at: null, kit_pull_started_by: null }) });
+      logEvent("kit.pull_reverted", actorId, { build_id: p.id, order_number: p.order_number, cause: "no longer on deck" });
+    }
+  }
+}
 // Q109: the ONE true "start the cab" path — used by the warehouse Delivered
 // tap (the normal way now) and the manager's manual override. Freezes the
 // template into the cab's own task list (Q97) and stamps the start.
@@ -7477,7 +7500,7 @@ http.createServer(async (req, res) => {
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       if (!["unverified", "verified", "short"].includes(status))
         return json(400, { ok: false, error: "Unknown kit status" });
-      const [b] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,line_id&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only an upcoming cab's kit gets verified" });
       const patchK = {
         kit_status: status, kit_note: status === "short" ? (note || null) : null,
@@ -7489,6 +7512,8 @@ http.createServer(async (req, res) => {
       if (status !== "verified") { patchK.kit_pull_started_at = null; patchK.kit_pull_started_by = null; }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchK) });
       logEvent("kit.status", whoId, { build_id, order_number: b.order_number, status, note: note || "" });
+      // Block 131 (L6): verifying a stuck pin can change who's on deck — revert any pull now stranded.
+      await revertStrandedPull(b.line_id, whoId);
       return json(200, { ok: true });
     }
 
@@ -7514,6 +7539,8 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
       await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
       logEvent("kit.queue_move", whoId, { build_id, order_number: b.order_number, dir });
+      // Block 131 (L6): a reorder can change who's on deck — revert any pull now stranded.
+      await revertStrandedPull(b.line_id, whoId);
       return json(200, { ok: true });
     }
 
@@ -7522,9 +7549,13 @@ http.createServer(async (req, res) => {
       const [whoId, whFail] = await requireWarehouse(true); if (whFail) return whFail;
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,kit_status,order_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,kit_status,order_number,line_id&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
       if (b.kit_status !== "verified") return json(400, { ok: false, error: "Verify the kit first — every part accounted for" });
+      // Block 131 (logic audit L6): only the ON-DECK cab may start a pull — a
+      // pull tied to a cab that isn't next would be stranded by any reorder.
+      if (await onDeckId(b.line_id) !== build_id)
+        return json(400, { ok: false, error: "Only the on-deck cab can start a pull — this one isn't next in line." });
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         kit_pull_started_at: claimed_at || new Date().toISOString(), kit_pull_started_by: whoId }) });
       logEvent("kit.pull_started", whoId, { build_id, order_number: b.order_number });
@@ -8252,6 +8283,8 @@ self.addEventListener("notificationclick", (e) => {
       await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
       await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
       logEvent("queue.move", adminId, { build_id, order_number: b.order_number, dir });
+      // Block 131 (L6): a reorder can change who's on deck — revert any pull now stranded.
+      await revertStrandedPull(b.line_id, adminId);
       return json(200, { ok: true });
     }
 
