@@ -1523,7 +1523,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   <div class="lane">
     <h3>Delivered — now in production</h3>
     <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come BACK to warehouse for ship-prep in a later stage.</div>
-    ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
+    ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}${h.byMgmt ? ` · <span style="color:#ffd60a">started by management</span>` : ""}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
   </div>
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
@@ -6058,9 +6058,12 @@ http.createServer(async (req, res) => {
             .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
         // Block 97 (owner-rep): the delivered history — where warehouse's cabs
         // ARE in production. Read-only; ship-prep/receive-back is a later stage.
-        const histW97 = await db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`);
+        const histW97 = await db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`);
         const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
-        histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); });
+        // Block 132 (logic audit L8): a cockpit-started cab is stamped delivered by
+        // the MANAGER, not warehouse — flag those rows so the list says so.
+        const mgrIds132 = new Set((await db(`employee?select=id&role=in.(manager,admin)`)).map((e) => e.id));
+        histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); h.byMgmt = mgrIds132.has(h.kit_delivered_by); });
         // Block 106 (owner-rep live test): warehouse clocks in from THIS page,
         // but the Q112 after-hours questionnaire only existed on the floor's
         // home screen — an evening warehouse punch-in was flatly denied. Same
@@ -7457,7 +7460,15 @@ http.createServer(async (req, res) => {
       const [lnGateB] = await db(`line?select=manually_closed&id=eq.${b.line_id}`);
       if (lnGateB && lnGateB.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — reopen it first" });
-      await freezeAndStart(b, empId, claimed_at || new Date().toISOString());
+      const whenS132 = claimed_at || new Date().toISOString();
+      // Block 132 (logic audit L8, owner-rep ruling): a cockpit start also closes
+      // the warehouse side — stamp it DELIVERED so it shows on the warehouse
+      // "Delivered — now in production" list (a cab can't finish without its kit
+      // physically pulled anyway). The record notes MANAGEMENT started it, not
+      // warehouse: kit_delivered_by = the manager + a build.manager_started event.
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ kit_delivered_at: whenS132, kit_delivered_by: empId }) });
+      await freezeAndStart(b, empId, whenS132);
+      logEvent("build.manager_started", empId, { build_id, order_number: b.order_number });
       return json(200, { ok: true });
     }
 
