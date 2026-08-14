@@ -2346,7 +2346,7 @@ const navBar95 = (isAdmin, showReports = false) => {
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Email & text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = isAdmin
     ? daily95
@@ -2391,9 +2391,18 @@ const settingsPage117 = (me) => `<!doctype html>
   <p style="text-align:center;opacity:.7;margin:0 0 14px">${me.first_name} ${me.last_name || ""}</p>
   <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px">
     <b>My contact info</b>
-    <p style="opacity:.6;font-size:.9rem;margin:6px 0 10px">Where texts and emails reach you. Keep these current — pay and after-hours notices use them.</p>
-    <div style="padding:6px 0">Mobile # <input id="mc-m" value="${escH(me.mobile || "")}" placeholder="602 555 0117" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;width:150px"></div>
-    <div style="padding:6px 0">Email <input id="mc-e" value="${escH(me.email || "")}" placeholder="name@example.com" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:220px"></div>
+    <p style="opacity:.6;font-size:.9rem;margin:6px 0 10px">Where texts reach you. Keep this current — pay and after-hours notices use it.</p>
+    <div style="padding:6px 0">Mobile # <input id="mc-m" value="${escH(me.mobile || "")}" placeholder="602 555 0117" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;width:150px;font-size:16px"></div>
+    <!-- Block 171 (owner ruling 2026-08-14): EMAIL AS A NOTIFICATION CHANNEL IS
+         HIDDEN EVERYWHERE, not removed. Daniel: "lets HIDE email capabilities
+         as a push. for now, we can revisit it later if needed." Background: the
+         M365/GoDaddy SMTP path wanted an app password on the info@ ADMIN
+         account (rejected, and Microsoft retires basic SMTP AUTH Dec 2026
+         anyway), and floor staff aren't all on company email. The email input,
+         the settings toggle, the admin columns, the Features switch and the
+         setup panel are all hidden; the stored employee.email data, the send
+         chokepoint and sendEmail116 stay intact for a future
+         transactional-API revisit. The Email input lived here. -->
     <button style="background:#3a3a3c;border:none;border-radius:9px;color:#fff;padding:9px 14px;cursor:pointer;margin-top:4px" onclick="saveC117(this)">Save contact info</button>
     <span id="mc-msg" style="font-size:.85rem;margin-left:8px"></span>
   </div>
@@ -2402,8 +2411,7 @@ const settingsPage117 = (me) => `<!doctype html>
     <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Critical notices (pay decisions, inspection hand-offs) always come through.</p>
     <div style="padding:10px 0;border-top:1px solid var(--line)"><b>Phone / web push</b> — <b style="color:#30d158">always on</b><br>
       <small style="opacity:.55">Every notice pops on your allowed devices and ALWAYS lands in your \uD83D\uDD14 inbox — nothing to set up.</small></div>
-    ${[["sms", "Text message", "Sent to the mobile number above."],
-       ["email", "Email", "Sent to the email address above."]].map(([ch, label, note]) => `
+    ${[["sms", "Text message", "Sent to the mobile number above."]].map(([ch, label, note]) => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)">
       <div style="flex:1"><b>${label}</b><br><small style="opacity:.55">${note}</small></div>
       <b id="st-${ch}" style="opacity:.7">${me["notify_" + ch] === false ? "OFF" : "ON"}</b>
@@ -2430,7 +2438,7 @@ const settingsPage117 = (me) => `<!doctype html>
     btn.disabled = true; const m = document.getElementById("mc-msg"); m.textContent = "";
     try {
       const r = await fetch("/api/settings/contact", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobile: document.getElementById("mc-m").value, email: document.getElementById("mc-e").value }) });
+        body: JSON.stringify({ mobile: document.getElementById("mc-m").value }) });   // Block 171: email field hidden — never send the key, so the server leaves the stored address alone
       const out = await r.json();
       if (out.ok) { m.textContent = "✓ Saved"; m.style.color = "#30d158"; }
       else { m.textContent = out.error || "Something went wrong"; m.style.color = "#ff453a"; }
@@ -3258,18 +3266,19 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Block 117: the admin side of ⚙ My settings — every person's channel
        switches AND contact info, controllable from one table. -->
   <div class="panel" id="channels117"><h3>Notification channels &amp; contact — per person</h3>
-  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own text/email from the &#9881; gear beside the bell; push is always on (block 154).</p>
-  <table><tr><th>Name</th><th>Push</th><th>Text</th><th>Email</th><th>Mobile #</th><th>Email address</th><th></th></tr>
+  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own text alerts from the &#9881; gear beside the bell; push is always on (block 154).</p>
+  <!-- Block 171 (owner ruling): the Email toggle + Email address columns are
+       hidden with the rest of the email channel — the stored addresses stay in
+       the database untouched for a future revisit. -->
+  <table><tr><th>Name</th><th>Push</th><th>Text</th><th>Mobile #</th><th></th></tr>
   ${emps.filter((e) => e.active).map((e) => `<tr>
     <td><b>${e.first_name} ${e.last_name}</b></td>
     <td><button class="b ${e.notify_push === false ? "" : "grn"}" onclick="chan117('${e.id}','push',${e.notify_push === false},this)">${e.notify_push === false ? "OFF" : "ON"}</button></td>
     <td><button class="b ${e.notify_sms === false ? "" : "grn"}" onclick="chan117('${e.id}','sms',${e.notify_sms === false},this)">${e.notify_sms === false ? "OFF" : "ON"}</button></td>
-    <td><button class="b ${e.notify_email === false ? "" : "grn"}" onclick="chan117('${e.id}','email',${e.notify_email === false},this)">${e.notify_email === false ? "OFF" : "ON"}</button></td>
     <td><input id="cm-${e.id}" value="${e.mobile || ""}" placeholder="602 555 0117" style="width:120px"></td>
-    <td><input id="ce-${e.id}" value="${e.email || ""}" placeholder="name@…" style="width:170px"></td>
     <td><button class="b" onclick="contact117('${e.id}',this)">Save</button></td>
   </tr>`).join("")}</table>
-  <p style="opacity:.5;font-size:.85rem">A switch only matters once its channel is ON under Features and set up in "Email &amp; text setup" below. Push also needs the person to allow notifications on their device (the bell).</p>
+  <p style="opacity:.5;font-size:.85rem">A switch only matters once its channel is ON under Features and set up in "Text setup" below. Push also needs the person to allow notifications on their device (the bell).</p>
   </div>
 
   <div class="panel" id="steps"><h3>Build steps</h3>
@@ -3312,7 +3321,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   </div>
 
   <div class="panel" id="features"><h3>Features</h3>
-  ${toggles.map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
+  ${toggles.filter((t) => t.key !== "notify_email" && t.key !== "email_notifications").map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
     <div class="tglrow"><div style="flex:1"><b>${info[0]}</b><small>${info[1]}</small></div>
     <b style="opacity:.7">${t.enabled ? "ON" : "OFF"}</b>
     <button class="b ${t.enabled ? "red" : "grn"}" onclick="flip('${t.key}',${t.enabled ? "false" : "true"},this)">Turn ${t.enabled ? "OFF" : "ON"}</button></div>`; }).join("")}
@@ -3327,14 +3336,13 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Block 154 (owner-rep D6): the two set-once panels collapse behind a
        "Setup" fold at the bottom of daily life; the Tools menu deep-links
        here (a hash visit auto-opens the fold). -->
-  <details id="setup154"><summary style="cursor:pointer;color:#8e8e93;font-weight:700;padding:10px 0">Setup — rarely needed (Email &amp; text · Cab numbers)</summary>
-  <div class="panel" id="channels116"><h3>Email &amp; text setup</h3>
-  <div class="tglrow"><div style="flex:1"><b>Email — sends from info@premierstreetrod.com</b>
-    <small>${EMAIL_READY ? "Credentials are on file. Send yourself a test to prove the mailbox works." : "Waiting on credentials — add SMTP_USER and SMTP_PASS on Railway; the app picks them up on its next deploy."}</small></div>
-    <b style="opacity:.7">${EMAIL_READY ? "READY" : "NOT SET UP"}</b></div>
-  ${EMAIL_READY ? `<div style="padding:6px 0 10px">Send a test email to
-    <input id="t116-em" style="min-width:230px" placeholder="you@premierstreetrod.com">
-    <button class="b" onclick="test116('email','t116-em',this)">Send test email</button></div>` : ""}
+  <details id="setup154"><summary style="cursor:pointer;color:#8e8e93;font-weight:700;padding:10px 0">Setup — rarely needed (Text &amp; cab numbers)</summary>
+  <div class="panel" id="channels116"><h3>Text setup</h3>
+  <!-- Block 171 (owner ruling): the Email half of this panel is hidden with
+       the rest of the email channel (the M365 SMTP route is a dead end —
+       app password on the info@ admin account, and Microsoft retires basic
+       SMTP AUTH Dec 2026). sendEmail116 and the SMTP env slots stay for a
+       future transactional-API revisit. -->
   <div class="tglrow"><div style="flex:1"><b>Text messages — through Twilio</b>
     <small>${SMS_READY ? "Credentials are on file. Text yourself to prove the number works." : "Waiting on credentials — add TWILIO_SID, TWILIO_TOKEN and TWILIO_FROM on Railway; the app picks them up on its next deploy."}</small></div>
     <b style="opacity:.7">${SMS_READY ? "READY" : "NOT SET UP"}</b></div>
@@ -3343,7 +3351,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <button class="b" onclick="test116('sms','t116-sm',this)">Send test text</button></div>` : ""}
   <p style="padding:6px 0 0"><button class="b" onclick="samples117(this)">Send me the sample set — one of each notice</button><br>
   <span style="opacity:.5;font-size:.85rem">Fires a realistic example of every notice the system sends (inspection ready, after-hours clock-in and wrap-up, ship risk, red cab, upgrades needing hours) through the real pipe — sandboxed to you, on every channel that's on for you.</span></p>
-  <p style="opacity:.5;font-size:.85rem">Tests go ONLY to the address or number you type, and each one is logged. Everyday sending stays off until the "Email notifications" / "Text-message notifications" switches above are ON — and until we go live, even those reroute to you.</p>
+  <p style="opacity:.5;font-size:.85rem">Tests go ONLY to the number you type, and each one is logged. Everyday sending stays off until the "Text-message notifications" switch above is ON — and until we go live, even that reroutes to you.</p>
   </div>
 
   <!-- CAB NUMBERS (Q110): the wall board's internal cab # (244T, 305A…).
@@ -3560,7 +3568,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   if (["#setup154", "#channels116", "#cabnums"].indexOf(location.hash) > -1) { var d154 = document.getElementById("setup154"); if (d154) { d154.open = true; setTimeout(function(){ var t154 = document.getElementById(location.hash.slice(1)); if (t154) t154.scrollIntoView(); }, 50); } }
   // Block 117: per-person channels + contact, and the sample-set button.
   function chan117(id, ch, to, btn){ post("/api/admin/channels", { employee_id: id, channel: ch, enabled: to === true || to === "true" }, btn); }
-  function contact117(id, btn){ post("/api/admin/contact", { employee_id: id, mobile: v("cm-"+id), email: v("ce-"+id) }, btn); }
+  function contact117(id, btn){ post("/api/admin/contact", { employee_id: id, mobile: v("cm-"+id) }, btn); }   // Block 171: email key never sent — the server leaves stored addresses alone
   async function samples117(btn){
     btn.disabled = true; const was = btn.textContent; btn.textContent = "Sending the set…";
     try {
@@ -8492,7 +8500,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const p117 = await body(req);
       const ch117 = String(p117.channel || "");
-      if (!["sms", "email"].includes(ch117)) return json(400, { ok: false, error: ch117 === "push" ? "Push is always on — every notice also lands in your inbox." : "Unknown channel" });   // Block 154 (B4): staff can't mute push
+      if (ch117 !== "sms") return json(400, { ok: false, error: ch117 === "push" ? "Push is always on — every notice also lands in your inbox." : ch117 === "email" ? "Email notifications are turned off for now." : "Unknown channel" });   // Block 154 (B4): staff can't mute push · Block 171 (owner ruling): email channel hidden — self-toggle refused so the hidden switch can't be flipped by a stale page
       const on117 = p117.enabled === true || p117.enabled === "true";
       await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
       logEvent("settings.channel", empId, { channel: ch117, enabled: on117, by: "self" });
@@ -8506,8 +8514,13 @@ self.addEventListener("notificationclick", (e) => {
       const eml117 = String(p117.email || "").trim().slice(0, 120);
       if (mob117 && mob117.replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "That doesn't look like a full phone number" });
       if (eml117 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eml117)) return json(400, { ok: false, error: "That doesn't look like an email address" });
-      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ mobile: mob117 || null, email: eml117 || null }) });
-      logEvent("settings.contact", empId, { mobile_set: Boolean(mob117), email_set: Boolean(eml117), by: "self" });
+      // Block 171: the settings page no longer sends an email key (field hidden).
+      // Only touch the stored address when the key is actually present, so the
+      // hidden channel's data survives every contact save untouched.
+      const patch171 = { mobile: mob117 || null };
+      if ("email" in p117) patch171.email = eml117 || null;
+      await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify(patch171) });
+      logEvent("settings.contact", empId, { mobile_set: Boolean(mob117), email_set: "email" in p117 ? Boolean(eml117) : "untouched", by: "self" });
       return json(200, { ok: true });
     }
 
@@ -8781,7 +8794,7 @@ self.addEventListener("notificationclick", (e) => {
       const p117 = await body(req);
       if (!isUuid(p117.employee_id)) return json(400, { ok: false, error: "Bad person reference" });
       const ch117 = String(p117.channel || "");
-      if (!["push", "sms", "email"].includes(ch117)) return json(400, { ok: false, error: "Unknown channel" });
+      if (!["push", "sms"].includes(ch117)) return json(400, { ok: false, error: ch117 === "email" ? "Email notifications are turned off for now." : "Unknown channel" });   // Block 171 (owner ruling): email hidden — a stale admin page can't flip it either
       const on117 = p117.enabled === true || p117.enabled === "true";
       await db(`employee?id=eq.${p117.employee_id}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
       logEvent("settings.channel", adminId117, { employee_id: p117.employee_id, channel: ch117, enabled: on117, by: "admin" });
@@ -8795,8 +8808,12 @@ self.addEventListener("notificationclick", (e) => {
       const eml117 = String(p117.email || "").trim().slice(0, 120);
       if (mob117 && mob117.replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "That phone number looks short" });
       if (eml117 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eml117)) return json(400, { ok: false, error: "That email address looks off" });
-      await db(`employee?id=eq.${p117.employee_id}`, { method: "PATCH", body: JSON.stringify({ mobile: mob117 || null, email: eml117 || null }) });
-      logEvent("settings.contact", adminId117b, { employee_id: p117.employee_id, mobile_set: Boolean(mob117), email_set: Boolean(eml117), by: "admin" });
+      // Block 171: same guard as the self endpoint — the admin table no longer
+      // sends an email key, and an absent key must never wipe a stored address.
+      const patch171b = { mobile: mob117 || null };
+      if ("email" in p117) patch171b.email = eml117 || null;
+      await db(`employee?id=eq.${p117.employee_id}`, { method: "PATCH", body: JSON.stringify(patch171b) });
+      logEvent("settings.contact", adminId117b, { employee_id: p117.employee_id, mobile_set: Boolean(mob117), email_set: "email" in p117 ? Boolean(eml117) : "untouched", by: "admin" });
       return json(200, { ok: true });
     }
     // Block 117 (owner-rep: "wouldnt mind sending out a few text pushes so i
