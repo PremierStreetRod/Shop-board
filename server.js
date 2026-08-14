@@ -1338,7 +1338,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
-        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
+        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="color:#8e8e93;cursor:pointer" onclick="unstart164('${t.id}')">started by mistake? undo</a> · ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
             ? `${(photosOf[t.id] || []).length ? `📎 ${(photosOf[t.id] || []).length} photo${(photosOf[t.id] || []).length === 1 ? "" : "s"}` : ""}${(photosOf[t.id] || []).length && (notesOf[t.id] || []).length ? " · " : ""}${(notesOf[t.id] || []).length ? `📝 ${(notesOf[t.id] || []).length} note${(notesOf[t.id] || []).length === 1 ? "" : "s"}` : ""} — view / add`
             : "＋ note / photo"}</a>
@@ -1395,6 +1395,17 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 <script>${netJs}
   // Q107 one-tap line switch: the server does the clock-out + clock-in as
   // one audited move, stamped at the tap (Q103-1 — retries keep true time).
+  // Block 164 (owner-rep): un-START an accidental "tap to start". Confirm,
+  // then the server wipes the start (your own steps; managers anyone's).
+  async function unstart164(id) {
+    if (!confirm("Put this step back to not started?\\n\\nUse this for an accidental tap — the start and who tapped it are wiped from this step.")) return;
+    const err = document.getElementById("err");
+    const out = await sbPost("/api/task/state",
+      { task_id: id, to: "not_started", claimed_at: new Date().toISOString() },
+      (m) => { err.textContent = m; });
+    if (out.ok) return location.reload();
+    err.textContent = out.error || "Something went wrong";
+  }
   async function switchLine(lineId, btn) {
     btn.disabled = true; btn.textContent = "Switching…";
     const err = document.getElementById("err");
@@ -6574,11 +6585,11 @@ http.createServer(async (req, res) => {
         // not floor work; still audited below like every state change.
         const [me] = await db(`employee?select=role&id=eq.${empId}`);
         const managerUndo = me && (me.role === "manager" || me.role === "admin")
-          && t.state === "complete" && to === "in_progress";
+          && ((t.state === "complete" && to === "in_progress") || (t.state === "in_progress" && to === "not_started"));   // Block 164: un-start is a correction too
         if (!managerUndo)
           return json(403, { ok: false, error: "Clock in first — task changes need you on the clock" });
       }
-      const legal = { not_started: ["in_progress"], in_progress: ["complete"], complete: ["in_progress"] };
+      const legal = { not_started: ["in_progress"], in_progress: ["complete", "not_started"], complete: ["in_progress"] };   // Block 164: in_progress -> not_started is the UN-START (accidental tap)
       if (!(legal[t.state] || []).includes(to))
         return json(400, { ok: false, error: `Can't go ${t.state} → ${to}` });
       // Block 159 (owner-rep F1 ruling): SOFT cap on concurrent open steps.
@@ -6600,12 +6611,23 @@ http.createServer(async (req, res) => {
           logEvent("task.cap_override", empId, { task_id, build_id: t.build_id, display_no: t.display_no, open_before: n159 });
         }
       }
+      // Block 164 (owner-rep): UN-START — the missing undo for an accidental
+      // "tap to start". Only the person who started the step may take it back
+      // (managers/admins: anyone's). The start is wiped clean — started_by/at
+      // null — so the open-step count and per-step timing read as if the
+      // mis-tap never happened. Audited below as task.unstart.
+      if (to === "not_started" && t.started_by && t.started_by !== empId) {
+        const [meU164] = await db(`employee?select=role&id=eq.${empId}`);
+        if (!meU164 || (meU164.role !== "manager" && meU164.role !== "admin"))
+          return json(403, { ok: false, error: "Only the person who started this step (or a manager) can undo the start" });
+      }
       const patch = { state: to };
       if (to === "in_progress" && t.state === "not_started") { patch.started_by = empId; patch.started_at = claimed_at || new Date().toISOString(); }
       if (to === "complete") { patch.completed_by = empId; patch.completed_at = claimed_at || new Date().toISOString(); }
       if (to === "in_progress" && t.state === "complete") { patch.completed_by = null; patch.completed_at = null; }
+      if (to === "not_started") { patch.started_by = null; patch.started_at = null; }
       await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patch) });
-      logEvent(t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
+      logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
       return json(200, { ok: true });
     }
