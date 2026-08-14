@@ -1113,7 +1113,22 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     const err = document.getElementById("err");
     const out = await sbPost(url, {...payload, claimed_at:new Date().toISOString()},
       (m) => { err.textContent = m; });
-    if(out.ok) location.reload(); else err.textContent = out.error||"Something went wrong";
+    // Block 163 (owner-rep): a successful switch must LAND on the new line's
+    // screen. location.reload() kept ?clockout=1 alive, so tapping a line on
+    // the clock screen just redrew the clock screen — Daniel hit this live.
+    if(out.ok) return location.href = "/home";
+    // Block 163: leaving a line with steps you started still open — soft
+    // heads-up, OK leaves anyway (a teammate can tap them done).
+    if(out.nudge163){
+      if(confirm(out.error + "\\n\\nOK leaves anyway — the steps stay open for a teammate to finish.")){
+        const out2 = await sbPost(url, {...payload, claimed_at:new Date().toISOString(), confirm163:true},
+          (m) => { err.textContent = m; });
+        if(out2.ok) return location.href = "/home";
+        err.textContent = out2.error||"Something went wrong";
+      } else { err.textContent = ""; }
+      return;
+    }
+    err.textContent = out.error||"Something went wrong";
   }
   // Q112: outside shop hours a line tap opens the governance panel first.
   const AH = ${ah.now && !state.clockedIn ? "true" : "false"};
@@ -1387,6 +1402,19 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       { line_id: lineId, claimed_at: new Date().toISOString() },
       (m) => { err.textContent = m; });
     if (out.ok) return location.href = "/home";
+    // Block 163 (owner-rep): leaving this line with steps you started still
+    // open — soft heads-up; OK leaves anyway, a teammate can finish them.
+    if (out.nudge163) {
+      if (confirm(out.error + "\\n\\nOK leaves anyway — the steps stay open for a teammate to finish.")) {
+        const out2 = await sbPost("/api/clock/switch",
+          { line_id: lineId, claimed_at: new Date().toISOString(), confirm163: true },
+          (m) => { err.textContent = m; });
+        if (out2.ok) return location.href = "/home";
+        err.textContent = out2.error || "Something went wrong";
+      } else { err.textContent = ""; }
+      btn.disabled = false; btn.textContent = "Switch line";
+      return;
+    }
     err.textContent = out.error || "Something went wrong";
     btn.disabled = false; btn.textContent = "Try again";
   }
@@ -6650,13 +6678,27 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { reason, claimed_at, wrap_note, note } = await body(req);
+      const { reason, claimed_at, wrap_note, note, confirm163 } = await body(req);
       // Timecard-audit fix: an out while NOT clocked in wrote a misleading
       // flagged row (pay math skips orphan outs, people reading don't).
       // Same guard the switch endpoint has.
-      const [lastOut107] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastOut107] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       if (!lastOut107 || lastOut107.kind !== "clock_in")
         return json(400, { ok: false, error: "You're not on the clock" });
+      // Block 163 (owner-rep ruling): clocking OUT with steps you started
+      // still open on your line — same soft heads-up as the line switch.
+      if (confirm163 !== true && lastOut107.line_id != null) {
+        const open163o = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const real163o = (open163o || []).filter((t) => !t.is_background);
+        if (real163o.length) {
+          const bIds163o = [...new Set(real163o.map((t) => t.build_id))];
+          const b163o = await db(`build?select=id,line_id,state&id=in.(${bIds163o.join(",")})`);
+          const onLine163o = new Set((b163o || []).filter((b) => Number(b.line_id) === Number(lastOut107.line_id) && ["active", "rework", "fix_job"].includes(b.state)).map((b) => b.id));
+          const n163o = real163o.filter((t) => onLine163o.has(t.build_id)).length;
+          if (n163o > 0)
+            return json(200, { ok: false, nudge163: true, open: n163o, error: `You started ${n163o} step${n163o > 1 ? "s" : ""} on this line that ${n163o > 1 ? "are" : "is"} still open — a teammate can tap ${n163o > 1 ? "them" : "it"} done, or go finish first. Clock out anyway?` });
+        }
+      }
       // Q112 + block 107: an open after-hours session can't close without its
       // wrap-up. Closing it starts the SIGN-OFF loop — the approver + admins
       // get the wrap note (and photo count), and the session's hours stay
@@ -6703,7 +6745,7 @@ http.createServer(async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { line_id, claimed_at } = await body(req);
+      const { line_id, claimed_at, confirm163 } = await body(req);
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
       if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "Pick a line" });
       // Q113: no switching ONTO a manually-closed line either.
@@ -6711,6 +6753,24 @@ http.createServer(async (req, res) => {
       if (lnGateS && lnGateS.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
       const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      // Block 163 (owner-rep ruling): leaving a line with steps YOU started
+      // still open gets a heads-up FIRST — soft, warn-but-allow. On your own
+      // line open steps legitimately carry to tomorrow; on a line you jumped
+      // on to help, a forgotten open step is exactly how the TEST-23702 ghost
+      // was born — and sometimes another teammate is MEANT to do the final
+      // tap, which is fine: OK leaves anyway. Background steps don't count.
+      if (confirm163 !== true && last && last.kind === "clock_in" && last.line_id != null) {
+        const open163 = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const real163 = (open163 || []).filter((t) => !t.is_background);
+        if (real163.length) {
+          const bIds163 = [...new Set(real163.map((t) => t.build_id))];
+          const b163 = await db(`build?select=id,line_id,state&id=in.(${bIds163.join(",")})`);
+          const onLine163 = new Set((b163 || []).filter((b) => Number(b.line_id) === Number(last.line_id) && ["active", "rework", "fix_job"].includes(b.state)).map((b) => b.id));
+          const n163 = real163.filter((t) => onLine163.has(t.build_id)).length;
+          if (n163 > 0)
+            return json(200, { ok: false, nudge163: true, open: n163, error: `You started ${n163} step${n163 > 1 ? "s" : ""} on this line that ${n163 > 1 ? "are" : "is"} still open — a teammate can tap ${n163 > 1 ? "them" : "it"} done, or go finish first. Leave anyway?` });
+        }
+      }
       // Retry safety: if a switch died BETWEEN its two writes (out landed,
       // in didn't), the retry finds a fresh "Switched lines" out — finish
       // the job by writing just the clock-in instead of refusing.
