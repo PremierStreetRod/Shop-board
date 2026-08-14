@@ -1064,8 +1064,17 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     </div>
     <p class="msg" style="color:#ffd60a">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
     <p class="msg">Clocking out — what kind?</p>
+    <!-- Block 168 (owner-rep): the two everyday outs — LUNCH and END OF DAY —
+         stand alone, big and first. Every other reason folds behind ONE
+         "Other reason…" tap as smaller secondary choices. Same admin-managed
+         reason list, same click handler — only the layout changed. -->
     <div class="grid">
-      ${reasons.length ? reasons.map((r) => `<button class="name" data-reason="${r.label}">${r.label}</button>`).join("") : `<button class="name" data-reason="End of day">Clock out</button>`}
+      ${reasons.some((r) => r.label === "Lunch") ? `<button class="name" data-reason="Lunch">Lunch</button>` : ""}
+      <button class="name" data-reason="End of day">End of day</button>
+      ${reasons.filter((r) => r.label !== "Lunch" && r.label !== "End of day").length ? `<button class="name" style="opacity:.7;font-size:.95em" onclick="var m168=document.getElementById('more168');m168.hidden=!m168.hidden">Other reason&hellip;</button>` : ""}
+    </div>
+    <div id="more168" hidden class="grid" style="margin-top:8px">
+      ${reasons.filter((r) => r.label !== "Lunch" && r.label !== "End of day").map((r) => `<button class="name" style="font-size:.85em;opacity:.85;padding:12px" data-reason="${r.label}">${r.label}</button>`).join("")}
     </div>
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
@@ -1287,7 +1296,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/home?clockout=1" style="color:#8e8e93;margin-right:18px">Clock / lines</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 (owner-rep): "Clock / lines" dropped from the top — the bottom "Clock out · Switch line" is the ONE way, no duplicate names -->
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
