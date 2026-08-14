@@ -557,10 +557,20 @@ function wifiGate(req) {
 // owner captures the shop IP via /api/my-ip and sets it on Railway).
 function onShopNetwork(req) {
   const shopIp = process.env.SHOP_EGRESS_IP;
-  if (!shopIp) return true;
-  const ip = clientIp(req);
-  if (!ip || ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1") return true;
-  return ip === shopIp;
+  if (!shopIp) return true; // build phase — every gate inert until the IP is set
+  // Block 174 (Fable-5 audit of block 173): TRUST the internal branch ONLY when
+  // there is NO X-Forwarded-For header — the app's own server-to-127.0.0.1 reads
+  // (pace monitor, manager pages) have none, and Railway's edge ALWAYS sets XFF on
+  // real external traffic. This makes the internal-trust path unreachable via a
+  // spoofed "X-Forwarded-For: 127.0.0.1", independent of how the edge sanitizes it.
+  const xff = req.headers["x-forwarded-for"];
+  if (xff === undefined || xff === null || xff === "") {
+    const r = (req.socket && req.socket.remoteAddress) || "";
+    return r === "127.0.0.1" || r === "::1" || r === "::ffff:127.0.0.1";
+  }
+  // External traffic: Railway controls XFF so the leftmost hop is the genuine
+  // client IP (confirmed with Railway) — compare it to the shop's egress IP.
+  return String(xff).split(",")[0].trim() === shopIp;
 }
 // Block 173: the off-network notice shown in place of the wall board.
 function offNet173() {
@@ -6407,6 +6417,11 @@ http.createServer(async (req, res) => {
       // Q123: stop a name-enumeration sweep from one source before the PIN check.
       if (loginIpBlocked(req)) return json(429, { ok: false, error: "Too many sign-in attempts from this network — wait a few minutes" });
       if (locked(id)) return json(429, { ok: false, error: "Too many tries — locked for 5 minutes" });
+      // Block 174 (Fable-5 audit): guard the login id before it reaches PostgREST —
+      // it's unauthenticated user input flowing into an id=eq. filter (same class the
+      // v47/48/v171 sweeps closed). A non-UUID gets the generic "no PIN" answer (no
+      // info leak) and is counted as a failed source, never touching the DB.
+      if (!isUuid(id)) { noteLoginFail(req, id); return json(404, { ok: false, error: "No PIN on file — see the manager" }); }
       // Q70 hardening (2026-07-29 soak-test find): same active enforcement
       // as /api/pin/set above — a retired account can't sign in by id.
       const [emp] = await db(`employee?select=id,pin_hash,must_change_pin,role&id=eq.${id}&active=is.true`);
