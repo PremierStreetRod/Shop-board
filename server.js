@@ -551,6 +551,21 @@ function wifiGate(req) {
   const from = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return from === shopIp ? null : "Clock actions only work on shop Wi-Fi";
 }
+// Block 173 (C1 login gate + TV network-lock): true if the request is from the
+// shop network — or an internal loopback read (pace monitor/manager pages, always
+// trusted). SHOP_EGRESS_IP unset = build phase → true (every gate inert until the
+// owner captures the shop IP via /api/my-ip and sets it on Railway).
+function onShopNetwork(req) {
+  const shopIp = process.env.SHOP_EGRESS_IP;
+  if (!shopIp) return true;
+  const ip = clientIp(req);
+  if (!ip || ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1") return true;
+  return ip === shopIp;
+}
+// Block 173: the off-network notice shown in place of the wall board.
+function offNet173() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Shop Board</title><style>body{margin:0;background:#000;color:#8e8e93;font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px}h1{color:#fff;font-size:1.3rem;margin:0 0 8px}</style></head><body><div><h1>This board shows on the shop network</h1><p>Connect to the shop Wi-Fi to see the live board.</p></div></body></html>`;
+}
 
 // ---------- FORGOTTEN-CLOCK-OUT SWEEPER (risk sweep 2026-07-28) ----------
 // The human truth: someone WILL walk out at 4:00 without tapping clock-out,
@@ -6394,13 +6409,19 @@ http.createServer(async (req, res) => {
       if (locked(id)) return json(429, { ok: false, error: "Too many tries — locked for 5 minutes" });
       // Q70 hardening (2026-07-29 soak-test find): same active enforcement
       // as /api/pin/set above — a retired account can't sign in by id.
-      const [emp] = await db(`employee?select=id,pin_hash,must_change_pin&id=eq.${id}&active=is.true`);
+      const [emp] = await db(`employee?select=id,pin_hash,must_change_pin,role&id=eq.${id}&active=is.true`);
       if (!emp || !emp.pin_hash) { noteLoginFail(req, id); return json(404, { ok: false, error: "No PIN on file — see the manager" }); }
       if (!checkPin(pin, emp.pin_hash)) {
         const s = strike(id);
         noteLoginFail(req, id);
         logEvent("pin.fail", id, {});
         return json(401, { ok: false, error: s.lockedUntil > Date.now() ? "Locked for 5 minutes (5 wrong tries)" : "Wrong PIN — try again" });
+      }
+      // Block 173 (C1 — owner ruling: admin-only outside company Wi-Fi). Inert until
+      // SHOP_EGRESS_IP is set. Non-admin EXCEPTION mechanism = pending owner ruling.
+      if (!onShopNetwork(req) && emp.role !== "admin") {
+        logEvent("login.offnetwork_blocked", id, {});
+        return json(403, { ok: false, error: "Off the shop network — only admins can sign in from outside. Connect to the shop Wi-Fi to sign in." });
       }
       pinStrikes.delete(id);
       logEvent("employee.login", id, {});
@@ -6942,7 +6963,11 @@ http.createServer(async (req, res) => {
     // so nothing bookmarked or already-typed ever breaks.
     if (url.pathname === "/tv" || url.pathname === "/board") { res.writeHead(302, { Location: url.pathname === "/tv" ? "/tvboard" : "/shopboard" }); return res.end(); }
     if (url.pathname === "/orderqueue") { res.writeHead(302, { Location: "/reconcile" }); return res.end(); }   // Block 156 (E1): the new name is typable
-    if (url.pathname === "/tvboard") return send(200, "text/html; charset=utf-8", boardPage(true));
+    if (url.pathname === "/tvboard") {
+      // Block 173 (owner ruling): the wall board only renders on the shop network.
+      if (!onShopNetwork(req)) return send(200, "text/html; charset=utf-8", offNet173());
+      return send(200, "text/html; charset=utf-8", boardPage(true));
+    }
     if (url.pathname === "/shopboard") {
       const empB95 = await liveSession(req);
       if (!empB95) { res.writeHead(302, { Location: "/login" }); return res.end(); }
@@ -7036,8 +7061,12 @@ http.createServer(async (req, res) => {
       // ("Customer names on the TV") still governs the name; missing row = ON.
       const [namesTog88] = await db(`feature_toggle?select=enabled&key=eq.customer_names_on_tv`);
       const namesOn88 = !namesTog88 || namesTog88.enabled !== false;
-      const who88 = (x) => (namesOn88 && x && x.customer_name ? String(x.customer_name) : "");
-      const dest88 = (x) => (x && x.destination ? String(x.destination) : "");
+      // Block 173 (break-pass F4): customer name + destination (the only PII here)
+      // show only to a signed-in viewer or a shop-network/internal caller — an
+      // anonymous off-network client (the F4 leak vector) gets structure, no identity.
+      const showCustomer133 = Boolean(sessB133) || onShopNetwork(req);
+      const who88 = (x) => (namesOn88 && showCustomer133 && x && x.customer_name ? String(x.customer_name) : "");
+      const dest88 = (x) => (showCustomer133 && x && x.destination ? String(x.destination) : "");
       // EVENT WINDOW FIX (risk sweep 2026-07-28): the old flat limit-2000 read
       // would silently drop a long-running cab's EARLIEST coverage after about
       // a month of real usage — corrupting pace math invisibly. Now the window
