@@ -1056,7 +1056,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     </div>` : ""}
     ${ah.open ? `<div id="wrap107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:14px;margin:6px 0 12px;text-align:left">
       <p class="msg" style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
-      <input id="wrapnote" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">
+      <input id="wrapnote" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">   <!-- Block 169: 16px stops iOS Safari's auto-zoom-on-focus (it zooms any input under 16px) -->
       <div style="margin-top:8px;opacity:.8;font-size:.9rem">Photos of the work — optional:</div>
       <input type="file" id="wrapph107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
       <div id="wrapmsg107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
@@ -1071,12 +1071,16 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div class="grid">
       ${reasons.some((r) => r.label === "Lunch") ? `<button class="name" data-reason="Lunch">Lunch</button>` : ""}
       <button class="name" data-reason="End of day">End of day</button>
-      ${reasons.filter((r) => r.label !== "Lunch" && r.label !== "End of day").length ? `<button class="name" style="opacity:.7;font-size:.95em" onclick="var m168=document.getElementById('more168');m168.hidden=!m168.hidden">Other reason&hellip;</button>` : ""}
+      ${reasons.filter((r) => r.label !== "Lunch" && r.label !== "End of day").length ? `<button class="name" style="opacity:.8" onclick="var m168=document.getElementById('more168');m168.style.display=m168.style.display==='none'?'':'none'">Other reason&hellip;</button>` : ""}
     </div>
-    <div id="more168" hidden class="grid" style="margin-top:8px">
+    <!-- Block 169: display:none inline, NOT the hidden attribute — the .grid
+         class sets display:grid, which out-ranks [hidden]'s display:none, so
+         the fold never actually folded (Daniel caught it). Toggling the
+         inline style wins over the class either way. -->
+    <div id="more168" class="grid" style="display:none;margin-top:8px">
       ${reasons.filter((r) => r.label !== "Lunch" && r.label !== "End of day").map((r) => `<button class="name" style="font-size:.85em;opacity:.85;padding:12px" data-reason="${r.label}">${r.label}</button>`).join("")}
     </div>
-    <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
+    <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%;font-size:16px"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
     ${state.lineId === 14 ? "" : `<p class="msg" style="margin-top:18px">…or work a line — tap to jump on</p>
@@ -1808,7 +1812,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
          <input type="file" id="ahphV107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
          <div id="ahmsgV107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
          <button class="wbtn" style="background:#1d5a2d;margin-top:8px" onclick="wrapGoV107(this)">Submit wrap-up &amp; clock out</button>
-       </div>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
+       </div>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px;font-size:16px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
     : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — three quick questions, then a normal shift.</div>
       <div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:10px auto 0;text-align:left;max-width:560px">
         <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
