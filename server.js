@@ -7340,7 +7340,9 @@ http.createServer(async (req, res) => {
       // Q83: the "down for today" reason list (admin-editable pick list).
       const downReasons = (await db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false&order=sort_order`)).map((r) => r.label);
       // Q111 pt 2: the time-corrections lane — a person + a Phoenix day.
-      const tcEmpSel = url.searchParams.get("tc_emp");
+      // Block 172 (break-pass): isUuid-guard tc_emp before the clock_event filter.
+      const tcEmpRaw = url.searchParams.get("tc_emp");
+      const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;
       const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
       const tcEmps = await db(`employee?select=id,first_name,last_name&active=is.true&order=first_name`);
       let tcPunches = [];
@@ -9366,6 +9368,8 @@ self.addEventListener("notificationclick", (e) => {
       const build_id = url.searchParams.get("build_id");
       const ctype = String(req.headers["content-type"] || "");
       if (!build_id) return json(400, { ok: false, error: "Missing build" });
+      // Block 172 (break-pass): guard the id — becomes a storage path + insert value.
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
       // HEIC backstop: phones convert before upload; if a raw HEIC still
       // arrives (odd browser path), answer in plain English instead of
@@ -9381,6 +9385,7 @@ self.addEventListener("notificationclick", (e) => {
       const buf = Buffer.concat(chunks);
       // task_id present = a PER-TASK photo (file 11); absent = a finish-gate photo.
       const task_id = url.searchParams.get("task_id") || null;
+      if (task_id != null && !isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" }); // Block 172 (break-pass)
       const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
       const path = `${build_id}/${Date.now()}.${ext}`;
       const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
@@ -9457,6 +9462,7 @@ self.addEventListener("notificationclick", (e) => {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const pid = url.pathname.slice("/photo/".length);
+      if (!isUuid(pid)) return send(404, "text/plain", "Not found"); // Block 172 (break-pass): guard the read-proxy id (write-sweep missed this READ)
       let [p] = await db(`build_photo?select=storage_path&id=eq.${pid}`);
       // Block 107: after-hours wrap-up photos live in their own table.
       if (!p) [p] = await db(`after_hours_photo?select=storage_path&id=eq.${pid}`);
