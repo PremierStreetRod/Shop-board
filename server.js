@@ -6399,7 +6399,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=first_name,lines,department,role,must_change_pin&id=eq.${empId}`);
+      const [emp] = await db(`employee?select=id,first_name,lines,department,role,must_change_pin&id=eq.${empId}`);   // Block 165: id rides along — the cab screen's "started by mistake? undo" compares emp.id to the step's starter (v164 shipped without it, so the link never rendered for the starter — Daniel caught it live)
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       // Q114: a temporary code gets you exactly one place — the change-PIN screen.
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
