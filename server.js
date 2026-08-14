@@ -1338,7 +1338,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
-        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="color:#8e8e93;cursor:pointer" onclick="unstart164('${t.id}')">started by mistake? undo</a> · ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
+        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
             ? `${(photosOf[t.id] || []).length ? `📎 ${(photosOf[t.id] || []).length} photo${(photosOf[t.id] || []).length === 1 ? "" : "s"}` : ""}${(photosOf[t.id] || []).length && (notesOf[t.id] || []).length ? " · " : ""}${(notesOf[t.id] || []).length ? `📝 ${(notesOf[t.id] || []).length} note${(notesOf[t.id] || []).length === 1 ? "" : "s"}` : ""} — view / add`
             : "＋ note / photo"}</a>
