@@ -6592,22 +6592,30 @@ http.createServer(async (req, res) => {
       const legal = { not_started: ["in_progress"], in_progress: ["complete", "not_started"], complete: ["in_progress"] };   // Block 164: in_progress -> not_started is the UN-START (accidental tap)
       if (!(legal[t.state] || []).includes(to))
         return json(400, { ok: false, error: `Can't go ${t.state} → ${to}` });
-      // Block 159 (owner-rep F1 ruling): SOFT cap on concurrent open steps.
-      // Starting tasks can NOT inflate pace (pace is labor-based — an open
-      // step earns nothing until COMPLETED), so this guards data quality:
-      // per-step timing stays honest and the floor shows what's really being
-      // worked. A fresh start (not an undo) with 2+ non-background steps
-      // already in progress under this person's name gets a "finish one
-      // first?" nudge; a confirmed second tap proceeds and is LOGGED
-      // (task.cap_override) so a repeat hoarder is visible to the manager.
-      // Background steps (paint dry, cure) neither count nor get nudged —
-      // running alongside is their whole point.
+      // Block 159 → 167 (owner-rep ruling): SOFT cap on concurrent open
+      // steps, counted PER LINE — Daniel's correction after hitting the
+      // global count from Line 2 ("the limit of 2 tasks should be PER LINE,
+      // not total for any one staff member"). A fresh start (not an undo)
+      // with 2+ of YOUR non-background steps already open on THE SAME LINE
+      // gets a "finish one first?" nudge; a confirmed second tap proceeds
+      // and is LOGGED (task.cap_override). Open steps on OTHER lines never
+      // count here — the leave-line warning (block 163) covers those.
+      // Starting tasks can NOT inflate pace (labor-based), so this guards
+      // data quality. Background steps neither count nor get nudged.
       if (to === "in_progress" && t.state === "not_started" && !t.is_background) {
-        const open159 = await db(`task?select=id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
-        const n159 = (open159 || []).filter((x) => !x.is_background).length;
+        const open159 = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const real159 = (open159 || []).filter((x) => !x.is_background);
+        let n159 = 0;
+        if (real159.length) {
+          const [tb159] = await db(`build?select=line_id&id=eq.${t.build_id}`);
+          const bIds159 = [...new Set(real159.map((x) => x.build_id))];
+          const b159 = await db(`build?select=id,line_id&id=in.(${bIds159.join(",")})`);
+          const sameLine159 = new Set((b159 || []).filter((b) => tb159 && b.line_id != null && Number(b.line_id) === Number(tb159.line_id)).map((b) => b.id));
+          n159 = real159.filter((x) => sameLine159.has(x.build_id)).length;
+        }
         if (n159 >= 2) {
           if (confirm159 !== true)
-            return json(200, { ok: false, nudge159: true, open: n159, error: `You've got ${n159} steps going — finish one first?` });
+            return json(200, { ok: false, nudge159: true, open: n159, error: `You've got ${n159} steps going on this line — finish one first?` });
           logEvent("task.cap_override", empId, { task_id, build_id: t.build_id, display_no: t.display_no, open_before: n159 });
         }
       }
