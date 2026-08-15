@@ -5139,17 +5139,33 @@ function reduceFresh(ctx) {
     const custName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || (c.company || "");
     const dest = String(c.state ?? c.ship_state ?? "").trim() || null;
     const items = Array.isArray(p.line_items) ? p.line_items : [];
-    const cabParts = [], unknownParts = []; let blazerTop = false;
+    const cabParts = [], unknownParts = [], ifaceAdds = [], ifaceDrops = []; let blazerTop = false;
     for (const it of items) {
       const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
       const pr = ctx.prodByPart[up];
+      // Block 176 (Fable-5, Aaron 8/15): each line item now carries an
+      // authoritative `interface` flag ("true" = a tracked cab part). Verified
+      // against every stored push since 8/5 (1,030 pushes, ~75k line items):
+      // ZERO disagreements with the part library. When flag and library
+      // DISAGREE the flag decides — that removes the keep-two-lists-in-sync
+      // failure mode Aaron warned about:
+      //   flag=false + library knows it -> Coyote UNCHECKED the part; never
+      //     build from it (parks/orphans then surface via the stuck flags).
+      //   flag=true + library missing it -> a NEW tracked part we can't place
+      //     yet (no family/line) -> office notice to add it, not silent noise.
+      //   flag absent (pre-8/5 rows, or the field ever vanishes) -> plain
+      //     library matching, exactly the old behavior. Booleans or strings ok.
+      const ifc176 = it && it.interface != null ? String(it.interface).trim().toLowerCase() : null;
+      if (ifc176 === "false" && pr) { ifaceDrops.push(num); continue; }
+      if (ifc176 === "true" && !pr) { ifaceAdds.push(num); continue; }
+      if (ifc176 === "false") continue;   // declared NOT ours (brackets, hardware, ~75/order) — recognized-and-excluded, never "unrecognized" noise; an all-false order parks clean as "No cab part."
       if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */ }); }
       else unknownParts.push(num);
     }
     const col151 = collapseCabs151(cabParts);   // Block 151: dup rows -> one cab + a report
-    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts: col151.cabs, dupCabs: col151.dupes, unknownParts, blazerTop, rowIds: [r.id] });
+    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts: col151.cabs, dupCabs: col151.dupes, unknownParts, ifaceAdds, ifaceDrops, blazerTop, rowIds: [r.id] });
   }
   return [...byKey.values()];
 }
@@ -5200,10 +5216,14 @@ function buildSyncPlan(ctx) {
         customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
       }));
     }
-    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts, dupCabs: o.dupCabs || [] });
+    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts, dupCabs: o.dupCabs || [], ifaceAdds: o.ifaceAdds || [], ifaceDrops: o.ifaceDrops || [] });
   }
   return items;
 }
+// Block 176 (Fable-5): in-process dedup for the interface-drift office notices
+// below — a re-push of the same order never re-notifies (worst case after a
+// redeploy: one repeat). Cab-attached flags dedup harder via flagCabAlert176.
+const __ifaceNoticed176 = new Set();
 async function syncRun(apply, actorId) {
   const ctx = await syncContext();
   const plan = buildSyncPlan(ctx);
@@ -5212,6 +5232,27 @@ async function syncRun(apply, actorId) {
   const stampIds = [];
   const A = (order, doWhat, extra) => sum.actions.push(Object.assign({ order, do: doWhat }, extra || {}));
   for (const it of plan) {
+    // Block 176 (Fable-5): office notices when Aaron's interface flag and the
+    // board's part library DISAGREE — the only two drift cases left now.
+    if (apply && it.ifaceAdds && it.ifaceAdds.length) for (const p176 of it.ifaceAdds) {
+      const k176 = "add|" + it.orderNo + "|" + p176.toUpperCase();
+      if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
+      try {
+        const adm176 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        await notify("sync.iface_add", adm176, `Order ${it.orderNo}: new Coyote cab part ${p176}`, `Coyote marks ${p176} as a tracked cab part, but it is not in the board's part library yet, so this cab cannot place itself. Add ${p176} under Admin -> Lines & Parts (family, line, build steps) and the order places automatically on the next sync.`, "/reconcile");
+      } catch (eA176) { console.error("iface-add notify:", (eA176 && eA176.message) || eA176); }
+      logEvent("sync.iface_add", actorId || null, { order_number: it.orderNo, part: p176 });
+      sum.flagged++; A(it.orderNo, "Coyote added a tracked part the board does not know", { part: p176 });
+    }
+    if (apply && it.ifaceDrops && it.ifaceDrops.length) for (const p176 of it.ifaceDrops) {
+      const k176 = "drop|" + p176.toUpperCase();   // per PART: one unchecked box floods every order carrying it
+      if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
+      try {
+        const adm176 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        await notify("sync.iface_drop", adm176, `Coyote unchecked cab part ${p176}`, `Coyote now marks ${p176} as NOT part of the interface (its checkbox is off), so orders carrying it stop building cabs here. If that was intentional, retire it under Lines & Parts too; if not, re-check the box in Coyote and re-push.`, "/reconcile");
+      } catch (eD176) { console.error("iface-drop notify:", (eD176 && eD176.message) || eD176); }
+      logEvent("sync.iface_drop", actorId || null, { order_number: it.orderNo, part: p176 });
+    }
     if (it.action === "park") {
       sum.parked++; A(it.orderNo, "park", { reason: it.reason });
       // Block 176 (Fable-5): Aaron's feed is now CHANGE-ONLY and he CLEARS the
@@ -5224,9 +5265,9 @@ async function syncRun(apply, actorId) {
       // auto-remove: owner rule is cancel-never-delete, and a STARTED cab stays
       // in production regardless (Block 120) — this is a heads-up, not a move.
       if (apply) {
-        const kids176 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => ["upcoming", "active", "awaiting_inspection", "rework", "on_hold"].includes(b.state));
+        const kids176 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => ["upcoming", "active", "awaiting_inspection", "rework", "fix_job", "on_hold"].includes(b.state));
         for (const b176 of kids176) {
-          try { const did = await flagCabAlert176("stuck", b176, ("Coyote no longer sends a buildable cab part for this order (" + (it.reason || "no cab part") + "). Its feed is change-only and it may not push again, so this cab can sit here without updates. Verify: set it aside / cancel it, or fix the part in Coyote and re-push." + (b176.started_at ? " This cab is IN PRODUCTION — it stays on the line regardless; heads-up only." : "")), it.orderNo, actorId); if (did) { sum.flagged++; A(b176.order_number, "dropped-part — flagged for a look", { stuck: true }); } }
+          try { const did = await flagCabAlert176("stuck", b176, ("Coyote no longer sends a buildable cab part for this order (" + (it.reason || "no cab part") + ")." + (it.ifaceDrops && it.ifaceDrops.length ? " Coyote marks " + it.ifaceDrops.join(", ") + " as no longer part of the interface." : "") + " Its feed is change-only and it may not push again, so this cab can sit here without updates. Verify: set it aside / cancel it, or fix the part in Coyote and re-push." + (b176.started_at ? " This cab is IN PRODUCTION — it stays on the line regardless; heads-up only." : "")), it.orderNo, actorId); if (did) { sum.flagged++; A(b176.order_number, "dropped-part — flagged for a look", { stuck: true }); } }
           catch (e176) { console.error("stuck-cab flag:", (e176 && e176.message) || e176); }
         }
       }
@@ -5234,25 +5275,37 @@ async function syncRun(apply, actorId) {
     }
     if (it.action === "exclude") { sum.excluded++; if (it.stamp) stampIds.push(...it.rowIds); A(it.orderNo, "exclude", { reason: it.reason }); continue; }
     if (it.action === "complete") {
-      const b = ctx.buildByOrder[it.orderNo];
-      if (b && b.state !== "production_complete" && b.state !== "cancelled") { if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) }); sum.completed++; A(it.orderNo, "mark shipped / complete"); }
-      else sum.noop++;
+      // Block 176 (Fable-5): match by ROOT, patch by id — a multi-cab order's
+      // builds live under DOTTED numbers (23417.1/.2); the old bare-number
+      // patch missed every one of them. Harmless under the old hourly re-push
+      // (a human eventually saw the leftovers), fatal under Aaron's change-only
+      // feed: the final "Processed" push is the LAST push ever, so a missed
+      // complete would leave those cabs on the board forever.
+      const kidsC176 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => b.state !== "production_complete" && b.state !== "cancelled");
+      if (kidsC176.length) {
+        if (apply) for (const bC of kidsC176) await db(`build?id=eq.${bC.id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
+        sum.completed += kidsC176.length; A(it.orderNo, "mark shipped / complete", { cabs: kidsC176.length });
+      } else sum.noop++;
       if (it.stamp) stampIds.push(...it.rowIds); continue;
     }
     if (it.action === "cancel") {
-      const b = ctx.buildByOrder[it.orderNo];
-      if (b && b.started_at) {
-        // Block 120 (owner-rep): a cab already IN PRODUCTION stays put on the
-        // board no matter what Coyote says — we finish it (and sell it
-        // ourselves if the customer walks). Cancel is NOTED, never a move.
-        if (apply && (b.coyote_status || null) !== "Cancel") await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ coyote_status: "Cancel" }) });
-        sum.noop++; A(it.orderNo, "cancel NOTED on started cab — stays in production", { started: true });
-      } else if (b && b.state !== "cancelled") {
-        // Not started yet → SET ASIDE (off the line-up, shown on the White
-        // Board, ready to drop back in if Coyote returns it to Queued).
-        if (apply) await db(`build?order_number=eq.${encodeURIComponent(it.orderNo)}`, { method: "PATCH", body: JSON.stringify({ state: "cancelled", coyote_status: "Cancel" }) });
-        sum.cancelled++; A(it.orderNo, "set aside — cancelled before production");
-      } else sum.noop++;
+      // Block 176 (Fable-5): same root-aware, patch-by-id rework as complete —
+      // the old bare-number patch missed dotted multi-cab builds, and the
+      // change-only feed makes a missed Cancel permanent. Per-cab rules keep
+      // Block 120: a STARTED cab stays in production (cancel NOTED only); a
+      // not-started cab is SET ASIDE; finished/aside cabs are left untouched.
+      const kidsX176 = ctx.buildsByRoot[it.orderNo] || [];
+      let did176 = false;
+      for (const bX of kidsX176) {
+        if (bX.started_at) {
+          if (apply && (bX.coyote_status || null) !== "Cancel") await db(`build?id=eq.${bX.id}`, { method: "PATCH", body: JSON.stringify({ coyote_status: "Cancel" }) });
+          sum.noop++; A(bX.order_number, "cancel NOTED on started cab — stays in production", { started: true }); did176 = true;
+        } else if (bX.state !== "cancelled" && bX.state !== "production_complete") {
+          if (apply) await db(`build?id=eq.${bX.id}`, { method: "PATCH", body: JSON.stringify({ state: "cancelled", coyote_status: "Cancel" }) });
+          sum.cancelled++; A(bX.order_number, "set aside — cancelled before production"); did176 = true;
+        }
+      }
+      if (!did176) sum.noop++;
       if (it.stamp) stampIds.push(...it.rowIds); continue;
     }
     if (it.action === "place") {
@@ -5348,6 +5401,22 @@ async function syncRun(apply, actorId) {
             await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number));
             logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
           } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
+        }
+      }
+      // Block 176 (Fable-5): ORPHANED CABS — Aaron's final-sync-without-the-part
+      // arrives as a NORMAL update when the order still has other cab parts
+      // (only an all-parts-gone order parks). Every push is a FULL order
+      // snapshot, so any live cab under this root that this push no longer
+      // targets is exactly his "stuck on your side" case: the trigger is
+      // cleared and no later push will ever move it. Same rule as the park
+      // case — FLAG for a human, never auto-remove (cancel-never-delete;
+      // started cabs stay put per Block 120). Dedup'd by flagCabAlert176.
+      if (apply) {
+        const have176 = new Set(it.targets.map((t) => String(t.order_number)));
+        const orph176 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => !have176.has(String(b.order_number)) && ["upcoming", "active", "awaiting_inspection", "rework", "fix_job", "on_hold"].includes(b.state));
+        for (const b176 of orph176) {
+          try { const did = await flagCabAlert176("stuck", b176, ("This Coyote push no longer includes cab " + b176.order_number + " (part " + (b176.part_number || "?") + ")." + (it.ifaceDrops && it.ifaceDrops.length ? " Coyote marks " + it.ifaceDrops.join(", ") + " as no longer part of the interface." : "") + " Its feed is change-only, so this cab may never update again. Verify: set it aside / cancel it, or fix the order in Coyote and re-push." + (b176.started_at ? " This cab is IN PRODUCTION - it stays on the line regardless; heads-up only." : "")), it.orderNo, actorId); if (did) { sum.flagged++; A(b176.order_number, "cab no longer in the Coyote push — flagged for a look", { stuck: true }); } }
+          catch (e176b) { console.error("orphan-cab flag:", (e176b && e176b.message) || e176b); }
         }
       }
       if (it.stamp) stampIds.push(...it.rowIds);
@@ -9689,21 +9758,60 @@ const INTAKE_RETENTION_DAYS = (() => {
   if (v === "off" || v === "") return 0;
   const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 60;
 })();
+// Block 176 (Fable-5): the two LOG tables are the only other unbounded growers
+// (event_log ~ a few hundred rows/day live, notification_log per notice sent).
+// Same daily sweep bounds them: event_log keeps 2 YEARS (730 d — reports read
+// months, never years back; the audit trail stays deep), notification_log
+// keeps 180 d (pure delivery history). clock_event (pay records), builds, and
+// every business table are NEVER touched by any sweep. Env-tunable, "off"
+// disables each independently. Worst-case steady state, all three sweeps on:
+// intake ~50-60 MB + latest-per-order forever (~10 KB/order), event_log
+// ~300-400 MB, notification_log tens of MB — permanently flat from there,
+// far under the database plan's limit, no matter how many years it runs.
+const EVENT_RETENTION_DAYS = (() => {
+  const v = String(process.env.EVENT_RETENTION_DAYS ?? "730").trim().toLowerCase();
+  if (v === "off" || v === "") return 0;
+  const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 730;
+})();
+const NOTICE_RETENTION_DAYS = (() => {
+  const v = String(process.env.NOTICE_RETENTION_DAYS ?? "180").trim().toLowerCase();
+  if (v === "off" || v === "") return 0;
+  const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 180;
+})();
+// Prune one log table by age: SELECT ids past the cutoff (bounded batch),
+// DELETE in chunks of 100. Runs daily, so it self-drains any backlog a few
+// thousand rows a day without ever issuing an unbounded ranged DELETE.
+async function pruneLogTable176(table, tsCol, days) {
+  if (!days) return 0;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = await db(`${table}?select=id&${tsCol}=lt.${encodeURIComponent(cutoff)}&order=${tsCol}.asc&limit=5000`);
+  let deleted = 0;
+  for (let i = 0; i < rows.length; i += 100) {
+    const batch = rows.slice(i, i + 100).map((r) => r.id);
+    await db(`${table}?id=in.(${batch.join(",")})`, { method: "DELETE" });
+    deleted += batch.length;
+  }
+  return deleted;
+}
 let __retentionBusy = false;
 async function intakeRetentionSweep() {
-  if (!INTAKE_RETENTION_DAYS || __retentionBusy) return { skipped: true };
+  if ((!INTAKE_RETENTION_DAYS && !EVENT_RETENTION_DAYS && !NOTICE_RETENTION_DAYS) || __retentionBusy) return { skipped: true };
   __retentionBusy = true;
   try {
     const cutoff = new Date(Date.now() - INTAKE_RETENTION_DAYS * 86400000).toISOString();
-    // Tiny columns only; grouped so each order's rows are contiguous, newest first.
-    const rows = await db(`coyote_intake?select=id,order_number,received_at&order=order_number.asc,received_at.desc&limit=200000`);
     const seenLatest = new Set();
     const doomed = [];
-    for (const r of rows) {
-      const on = r.order_number;
-      if (on == null || on === "") { if (r.received_at < cutoff) doomed.push(r.id); continue; } // no order to preserve
-      if (!seenLatest.has(on)) { seenLatest.add(on); continue; }   // first row for this order = latest -> KEEP forever
-      if (r.received_at < cutoff) doomed.push(r.id);               // an older redundant push, past the window
+    let scanned176 = 0;
+    if (INTAKE_RETENTION_DAYS) {
+      // Tiny columns only; grouped so each order's rows are contiguous, newest first.
+      const rows = await db(`coyote_intake?select=id,order_number,received_at&order=order_number.asc,received_at.desc&limit=200000`);
+      scanned176 = rows.length;
+      for (const r of rows) {
+        const on = r.order_number;
+        if (on == null || on === "") { if (r.received_at < cutoff) doomed.push(r.id); continue; } // no order to preserve
+        if (!seenLatest.has(on)) { seenLatest.add(on); continue; }   // first row for this order = latest -> KEEP forever
+        if (r.received_at < cutoff) doomed.push(r.id);               // an older redundant push, past the window
+      }
     }
     let deleted = 0;
     for (let i = 0; i < doomed.length; i += 100) {
@@ -9711,17 +9819,22 @@ async function intakeRetentionSweep() {
       await db(`coyote_intake?id=in.(${batch.join(",")})`, { method: "DELETE" });
       deleted += batch.length;
     }
-    if (deleted) logEvent("coyote.retention_prune", null, { deleted, window_days: INTAKE_RETENTION_DAYS, kept_latest_per_order: seenLatest.size, scanned: rows.length });
-    console.log(`[retention] pruned ${deleted} old intake rows (window ${INTAKE_RETENTION_DAYS}d; kept ${seenLatest.size} latest-per-order of ${rows.length} scanned)`);
-    return { deleted, kept: seenLatest.size, scanned: rows.length };
+    if (deleted) logEvent("coyote.retention_prune", null, { deleted, window_days: INTAKE_RETENTION_DAYS, kept_latest_per_order: seenLatest.size, scanned: scanned176 });
+    if (INTAKE_RETENTION_DAYS) console.log(`[retention] pruned ${deleted} old intake rows (window ${INTAKE_RETENTION_DAYS}d; kept ${seenLatest.size} latest-per-order of ${scanned176} scanned)`);
+    // Block 176 (Fable-5): bound the log tables on the same daily tick.
+    let evDel = 0, ntDel = 0;
+    try { evDel = await pruneLogTable176("event_log", "at", EVENT_RETENTION_DAYS); } catch (eEv) { console.error("[retention] event_log:", (eEv && eEv.message) || eEv); }
+    try { ntDel = await pruneLogTable176("notification_log", "created_at", NOTICE_RETENTION_DAYS); } catch (eNt) { console.error("[retention] notification_log:", (eNt && eNt.message) || eNt); }
+    if (evDel || ntDel) { logEvent("log.retention_prune", null, { event_log: evDel, notification_log: ntDel, event_days: EVENT_RETENTION_DAYS, notice_days: NOTICE_RETENTION_DAYS }); console.log(`[retention] pruned logs: event_log ${evDel} (${EVENT_RETENTION_DAYS}d), notification_log ${ntDel} (${NOTICE_RETENTION_DAYS}d)`); }
+    return { deleted, kept: seenLatest.size, scanned: scanned176, event_log: evDel, notification_log: ntDel };
   } catch (e) {
     console.error("[retention] error:", (e && e.message) || e);
     logEvent("coyote.retention_error", null, { error: String((e && e.message) || e) });
     return { error: String((e && e.message) || e) };
   } finally { __retentionBusy = false; }
 }
-if (INTAKE_RETENTION_DAYS) {
-  console.log(`[retention] intake retention ON - window ${INTAKE_RETENTION_DAYS} days, daily sweep`);
+if (INTAKE_RETENTION_DAYS || EVENT_RETENTION_DAYS || NOTICE_RETENTION_DAYS) {
+  console.log(`[retention] daily sweep ON - intake ${INTAKE_RETENTION_DAYS || "off"}d, event_log ${EVENT_RETENTION_DAYS || "off"}d, notification_log ${NOTICE_RETENTION_DAYS || "off"}d`);
   // First sweep ~2 min after boot (let the app settle), then every 24 h.
   setTimeout(function retentionTick() { intakeRetentionSweep().finally(() => setTimeout(retentionTick, 24 * 3600 * 1000)); }, 120000);
-} else console.log("[retention] intake retention OFF (INTAKE_RETENTION_DAYS=off)");
+} else console.log("[retention] all retention sweeps OFF");
