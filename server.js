@@ -574,7 +574,7 @@ function onShopNetwork(req) {
 }
 // Block 173: the off-network notice shown in place of the wall board.
 function offNet173() {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Shop Board</title><style>body{margin:0;background:#000;color:#8e8e93;font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px}h1{color:#fff;font-size:1.3rem;margin:0 0 8px}</style></head><body><div><h1>This board shows on the shop network</h1><p>Connect to the shop Wi-Fi to see the live board.</p></div></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><meta name="robots" content="noindex, nofollow"><title>Shop Board</title><style>body{margin:0;background:#000;color:#8e8e93;font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px}h1{color:#fff;font-size:1.3rem;margin:0 0 8px}</style></head><body><div><h1>This board shows on the shop network</h1><p>Connect to the shop Wi-Fi to see the live board.</p></div></body></html>`;
 }
 
 // ---------- FORGOTTEN-CLOCK-OUT SWEEPER (risk sweep 2026-07-28) ----------
@@ -879,7 +879,7 @@ const style = `<style>
 
 const loginPage = (employees) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><!-- Q48 -->
 <title>Sign in — Shop Board</title>${style}</head>
 <body><div class="wrap">
@@ -956,7 +956,7 @@ const loginPage = (employees) => `<!doctype html>
 // server refuses the temp code itself as the new PIN.
 const changePinPage = (first) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>New PIN — Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
@@ -1005,7 +1005,7 @@ const changePinPage = (first) => `<!doctype html>
 // `state` = { clockedIn: bool, lineName } derived from the latest clock event.
 const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null, fixLane = { open: [] }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
@@ -1305,7 +1305,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   const totalMh = tasks.filter((t) => !t.is_background).reduce((s, t) => s + Number(t.man_hours), 0);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
 <style>
   .task{display:flex;align-items:center;gap:14px;width:100%;text-align:left;
@@ -1636,7 +1636,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 // "Delivered" tap starts the cab's clock on production's side.
 const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
@@ -1821,7 +1821,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 
 const watcherPage = (emp, clk = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
@@ -1934,7 +1934,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 // how notifications reach someone in-app regardless of push/text/email.
 const inboxPage = (emp, notes) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8962; Home</a></p>
@@ -1960,7 +1960,7 @@ const inboxPage = (emp, notes) => `<!doctype html>
 // code-entry box. Plain concatenation (no nested template literals) for safety.
 function handoffPage(info) {
   const esc = (x) => String(x == null ? "" : x).replace(/</g, "&lt;");
-  const head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Send photos - Shop Board</title>' + style + '</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>';
+  const head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><meta name="robots" content="noindex, nofollow"><title>Send photos - Shop Board</title>' + style + '</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>';
   const foot = '</div></body></html>';
   if (!info) {
     return head +
@@ -1989,7 +1989,7 @@ function handoffPage(info) {
 // and pace arrive with the time engine (Stage 2). Refreshes itself every 30 s.
 const boardPage = (tv98 = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
 <style>
   .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px;padding:10px}
@@ -2220,7 +2220,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   const mark = (st) => st === "complete" ? "✓" : st === "in_progress" ? "⏳" : "·";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order ${escH(b.order_number)}</title>${style}
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
 .kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}</style></head>
@@ -2342,7 +2342,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 
 const shellPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><!-- Q48: never crawlable -->
 <title>Shop Board — Premier Street Rod</title>${style}</head>
 <body><div class="wrap" style="display:grid;place-items:center;height:90vh;text-align:center">
@@ -2407,7 +2407,7 @@ const navBar95 = (isAdmin, showReports = false) => {
 // name/role/department stay admin-owned (People panel).
 const settingsPage117 = (me) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — My settings</title>${style}</head>
 <body><div class="wrap" style="max-width:560px">
   <div class="logo">SHOP <span>BOARD</span></div>
@@ -2474,7 +2474,7 @@ const settingsPage117 = (me) => `<!doctype html>
 
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
@@ -2956,7 +2956,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Meeting Pack</title>${style}
 <style>
   .mp{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
@@ -3099,7 +3099,7 @@ function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Coverage</title>${style}
 <style>
   .mp{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 16px;margin-bottom:14px}
@@ -3209,7 +3209,7 @@ const PICK_LIST_INFO = {
 };
 const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
 <style>
   .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:18px}
@@ -3970,7 +3970,7 @@ async function reportData(startMs, endMs) {
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
 const reportsPage = (d, isAdmin = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Reports</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
@@ -4172,7 +4172,7 @@ function integrityPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Integrity</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
@@ -4316,7 +4316,7 @@ function intakeInboxPage(d) {
   </tr>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Intake</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
@@ -4471,7 +4471,7 @@ function mapperPreviewPage(d) {
   const place = g("place"), review = g("review"), needs = g("needs-setup"), shipped = g("shipped"), excluded = g("excluded");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Mapper preview</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
@@ -4581,7 +4581,7 @@ function pushDiffPage(d) {
   ${navBar95(true)}`;
   const head = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Latest push</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
@@ -4706,7 +4706,7 @@ function feedMonitorPage(d) {
   const maxDay = Math.max(1, ...d.days.map((x) => x.n));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Coyote feed</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
@@ -4889,7 +4889,7 @@ function orderHistoryPage(d) {
   }
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order history</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap} .wrap .kpi{min-width:calc(50% - 10px)}}
@@ -4989,7 +4989,7 @@ function linesManagerPage(d) {
   </div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Lines & parts</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
@@ -5456,7 +5456,7 @@ function syncPage(d) {
   const rows = s.actions.map((a) => `<tr><td><b>${esc(a.order)}</b></td><td>${badge(a.do)}</td><td class="muted" style="white-space:normal">${esc(a.do)}${a.line ? ` · line ${esc(a.line)}` : ""}${a.part ? ` · ${esc(a.part)}` : ""}${a.reason ? ` — ${esc(a.reason)}` : ""}</td></tr>`).join("");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Sync</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
@@ -5581,7 +5581,7 @@ function reconcilePage(d, role) {
     ${g.cabs.map(row).join("")}</table></div>`).join("");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order Queue</title>${style}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
@@ -5748,7 +5748,7 @@ function payrollPage(d) {
   const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
   const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Pay Worksheet</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
@@ -7667,7 +7667,7 @@ http.createServer(async (req, res) => {
       if (me.role === "manager") {
         const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
         if (!tog || !tog.enabled)
-          return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center;max-width:560px"><h2>Reports are admin-only right now</h2><p style="opacity:.7">An admin can share them with managers from the console &mdash; Features, "Managers can see Reports".</p><p><a href="/home" style="color:#8e8e93">&#8962; Home</a></p></div></body></html>`);
+          return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center;max-width:560px"><h2>Reports are admin-only right now</h2><p style="opacity:.7">An admin can share them with managers from the console &mdash; Features, "Managers can see Reports".</p><p><a href="/home" style="color:#8e8e93">&#8962; Home</a></p></div></body></html>`);
       }
       const period = reportPeriod(url.searchParams);
       const data = await reportData(period.startMs, period.endMs);
@@ -9195,7 +9195,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!meT97 || meT97.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118
       const isShared97 = /sb_shared=1/.test(req.headers.cookie || "");
       return send(200, "text/html; charset=utf-8", `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Tablet setup</title>${style}</head>
 <body><div class="wrap" style="max-width:640px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
@@ -9611,7 +9611,7 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname.startsWith("/photo-view/")) {
       const pidV = url.pathname.slice(12);
       if (!isUuid(pidV)) return send(404, "text/plain", "Not found");
-      return send(200, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Photo — Shop Board</title><style>body{margin:0;background:#000;display:flex;flex-direction:column;min-height:100vh}img{max-width:100vw;max-height:88vh;object-fit:contain;margin:auto}#xb{position:fixed;top:14px;right:14px;background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 26px;font-size:1.05rem;font-weight:800;cursor:pointer}</style></head><body><button id="xb" onclick="window.close();document.getElementById('cm').style.display='block'">&#10005; Close</button><img src="/photo/${pidV}"><div id="cm" style="display:none;color:#8e8e93;text-align:center;padding:12px;font-family:system-ui">If this tab didn't close itself, swipe it away — nothing is lost.</div></body></html>`);
+      return send(200, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><meta name="robots" content="noindex, nofollow"><title>Photo — Shop Board</title><style>body{margin:0;background:#000;display:flex;flex-direction:column;min-height:100vh}img{max-width:100vw;max-height:88vh;object-fit:contain;margin:auto}#xb{position:fixed;top:14px;right:14px;background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 26px;font-size:1.05rem;font-weight:800;cursor:pointer}</style></head><body><button id="xb" onclick="window.close();document.getElementById('cm').style.display='block'">&#10005; Close</button><img src="/photo/${pidV}"><div id="cm" style="display:none;color:#8e8e93;text-align:center;padding:12px;font-family:system-ui">If this tab didn't close itself, swipe it away — nothing is lost.</div></body></html>`);
     }
 
     if (url.pathname.startsWith("/photo/")) {
@@ -9629,6 +9629,29 @@ self.addEventListener("notificationclick", (e) => {
       const buf = Buffer.from(await f.arrayBuffer());
       res.writeHead(200, { "content-type": f.headers.get("content-type") || "image/jpeg", "cache-control": "private, max-age=3600" });
       return res.end(buf);
+    }
+
+    // ---------- HOME-SCREEN ICON (block 178, owner request post-install) ----
+    // The add-to-home-screen tile was the browser's letter fallback ("S").
+    // These serve a real icon — black tile, "PSR" with the R in Premier red —
+    // plus a minimal manifest so iPhone AND Android pick it up, and the
+    // apple-mobile-web-app-title meta fixes the truncated label. display
+    // stays "browser" on purpose: install behavior is unchanged, icon only.
+    // PNGs are tiny palette-optimized files embedded as base64 (zero-dep rule).
+    if (url.pathname === "/icon-180.png" || url.pathname === "/icon-192.png" || url.pathname === "/icon-512.png") {
+      const ICONS178 = {
+        "/icon-180.png": "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0BAMAAADP4xsBAAAAMFBMVEX////4+PjX19eXl5dRUVHTLy+9Ly/NLS2HHh4gICAvCgoQDg4XBQUGAgIBAAAAAAAg0YWzAAAEIElEQVR42u2aS2gTQRjHv92oxRdsrC8QNLZRFDxEa3qoKNVKRfugPrBeCgWrgr0IIh700HP1IKKCYLGoB62XRapCSaFgbX0k2kNF0aTmqGLTIFUhbXc87Gwyu9mZnY0IHr69zMxm59fdb/7fY4YqBP7VpQKiEY1oRCMa0YhGNKIRjWhEIxrRiEY0ohGNaEQjWvaaJ/mcsS8zNaUEFS14oVZyimKeBOfKmHvBYHB1v/2xd21v8zMqNj6x+iNXCp+/7kcofNgLDQBQebGdGY3vzNp+3KIXoQEAoLz+oLdBUh1QYP9sytp/nOXMmrxPDnkv41zHUL7fmJZdOvJAl1DI3GmrNz0kLwvyWkZ8H1pop8mP5FK6BJq8MtvcmB+0MSjjMl9NQ+Syvjzluwza6AIAgB5/Tjg3JuPoHwEAoJd6wPb9g59u1m3zZA+565oAwEB3gprgGwAAmAOlZhgAwifhes9bJ2xRLxiJiUTaMzzVx+5afygLADlzRmCY3uyM12kuYS7aajnilMggjRFqbB0AZsz+jgIldk9zm1VN704Ibf2Itjq1EQCwtAZXOQZoSDSE6GW0ZWTX4q2NkEwqWKgVoXVv9FYZtFpsTH9+I9C1xtG4H6R3blTM5kuzLLpCjC7+fPI46hW1qSsFhWgjW7ykRrwqelvGw0NC9O9sweSFJc3Ej4cPCOKS+VVqRIjOsKvJyJWknoa5Nu+jwSYkTLvNrJ/cWWvLIhM1I24mTExQU68QZvR+6shqC+ua1puPFrF/HWWkt0eg64G9bZbuNACAxRHHA6O7BGtZ3sJ5a8U2Wmk2z5Y6pj/vbed6wQm5cnKj2SxxvrZxmUs+FpFCq12089IR0+A9x3sCrQfliuBVVk26YNjBNtr/rr5WqvPdNeOOgJnkeA1Tl4nQm5jHFsfr1ttKFO+6TIAO3LB9XSx5jakTDN6sTxLlZOCWo/pXOxMFOOFGQe9ysvKWy0p1xuss9BlbHdJ3/5y1GMm0CB2sqGpIumpAiV3lqCF6ngqa8CpVQgghmVS8n/e9pzSe1M5aO4NSN3cLQrw0VBZx6NL3vpHvLNQR5/RS0SFeyocwbdPS6FyNbcjPvfM1u/wk3vqFjS2ooqRqPrtqbOw0vwR0GFvG1mR0Q357N03Tdrtgv5/2s4zJI43U8DvdspGFpsZO+DpZmHwcXt9aOXNpckyAVmpNU8z6O7SAVCrGjDa7PrNbp3uwyF8ctVS43l1uq9BKQ6u97oFYY8NIaehV7kFKrWXDSEloJmu6bjnIWMnocl28BMaQHHpe0Q408NArjEzKodXYPXuloDZyz8zUEGNsGYM0vGGTeWWPIEIdYrKyIvlvmQPdU1ny2eWYzvOc719ceFyLaEQjGtGIRjSiEY1oRCMa0YhGNKIRjWhEIxrR/wX6D1fMDWpY5VnSAAAAAElFTkSuQmCC",
+        "/icon-192.png": "iVBORw0KGgoAAAANSUhEUgAAAMAAAADABAMAAACg8nE0AAAAMFBMVEX////39/fh4eG8vLyoqKiNjY1nZ2dKSkrTLy+6Ly+bIyNgFRUkFxcRBgYBAAAAAABkXvPuAAAER0lEQVR42u2aS2gTURRAbzJV6q6JK3djGtHqJtpirKt+qBXc1Fb8oiAqKIIfsO2iRYPVhQW1pUqplQiKC7GpAVHBKGRVFbVmZUWTNLtCMTYrra2ZuMi8yXzf3GnUhdzZZD5v3nn3f9+0rgL83cMNBCAAAQhAAAIQgAAEIAABCEAAAhCAAAQgAAEIQAACEIAA/xhQgR+aP5FOz7k8Hp/3eAD/lkv+E0tjXHXT4/Wt7avSDix0P8woYtcGh5QHi9fU03k8ntoqWwAAgH/fRc38R8Pax9uHzABFfBPGBsnLh9SX58K6xzctlSK9jaCMLN0/Xbr4EXZi2OQ4youkmwnlfH/OkeskEyg3zR9kZ9+jznyzMImLg49sIT1Ovf9rBgWQZDtLUaeAAg4An4o/8xnHATyJAywWdZR1niEkZC4KAQAACyVhT286+6qrqcoBQJeLlv8EgNSIkhVeAgCAfCX0hgBgyxb41DNunDLYAIV0elIxgmgtQXX/BFvjAgAAyM60IyTfXReZME13ruqWdnae46po1WEWCgAAheJg92BpQP27dnPV+EUUAC6rVSkVBwuiaoAwZpGdA7iCUylPVkio3kW5jw8HUBYSBYBFJ/7pQpZMkeN5f6Qmt6nOlxV/foX+JCBqIvWwk5xd5aCrcMv6mt2cQKQ5nY6tABkzg3ypbT1vB0jL89pIoLhnm8bi0vO+Nce5qZW96LaxAUvQRXc9q66GI9V7OYhkRhcOFoAezWO/1l0f1J2yWH4qxrLgan5nN3OHZQQ5rrVrzt6Yu2d4580bdSYJ8CRIdW1lDrm8OGinfqn3D/FNXWfVmy7oIr1Zzn3XDQQfL+yEBmx3Lc+y4rAhbwzzAmcXtn1fxlQ5ashNs2es528RsYB1iswTBkLEMp+2BLAbEPfdUo17qifMWMZaLIEFrFctpWZKVyTzllaWXiABgsbZKyMTWkTcuql9hAK4Turqa31k6qhoSGtmRwoDcB8YNBp9NHlE6bpmOX153B7g77lnqrbbij/pSmiw+1iHaJTONBeZbQJL1n6yQVtalMPr9bGWMAu81tHmWN8QNwcAuDuuytIlAmVsxDlZqIIpabqcnf4mzrNGvR8tBcBr8VYyD8g5AbTmzBoHU46g7zlRgNmgpqJN8wQJ6IyAU9Hnber8dYEHYNU+68wGX+pKDdF8VF1ODTrSGQFr5PylVlmI/D4WV9w2kBkB/b2o8PxF86bdq7/din2Q72y06Mszmi2Ogw9SUix2xcyc+iiJayJh6Z/UhBC/X5fKBVjJziJBSpQJ2A42m6NMeQBhwC5VpcoD1Ih2myYJDzCpPRWPrWXTGAEFeGbY1rtPitbDNUZAASrHOgO6hmAAUS9SeBu4+t93qgLX33sXs3OVAEofZhHH63B6ei7n8fiCfU6qE/33PgEIQAACEIAABCAAAQhAAAIQgAAEIAABCEAAAhCAAAT47wC/AVG9FXxZ2noIAAAAAElFTkSuQmCC",
+        "/icon-512.png": "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",
+      };
+      res.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+      return res.end(Buffer.from(ICONS178[url.pathname], "base64"));
+    }
+    if (url.pathname === "/manifest.json") {
+      res.writeHead(200, { "content-type": "application/manifest+json", "cache-control": "public, max-age=86400" });
+      return res.end(JSON.stringify({ name: "Shop Board \u2014 Premier Street Rod", short_name: "Shop Board",
+        icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+        display: "browser", background_color: "#000000", theme_color: "#000000", start_url: "/" }));
     }
 
     // Q52 cutover helper: echoes the caller's public IP so the shop's real
