@@ -6209,12 +6209,17 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     const targets = sandbox ? (SANDBOX_EMPLOYEE_ID ? [SANDBOX_EMPLOYEE_ID] : []) : intended;
     // Block 117 (⚙ My settings): the person picks CHANNELS; their role
     // already picked the EVENTS. Role-critical notices (pay decisions,
-    // inspection hand-offs, ship risk, self-tests) ignore the mutes —
-    // those must always land somewhere.
+    // inspection hand-offs, ship risk, self-tests) USED to ignore the mutes.
+    // Block 180 (owner ruling 2026-08-16, launch simplicity): that critical
+    // bypass is SUSPENDED — the owner is introducing the system in layers,
+    // so a person's OFF switch mutes EVERYTHING for them, criticals included.
+    // To restore the old always-land behavior, put `critical117 ||` back at
+    // the front of wants117's return.
     const critical117 = ["afterhours.", "build.ready_inspection", "build.rework_assigned", "build.promise_conflict", "test.", "notify."].some((pre) => String(eventType).startsWith(pre));
+    void critical117; // computed but intentionally unused while suspended — Block 180
     const prefs117 = {};
     if (targets.length) for (const pp of await db(`employee?select=id,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
-    const wants117 = (id, ch) => { const pp = prefs117[id]; return critical117 || !pp || pp["notify_" + ch] !== false; };
+    const wants117 = (id, ch) => { const pp = prefs117[id]; return !pp || pp["notify_" + ch] !== false; };
     const pushT117 = targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
     if (targets.length && !pushT117.length) status = "muted";
