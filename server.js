@@ -3555,8 +3555,13 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       department: v("np-d"), role: v("np-r"),
       lines: v("np-l") ? v("np-l").split(",").map(Number) : [] }, btn);
   }
-  function saveEmp(id, btn){ post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
-    lines: v("l-"+id).split(",").map(s=>Number(s.trim())).filter(n=>n>0) }, btn); }
+  function saveEmp(id, btn){
+    // Block 183: the lines box only renders for Production rows — reading it
+    // unconditionally threw for every other department and killed the Save
+    // silently (found live: moving Body Shop -> manager did nothing).
+    const le183 = document.getElementById("l-"+id);
+    post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
+      lines: le183 ? le183.value.split(",").map(s=>Number(s.trim())).filter(n=>n>0) : [] }, btn); }
   function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
   // Q114: reset now ISSUES a temp code (the old reset opened the Q68 hole).
   async function resetPin(id, btn){
