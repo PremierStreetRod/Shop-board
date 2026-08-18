@@ -6250,13 +6250,17 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     const critical117 = ["afterhours.", "build.ready_inspection", "build.rework_assigned", "build.promise_conflict", "test.", "notify."].some((pre) => String(eventType).startsWith(pre));
     void critical117; // computed but intentionally unused while suspended — Block 180
     const prefs117 = {};
-    if (targets.length) for (const pp of await db(`employee?select=id,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
+    if (targets.length) for (const pp of await db(`employee?select=id,role,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
     // Block 184 (owner ruling, launch day 1): READY-FOR-INSPECTION is the
     // floor managers' job signal — it punches through the per-person mute on
     // PUSH ONLY. Text/email stay muted for everyone (his exact words: "keep
     // text message notifications still off for all of them").
+    // Block 185 (v179 audit fix): the punch is scoped to role=MANAGER — the
+    // inspectors (Mike + Isaac + Jason). The event still targets admins too,
+    // but for THEM the normal mutes apply, so the muted owners stay quiet
+    // (Daniel's admin channels are ON, so he hears it the normal way).
     const inspectPunch184 = eventType === "build.ready_inspection";
-    const wants117 = (id, ch) => { if (ch === "push" && inspectPunch184) return true; const pp = prefs117[id]; return !pp || pp["notify_" + ch] !== false; };
+    const wants117 = (id, ch) => { const pp = prefs117[id]; if (ch === "push" && inspectPunch184 && pp && pp.role === "manager") return true; return !pp || pp["notify_" + ch] !== false; };
     const pushT117 = targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
     if (targets.length && !pushT117.length) status = "muted";
@@ -7965,6 +7969,7 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, action } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      if (!["claim", "takeover", "release"].includes(action)) return json(400, { ok: false, error: "Unknown action" });   // Block 185: no fall-through to claim
       const [bC] = await db(`build?select=id,state,order_number,inspection_claimed_by&id=eq.${build_id}`);
       if (!bC || bC.state !== "awaiting_inspection")
         return json(400, { ok: false, stale: true, error: "That cab isn't awaiting inspection anymore" });
