@@ -2567,6 +2567,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
         `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
         : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
+      <div style="margin-top:8px">${w.inspection_claimed_by
+        ? `<span style="color:#5ac8fa;font-weight:700">&#128269; ${w.claim_name184} is on it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}</span>
+           <button class="btn gray" style="padding:6px 12px;margin-top:0;margin-left:8px" onclick="armM(this,()=>claimInsp184('${w.id}','takeover',this))">Take over</button>
+           <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>claimInsp184('${w.id}','release',this))">Release</button>`
+        : `<button class="btn" style="background:#0a4a6e;border-color:#5ac8fa;margin-top:0" onclick="claimInsp184('${w.id}','claim',this)">&#128269; I&#39;ve got this one</button> <span style="opacity:.5;font-size:.85rem">first tap takes it — the others see your name here</span>`}</div>
       <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
         <select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
@@ -2614,6 +2619,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
             `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
             : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
+          <div style="margin-top:8px">${w.inspection_claimed_by
+            ? `<span style="color:#5ac8fa;font-weight:700">&#128269; ${w.claim_name184} is on it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}</span>
+               <button class="btn gray" style="padding:6px 12px;margin-top:0;margin-left:8px" onclick="armM(this,()=>claimInsp184('${w.id}','takeover',this))">Take over</button>
+               <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>claimInsp184('${w.id}','release',this))">Release</button>`
+            : `<button class="btn" style="background:#0a4a6e;border-color:#5ac8fa;margin-top:0" onclick="claimInsp184('${w.id}','claim',this)">&#128269; I&#39;ve got this one</button>`}</div>
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
           <!-- The OTHER inspection outcome (files 11/18): send it back,
                reason-coded (Q77 list), with a note + a time frame in hours. -->
@@ -2749,6 +2759,23 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = orig109;
+  }
+  // Block 184: the inspection claim — first tap stamps your name on the cab so
+  // the other inspectors don't cross the shop for nothing. SOFT by design:
+  // sign-off/rework stay open to any manager; Take over and Release are armed
+  // (two-tap) so nobody grabs or drops a cab by accident.
+  async function claimInsp184(id, what, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch("/api/inspect/claim", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, action: what }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+      if (out.stale) return setTimeout(() => location.reload(), 1400);
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    if (btn) btn.disabled = false;
   }
   // Block 128 (logic audit L1): the SEPARATE override button's advance call —
   // reached only by a deliberate tap on the distinct red button, never by a
@@ -6224,7 +6251,12 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     void critical117; // computed but intentionally unused while suspended — Block 180
     const prefs117 = {};
     if (targets.length) for (const pp of await db(`employee?select=id,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
-    const wants117 = (id, ch) => { const pp = prefs117[id]; return !pp || pp["notify_" + ch] !== false; };
+    // Block 184 (owner ruling, launch day 1): READY-FOR-INSPECTION is the
+    // floor managers' job signal — it punches through the per-person mute on
+    // PUSH ONLY. Text/email stay muted for everyone (his exact words: "keep
+    // text message notifications still off for all of them").
+    const inspectPunch184 = eventType === "build.ready_inspection";
+    const wants117 = (id, ch) => { if (ch === "push" && inspectPunch184) return true; const pp = prefs117[id]; return !pp || pp["notify_" + ch] !== false; };
     const pushT117 = targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
     if (targets.length && !pushT117.length) status = "muted";
@@ -7399,7 +7431,7 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
-      const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
+      const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200");
@@ -7429,7 +7461,11 @@ http.createServer(async (req, res) => {
         active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
         rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
-          .map((b) => ({ ...b, photos: photos.filter((p) => p.build_id === b.id) })),
+          .map((b) => { // Block 184: the claim rides along with a display name + Phoenix HH:MM
+            const ce184 = b.inspection_claimed_by ? empNames.find((x) => x.id === b.inspection_claimed_by) : null;
+            return { ...b, photos: photos.filter((p) => p.build_id === b.id),
+              claim_name184: b.inspection_claimed_by ? (ce184 ? `${ce184.first_name} ${(ce184.last_name || "")[0] || ""}.` : "a manager") : null,
+              claim_hhmm184: b.inspection_claimed_at ? new Date(new Date(b.inspection_claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) : null }; }),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming")
           .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
       // Block 133 (logic audit L9): a line put DOWN with a live/held cab carries a
@@ -7847,7 +7883,8 @@ http.createServer(async (req, res) => {
           return json(400, { ok: false, error: `This product needs at least ${photoNeed} completion photo${photoNeed === 1 ? "" : "s"} — attach ${photoNeed === 1 ? "one" : "them"} before finishing.` });
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
-        body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null }) });
+        body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null,
+          inspection_claimed_by: null, inspection_claimed_at: null }) });   // Block 184: a (re-)finished cab arrives at inspection UNCLAIMED
       // Block 125 (M3): a finished FIX leaves the finisher's screen — drop their
       // focus and step them off the Fix-work bucket to "off the line" so their
       // clock stops accruing against a cab that's now at inspection. (Other techs
@@ -7914,6 +7951,49 @@ http.createServer(async (req, res) => {
     }
 
     // REWORK ASSIGNMENT (files 11/18, manager half of a FAILED inspection):
+    // Block 184 (owner design, launch day 1): INSPECTION CLAIM. Three
+    // inspectors (Mike + the Body Shop managers) share one ready-for-
+    // inspection signal; the first "I've got this one" tap stamps the cab so
+    // the others don't cross the shop for nothing. SOFT claim by design — it
+    // coordinates, it never locks: any manager can still sign off, take over,
+    // or release. The claim clears on sign-off, rework, and (re-)finish.
+    if (url.pathname === "/api/inspect/claim" && req.method === "POST") {
+      const empC = await liveSession(req);
+      if (!empC) return json(401, { ok: false, error: "Signed out" });
+      const [meC] = await db(`employee?select=role&id=eq.${empC}`);
+      if (!meC || (meC.role !== "manager" && meC.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, action } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bC] = await db(`build?select=id,state,order_number,inspection_claimed_by&id=eq.${build_id}`);
+      if (!bC || bC.state !== "awaiting_inspection")
+        return json(400, { ok: false, stale: true, error: "That cab isn't awaiting inspection anymore" });
+      const nowC = new Date().toISOString();
+      if (action === "release") {
+        if (bC.inspection_claimed_by)
+          await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ inspection_claimed_by: null, inspection_claimed_at: null }) });
+        logEvent("inspection.released", empC, { build_id, order_number: bC.order_number, was: bC.inspection_claimed_by });
+        return json(200, { ok: true });
+      }
+      if (action === "takeover") {
+        await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ inspection_claimed_by: empC, inspection_claimed_at: nowC }) });
+        logEvent("inspection.taken_over", empC, { build_id, order_number: bC.order_number, from: bC.inspection_claimed_by });
+        return json(200, { ok: true });
+      }
+      // Plain claim: FIRST TAP WINS — the PATCH's filter only matches while
+      // the cab is unclaimed, so a same-second race has exactly one winner.
+      const wonC = await db(`build?id=eq.${build_id}&inspection_claimed_by=is.null`, {
+        method: "PATCH", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ inspection_claimed_by: empC, inspection_claimed_at: nowC }) });
+      if (!wonC || !wonC.length) {
+        const [curC] = await db(`build?select=inspection_claimed_by&id=eq.${build_id}`);
+        const [whoC] = curC && curC.inspection_claimed_by ? await db(`employee?select=first_name&id=eq.${curC.inspection_claimed_by}`) : [];
+        return json(409, { ok: false, stale: true, error: `${(whoC && whoC.first_name) || "Someone"} beat you to it — they've got this one` });
+      }
+      logEvent("inspection.claimed", empC, { build_id, order_number: bC.order_number, at: nowC });
+      return json(200, { ok: true });
+    }
+
     // awaiting_inspection -> rework, manager-only, reason-coded (Q77 list)
     // with a note and a TIME FRAME in hours. A fix task (day_no 0, source
     // 'rework', 0 standard hours — rework hours live in their OWN bucket,
@@ -7935,7 +8015,8 @@ http.createServer(async (req, res) => {
       const when = claimed_at || new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "rework", rework_reason: reason, rework_note: note || null,
-        rework_hours: Number(hours) || null, rework_assigned_at: when }) });
+        rework_hours: Number(hours) || null, rework_assigned_at: when,
+        inspection_claimed_by: null, inspection_claimed_at: null }) });   // Block 184: leaving inspection clears the claim
       const priors = await db(`task?select=id&build_id=eq.${build_id}&source=eq.rework`);
       await db("task", { method: "POST", body: JSON.stringify({
         build_id, display_no: `R${priors.length + 1}`,
@@ -8028,7 +8109,7 @@ http.createServer(async (req, res) => {
       const wasFix = !!b.fix_assigned_at;
       // Block 123 (logic audit L12): a signed-off cab shouldn't keep stale
       // rework fields — clear them too (a cab that never reworked has null).
-      const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null };
+      const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null, inspection_claimed_by: null, inspection_claimed_at: null };   // Block 184: sign-off clears the claim
       if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
       logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix, by_role: me.role });
