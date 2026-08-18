@@ -1859,7 +1859,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   <p style="text-align:center;margin-top:26px">
     <a href="/shopboard" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
-  ${emp.role === "admin" ? navBar95(true) : ""}
+  ${emp.role === "admin" || emp.role === "manager" ? navBar95(emp.role === "admin") : ""}   <!-- Block 186 (v180, live find day 2): non-Production MANAGERS land here too now (Body Shop — Isaac/Jason/Zz-test) and got NO nav, so no path to the Manager console. Same role test the Production screens use (line ~5646). -->
   <!-- Block 154 (owner-rep D7): the enable + test-push buttons are GONE —
        push is automatic (shared bell script: granted devices re-subscribe
        silently; a new device gets the one-time tap banner). -->
