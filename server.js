@@ -615,10 +615,18 @@ async function shopHours() {
 }
 // Q112: before open, after close, or a weekend = AFTER HOURS — the clock
 // still works exactly like a normal day, it just carries its governance.
+// Block 187 (owner ruling, day 2): a 5-MINUTE GRACE runs before open.
+// Real world: Andrew was at the door minutes before 7:00 and the clock-in
+// was refused (after-hours questionnaire) — Monday 7:00 AM team meetings
+// mean the crew NEEDS to punch in a few minutes early to be on time. Inside
+// the grace window a clock-in is a normal shift punch, no questionnaire.
+// The close side and weekends are unchanged; the check is now minute-level
+// (it was hour-level, so grace was impossible to express).
+const OPEN_GRACE_MIN_187 = 5;
 function isAfterHours(ms, hrs = SHOP_HOURS) {
   const phx = new Date(ms - PHX_OFFSET_MS);
-  const dow = phx.getUTCDay(), hr = phx.getUTCHours();
-  return dow === 0 || dow === 6 || hr < hrs.open || hr >= hrs.close;
+  const dow = phx.getUTCDay(), mins = phx.getUTCHours() * 60 + phx.getUTCMinutes();
+  return dow === 0 || dow === 6 || mins < hrs.open * 60 - OPEN_GRACE_MIN_187 || mins >= hrs.close * 60;
 }
 
 // Q91: the SHOP CALENDAR. Default work week is Mon-Fri; a shop_calendar row
@@ -959,7 +967,7 @@ const changePinPage = (first) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>New PIN — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/logout" style="color:#8e8e93;font-size:.9rem;text-decoration:none">Sign out</a></p>   <!-- Block 187: wrong person mid-PIN-change can bail out; the change is still required on next login -->
   <h2 id="pinTitle">Hi ${first} — that code was temporary. Choose YOUR 4-digit PIN</h2>
   <div class="dots" id="dots"></div>
   <div class="msg" id="msg"></div>
@@ -1325,7 +1333,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 (owner-rep): "Clock / lines" dropped from the top — the bottom "Clock out · Switch line" is the ONE way, no duplicate names -->
+  <p style="text-align:center;margin:-4px 0 10px">${otherLines.length ? `<a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93;margin-right:18px">Switch line</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 dropped Clock/lines from the top; Block 187 (owner ruling day 2) brings Switch line BACK up top as well as bottom — it opens the same one-tap picker -->
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1825,6 +1833,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 187 (owner ruling day 2): Sign out at the TOP of every signed-in page — same row the production screens use -->
   <h2>Welcome, ${emp.first_name}.</h2>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
@@ -1937,7 +1946,7 @@ const inboxPage = (emp, notes) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8962; Home</a></p>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8962; Home</a> &nbsp; <a href="/logout" style="color:#8e8e93;font-size:.9rem;text-decoration:none">Sign out</a></p>   <!-- Block 187: Sign out joins the top row -->
   <h2>Notifications</h2>
   ${notes.length ? notes.map((n) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
@@ -2226,7 +2235,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 .kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
-  <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93">&#8962; Home</a></p>
+  <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93;margin-right:18px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 187: Sign out joins the top row (this page had NO sign-out anywhere) -->
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
