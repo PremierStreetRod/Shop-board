@@ -2483,7 +2483,7 @@ const settingsPage117 = (me) => `<!doctype html>
   }
 </script></div></body></html>`;
 
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -2690,6 +2690,49 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
       : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
   </div>`}
+  ${acct189 && tcard191 ? `
+  <!-- Block 191: the accounting TIMECARD EDITOR — person → last 14 days,
+       stints (IN → OUT) with editable times, Remove, Add. No lines, no
+       punch jargon. Rides the audited /api/punch/correct endpoint. -->
+  <div class="lane" id="timecard191" style="border-color:#0a6cff"><h3>Edit timecards</h3>
+    <p style="margin:0 0 12px">
+      <select style="font-size:1.1rem;padding:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:10px" onchange="if(this.value)location.href='/manager?tc_emp='+this.value">
+        <option value="">— pick a person —</option>
+        ${tcard191.emps.map((e) => `<option value="${e.id}"${tcard191.selEmp === e.id ? " selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}
+      </select>
+    </p>
+    ${tcard191.selEmp ? `
+    <div style="margin-bottom:12px"><span style="opacity:.65">Reason on the record for changes:</span><br>
+      <input id="tcc-note" value="punch clock correction" maxlength="200" style="width:100%;max-width:420px;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:1rem"></div>
+    ${tcard191.days.map((d) => `
+    <div style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px${d.stints.length || d.orphans.length ? "" : ";opacity:.7"}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap">
+        <b style="font-size:1.1rem">${d.dow} ${d.ds.slice(5).replace("-", "/")}</b>
+        <span style="opacity:.75;font-weight:700">${d.open ? "on the clock now" : d.hours ? `${d.hours} hrs` : "no hours"}</span>
+      </div>
+      <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
+      ${d.stints.map((s) => `
+      <div style="margin-top:10px">
+        IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        ${s.out ? `&nbsp;OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">&nbsp;— still on the clock</span>`}
+        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this)">Save times</button>
+        ${s.out ? `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>` : ""}
+      </div>`).join("")}
+      ${d.orphans.map((o) => `
+      <div style="margin-top:10px">
+        lone ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${o.id}','${o.hhmm}']],this)">Save</button>
+        <button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccVoidOne('${d.ds}','${o.id}',this))">Remove</button>
+      </div>`).join("")}
+      <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
+        Add hours: IN <input type="time" id="tccai-${d.ds}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        OUT <input type="time" id="tccao-${d.ds}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <button class="btn" style="background:#1d5a2d;padding:8px 16px;margin-top:0" onclick="tccAdd('${d.ds}',this)">Add</button>
+      </div>
+    </div>`).join("")}
+    <div style="opacity:.55;font-size:.9rem">Times are Phoenix. A day with lunch is two rows — add 07:00–11:00, then 12:00–16:00. Every change lands on the timecard with your reason. Days older than 14 days need Daniel.</div>
+    ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see their last 14 days of hours.</div>`}
+  </div>` : ""}
   ${!insp188 && tc ? `
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
        clock can retire. Pick a person and a Phoenix day; MOVE a punch that
@@ -2780,6 +2823,54 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = orig109;
+  }
+  // Block 191: the accounting timecard editor — a friendlier face on the
+  // audited /api/punch/correct endpoint. Times type as Phoenix wall-clock;
+  // AZ never shifts, so the -07:00 offset is always right. Removing a stint
+  // voids its IN first, then the OUT — the order the v148 guards require.
+  const TCC_EMP = "${tcard191 && tcard191.selEmp ? tcard191.selEmp : ""}";
+  const TCC_LINE = ${tcard191 ? Number(tcard191.defLine) || 10 : 10};
+  function tccNote() { const n = document.getElementById("tcc-note"); return n && n.value.trim() ? n.value.trim() : "punch clock correction"; }
+  function tccIso(ds, hhmm) { return new Date(ds + "T" + hhmm + ":00-07:00").toISOString(); }
+  async function tccCall(ds, payload) {
+    const m = document.getElementById("tccmsg-" + ds);
+    try {
+      const r = await fetch("/api/punch/correct", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const out = await r.json();
+      if (out.ok) return true;
+      if (m) m.textContent = out.error || "Something went wrong";
+    } catch (e) { if (m) m.textContent = "Network hiccup — try again"; }
+    return false;
+  }
+  async function tccSave(ds, pairs, btn) {
+    btn.disabled = true;
+    for (const [id, orig] of pairs) {
+      const v = (document.getElementById("tcct-" + id) || {}).value;
+      if (!v || v === orig) continue;
+      if (!(await tccCall(ds, { action: "move", punch_id: id, new_at: tccIso(ds, v), note: tccNote() }))) { btn.disabled = false; return; }
+    }
+    location.reload();
+  }
+  async function tccRemove(ds, inId, outId, btn) {
+    btn.disabled = true;
+    if (await tccCall(ds, { action: "void", punch_id: inId, note: tccNote() })
+      && await tccCall(ds, { action: "void", punch_id: outId, note: tccNote() })) return location.reload();
+    btn.disabled = false;
+  }
+  async function tccVoidOne(ds, id, btn) {
+    btn.disabled = true;
+    if (await tccCall(ds, { action: "void", punch_id: id, note: tccNote() })) return location.reload();
+    btn.disabled = false;
+  }
+  async function tccAdd(ds, btn) {
+    const i = (document.getElementById("tccai-" + ds) || {}).value, o = (document.getElementById("tccao-" + ds) || {}).value;
+    const m = document.getElementById("tccmsg-" + ds);
+    if (!i) { if (m) m.textContent = "IN time first"; return; }
+    btn.disabled = true;
+    const p = { action: "add", employee_id: TCC_EMP, line_id: TCC_LINE, in_at: tccIso(ds, i), note: tccNote() };
+    if (o) p.out_at = tccIso(ds, o);
+    if (await tccCall(ds, p)) return location.reload();
+    btn.disabled = false;
   }
   // Block 184: the inspection claim — first tap stamps your name on the cab so
   // the other inspectors don't cross the shop for nothing. SOFT by design:
@@ -7618,6 +7709,47 @@ http.createServer(async (req, res) => {
         : DEPT_LINE189[selRow189.department] || SHOP_LINE_ID;
       const tc = { emps: tcEmps, lines: tcLines189,
         selEmp: tcEmpSel, date: tcDate, punches: tcPunches, defLine189 };
+      // Block 191 (owner ruling, day 2): the ACCOUNTING TIMECARD EDITOR.
+      // Daniel: the punch-level corrector is "100% not EASY" for accounting.
+      // Her mental model is a TIMECARD — a person, a day, in-and-out times —
+      // never lines, never "punch pairs". This view: pick a person → their
+      // last 14 Phoenix days at once, each day's punches paired into STINTS
+      // (IN → OUT), editable times, Remove (voids IN then OUT, the order the
+      // v148 guards require), and an Add row per day. Lines are invisible:
+      // every change auto-books to the person's natural line (Block 189
+      // default). All of it rides the SAME audited /api/punch/correct
+      // endpoint — this is a friendlier face, not a new power.
+      let tcard191 = null;
+      if (acct189) {
+        let days191 = [];
+        if (tcEmpSel) {
+          const from191 = phxDayStart(phxDate(Date.now() - 13 * 86400000));
+          const evs191 = await db(`clock_event?select=id,kind,claimed_at&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(from191).toISOString()}&order=claimed_at.asc`);
+          const byDay191 = {};
+          for (const ev of evs191) { const dsE = phxDate(new Date(ev.claimed_at).getTime()); (byDay191[dsE] = byDay191[dsE] || []).push(ev); }
+          for (let i191 = 0; i191 < 14; i191++) {
+            const ds = phxDate(Date.now() - i191 * 86400000);
+            const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T12:00:00Z").getUTCDay()];
+            const stints = [], orphans = [];
+            let openIn191 = null;
+            for (const p of byDay191[ds] || []) {
+              const t = { id: p.id, hhmm: phxHHMM(p.claimed_at), kind: p.kind };
+              if (p.kind === "clock_in") { if (openIn191) orphans.push(openIn191); openIn191 = t; }
+              else if (openIn191) { stints.push({ in: openIn191, out: t }); openIn191 = null; }
+              else orphans.push(t);
+            }
+            if (openIn191) stints.push({ in: openIn191, out: null });
+            let mins191 = 0, open191 = false;
+            for (const s of stints) {
+              if (!s.out) { open191 = true; continue; }
+              const [ih, im] = s.in.hhmm.split(":").map(Number), [oh, om] = s.out.hhmm.split(":").map(Number);
+              mins191 += (oh * 60 + om) - (ih * 60 + im);
+            }
+            days191.push({ ds, dow, stints, orphans, hours: Math.round(mins191 / 6) / 10, open: open191 });
+          }
+        }
+        tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
+      }
       // Q92: time-off — pending requests (the "needs you" queue), the upcoming
       // approved list, and the add-for-anyone picker inputs.
       const toPendRows = await db(`time_off_request?select=id,employee_id,start_date,end_date,reason,request_note&status=eq.pending&order=start_date`);
@@ -7650,7 +7782,7 @@ http.createServer(async (req, res) => {
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const mgrBoard = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const { byOrder: mgrProj } = await cabProjections(mgrBoard);
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, insp188 ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
