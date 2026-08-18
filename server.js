@@ -1017,7 +1017,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 193: Admin console in every top row an admin can land on -->
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
   ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
@@ -1333,7 +1333,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${otherLines.length ? `<a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93;margin-right:18px">Switch line</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 dropped Clock/lines from the top; Block 187 (owner ruling day 2) brings Switch line BACK up top as well as bottom — it opens the same one-tap picker -->
+  <p style="text-align:center;margin:-4px 0 10px">${otherLines.length ? `<a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93;margin-right:18px">Switch line</a>` : ""}${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 dropped Clock/lines from the top; Block 187 (owner ruling day 2) brings Switch line BACK up top as well as bottom — it opens the same one-tap picker -->
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1658,7 +1658,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>
+  <p style="text-align:center;margin:-4px 0 12px">${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 193: consoles in the top row for the roles that have them -->
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
@@ -1833,7 +1833,9 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 187 (owner ruling day 2): Sign out at the TOP of every signed-in page — same row the production screens use -->
+  ${emp.role === "admin" || emp.role === "manager"
+    ? navBar95(emp.role === "admin", false, emp.role === "admin" ? true : emp.department === "Accounting" ? "time" : false)
+    : `<p style="text-align:center;margin:-4px 0 10px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}   <!-- Block 193: managers/admins get the FULL nav at the TOP of the watcher home, department-aware — Accounting managers see the time Tools (Pay Worksheet + Reports) here exactly like the Manager console; Body/Build managers get no Tools (Block 188); plain staff keep the simple row. Replaces the Block-187 row + the old bottom navBar. -->
   <h2>Welcome, ${emp.first_name}.</h2>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
@@ -1868,7 +1870,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
   <p style="text-align:center;margin-top:26px">
     <a href="/shopboard" class="name" style="display:inline-block;padding:18px 42px">Open the live board</a>
   </p>
-  ${emp.role === "admin" || emp.role === "manager" ? navBar95(emp.role === "admin") : ""}   <!-- Block 186 (v180, live find day 2): non-Production MANAGERS land here too now (Body Shop — Isaac/Jason/Zz-test) and got NO nav, so no path to the Manager console. Same role test the Production screens use (line ~5646). -->
+  <!-- Block 193: the manager/admin nav moved to the TOP of this page (owner: "tools should be top navigation not just bottom") — the Block-186 bottom copy is gone. -->
   <!-- Block 154 (owner-rep D7): the enable + test-push buttons are GONE —
        push is automatic (shared bell script: granted devices re-subscribe
        silently; a new device gets the one-time tap banner). -->
