@@ -2374,7 +2374,7 @@ const shellPage = `<!doctype html>
 // smaller Tools list; admin-only pages stay off it. Sub-pages
 // stop inventing partial navs, so nothing "drops off" anymore.
 // ============================================================
-const navBar95 = (isAdmin, showReports = false) => {
+const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 188: tools95=false (dept-scoped managers, e.g. Body Shop) hides the whole Tools menu
   const it = (h, t) => `<a href="${h}" style="display:block;color:#ddd;padding:9px 20px;text-decoration:none;white-space:nowrap">${t}</a>`;
   // Block 114 (owner-rep): "split them to something that makes more
   // sense" — the menu leads with the pages admin actually reaches for;
@@ -2393,13 +2393,13 @@ const navBar95 = (isAdmin, showReports = false) => {
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
     ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
-    <details class="t95" style="display:inline-block;position:relative">
+    ${tools95 ? `<details class="t95" style="display:inline-block;position:relative">
       <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:30px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:80;min-width:185px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
         ${tools.map(([h, t]) => it(h, t)).join("")}
         ${isAdmin ? `<div style="border-top:1px solid #3a3a3c;margin:6px 0 0;padding:8px 20px 3px;color:#6e6e73;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase">Plumbing</div>` + plumbing95.map(([h, t]) => it(h, t)).join("") : ""}
       </div>
-    </details>
+    </details>` : ""}
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
   </div>
   <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
@@ -2481,7 +2481,7 @@ const settingsPage117 = (me) => `<!doctype html>
   }
 </script></div></body></html>`;
 
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -2498,28 +2498,35 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- Top nav (Sonnet UX escalation 2026-07-28, C16: there was no way BACK
        from Manager to Admin — nav now lives at the top of every console,
        same placement everywhere per file 22.4). -->
-  ${navBar95(isAdmin, showReports)}
+  ${navBar95(isAdmin, showReports, !insp188)}
   <!-- Block 99b (owner-rep): the cockpit got long — one-tap section jumps,
        same sticky pattern as the admin console. Anchors are harmless when a
        lane isn't rendered that day. -->
   <!-- Block 153 (owner-rep D4/D5): the jump-nav mirrors the page's new order
        and Lines is a DROPDOWN naming each line so a manager lands on the one
        they want, not the top of the section. -->
+  <!-- Block 188 (owner ruling, day 2): the cockpit is DEPARTMENT-SCOPED.
+       insp188 (a manager whose department is not Production — Body Shop
+       today) sees ONLY the inspection lane + the 4 line boxes; On the
+       clock / Running long / after-hours / Time off / Time corrections /
+       Fix jobs / Tools stay Production-manager (+admin) territory. Each
+       department's manager view gets its own branch here as Daniel defines
+       them (Accounting is next). -->
   <div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;text-align:center;border-bottom:1px solid var(--line)">
-    <a href="#oc" style="color:#fff;font-weight:700;margin-right:14px">On the clock</a>
-    <a href="#rl" style="color:#fff;font-weight:700;margin-right:14px">Running long</a>
+    ${insp188 ? "" : `<a href="#oc" style="color:#fff;font-weight:700;margin-right:14px">On the clock</a>
+    <a href="#rl" style="color:#fff;font-weight:700;margin-right:14px">Running long</a>`}
     <a href="#insp153" style="color:#fff;font-weight:700;margin-right:14px">Inspection</a>
     <details class="t95" style="display:inline-block;position:relative;margin-right:14px"><summary style="color:#fff;font-weight:700;cursor:pointer;display:inline-block;list-style:none">Lines &#9662;</summary>
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:26px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:90;min-width:180px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
         ${rows.map((r) => `<a href="#line99-${r.line.id}" onclick="this.closest('details').open=false" style="display:block;padding:8px 14px;color:#e8e8ed;text-decoration:none">${r.line.name}</a>`).join("")}
       </div></details>
-    <a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
+    ${insp188 ? "" : `<a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
     <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
-    <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>
+    <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>`}
   </div>
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
-  <h2>Manager</h2>
-  ${onClock.length ? `
+  <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : ""}</h2>
+  ${!insp188 && onClock.length ? `
   <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
        clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
        button is for catching it sooner. Audited (who forced it is logged). -->
@@ -2528,7 +2535,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
   </div>` : ""}
-  ${longRunners.length ? `
+  ${!insp188 && longRunners.length ? `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
        run; the who + since makes it self-explanatory. -->
@@ -2537,7 +2544,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
   </div>` : ""}
-  ${recentDone.length ? `
+  ${!insp188 && recentDone.length ? `
   <!-- RECENTLY CHECKED OFF (Q107): the shared undo. A step completed out
        from under a partner comes back here — audited, and the engine's
        earned-value math nets it out automatically (earned = completed
@@ -2547,7 +2554,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
-  ${afterHours.length ? `
+  ${!insp188 && afterHours.length ? `
   <!-- Q112 + blocks 107/108 (owner-rep): WHO worked leads each row, big and
        bold, lines below the name. Managers CONFIRM the approval claim here;
        the SIGN-OFF that releases pay hours is an ADMIN job (Admin console). -->
@@ -2610,7 +2617,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
       <!-- Q83: "Down for today" quick-hold — expected-idle only (no active cab,
            not hard-closed). Down = calm slate on the TV + quiet alerts. -->
-      ${r.line.down_today
+      ${insp188 ? (r.line.down_today ? `<div style="margin:-4px 0 8px;font-size:.85rem;color:#9db4c8">Down — ${r.line.down_reason}</div>` : "")
+        : r.line.down_today
         ? `<div style="margin:-4px 0 8px;font-size:.85rem;color:#9db4c8">Down — ${r.line.down_reason}
              <button class="btn gray" style="padding:4px 10px;margin-left:8px" onclick="lineDown(${r.line.id},false,null)">Back up</button></div>`
         : (r.line.manually_closed ? ""
@@ -2657,9 +2665,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
-        <button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`
+        ${insp188 ? "" : `<button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`}`
       : `<div style="opacity:.6">No active cab</div>
-        ${r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
+        ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
         ${r.queue.map((q) => `<div class="qrow">ORDER ${q.order_number}${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number}
           ${q.kit_status === "verified" ? '<span style="color:#30d158;font-size:.8rem;font-weight:700"> KIT ✓</span>' : q.kit_status === "short" ? '<span style="color:#ff9f0a;font-size:.8rem;font-weight:700"> SHORT — missing parts</span>' : '<span style="opacity:.4;font-size:.8rem"> kit not verified</span>'}</div>`).join("")}` : ""}
@@ -2669,6 +2677,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        the jump-nav above mirrors this exact order. -->
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
+  ${insp188 ? "" : `
   <div class="lane" id="to99"><h3>Time off</h3>
     ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
@@ -2678,8 +2687,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${timeoff.upcoming.length ? `<div style="margin-top:6px"><div style="opacity:.6;margin-bottom:4px">Who's out (approved, upcoming)</div>
       ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
       : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
-  </div>
-  ${tc ? `
+  </div>`}
+  ${!insp188 && tc ? `
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
        clock can retire. Pick a person and a Phoenix day; MOVE a punch that
        has the wrong time, VOID one that shouldn't exist, ADD a forgotten
@@ -2714,6 +2723,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        return). Opening one re-opens its ORIGINAL record as a fix job (own
        deadline + hours bucket, re-inspection to close) and logs a sign-off
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
+  ${insp188 ? "" : `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
     ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off on its line (above).</div>`}
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
@@ -2729,7 +2739,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
       <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off on its line (above).</span>
     </div>
-  </div>
+  </div>`}
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -7440,9 +7450,17 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/manager") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
+      // Block 188 (owner ruling, day 2): the cockpit is DEPARTMENT-SCOPED.
+      // A manager whose department is not Production (Body Shop today; other
+      // departments until Daniel defines their own views) gets the
+      // INSPECTION-ONLY cockpit: the inspection lane + the line boxes, with
+      // production controls (line down/close, start next, active sign-off)
+      // and the staff lanes (on-clock / running-long / after-hours / time
+      // off / corrections / fix jobs / Tools) hidden. Admins always full.
+      const insp188 = me.role === "manager" && me.department !== "Production";
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
@@ -7604,7 +7622,7 @@ http.createServer(async (req, res) => {
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const mgrBoard = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const { byOrder: mgrProj } = await cabProjections(mgrBoard);
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, canCloseLines, tc, downReasons, timeoff, fixjob, mgrProj));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, insp188 ? false : canCloseLines, insp188 ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
