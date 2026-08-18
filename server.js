@@ -6678,8 +6678,9 @@ http.createServer(async (req, res) => {
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
         // 13/12 (disabled: clockable, never on the TV — warehouse-9 pattern).
-        // Accounting/Marketing/admins stay off the clock for now.
-        const DEPT_LINE92 = { "Body Shop": 13, "Build": 12 };
+        // Block 190 (owner ruling, day 2): ACCOUNTING punches too — line 16
+        // (migration 0050), same pattern. Marketing/admins stay off the clock.
+        const DEPT_LINE92 = { "Body Shop": 13, "Build": 12, "Accounting": 16 };
         let clk92 = null;
         if (DEPT_LINE92[emp.department]) {
           const [lastC92] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
@@ -7470,6 +7471,11 @@ http.createServer(async (req, res) => {
       const acct189 = me.role === "manager" && me.department === "Accounting";
       const insp188 = me.role === "manager" && me.department !== "Production" && !acct189;
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
+      // Block 190: EVERY line's name (dept-time areas included) for the
+      // on-the-clock list and the punch corrector — an accounting or Body
+      // Shop punch should read "Accounting time", not a blank or "line 16".
+      const linesAll189 = await db(`line?select=id,name&order=id`);
+      const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
@@ -7486,7 +7492,7 @@ http.createServer(async (req, res) => {
       const onClock = Object.values(latestCk).filter((e) => e.kind === "clock_in")
         .map((e) => { const emp = empNames.find((x) => x.id === e.employee_id);
           return emp ? { id: e.employee_id, name: `${emp.first_name} ${emp.last_name}`,
-            line: (lines.find((l) => l.id === e.line_id) || {}).name || "",
+            line: e.line_id === SHOP_LINE_ID ? "Shop time" : e.line_id === FIX_LINE_ID ? "Fix work" : lname190[e.line_id] || "",   // Block 190: dept-time punches show their area name
             open: openBy159[e.employee_id] || 0,
             // HH:MM in Phoenix time (UTC-7 fixed, Q82) — rendered server-side.
             since_hhmm: new Date(new Date(e.claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) } : null; })
@@ -7590,24 +7596,23 @@ http.createServer(async (req, res) => {
       if (tcEmpSel) {
         const d0 = phxDayStart(tcDate);
         const rawP = await db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
-        const lnameP = {}; for (const l of lines) lnameP[l.id] = l.name;
         tcPunches = rawP.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
-          lineName: p2.line_id === 10 ? "Shop time" : lnameP[p2.line_id] || "line " + p2.line_id,
+          lineName: p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
       }
       // Block 189: the add-pair line picker now carries the DEPT-TIME lines too
-      // (Warehouse 9 · Build 12 · Body Shop 13 — disabled on the TV but fully
-      // clockable), so accounting can backfill a punch pair for ANY department.
-      // Before this, only the enabled production lines + Shop time were offered,
-      // which made a Body/Build/Warehouse backfill land on the wrong line.
-      const linesAll189 = await db(`line?select=id,name&order=id`);
-      const tcLines189 = [...linesAll189.filter((l) => l.id !== FIX_LINE_ID && l.id !== 14 && l.id !== SHOP_LINE_ID).map((l) => ({ id: l.id, name: l.name })), { id: SHOP_LINE_ID, name: "Shop time" }];
+      // (Warehouse 9 · Build 12 · Body Shop 13 · Accounting 16 — disabled on
+      // the TV but fully clockable), so accounting can backfill a punch pair
+      // for ANY department. Before this, only the enabled production lines +
+      // Shop time were offered, which made a dept backfill land wrong.
+      // (linesAll189 is fetched once at the top of this handler — Block 190.)
+      const tcLines189 = [...linesAll189.filter((l) => l.id !== FIX_LINE_ID && l.id !== 14 && l.id !== 11 && l.id !== SHOP_LINE_ID).map((l) => ({ id: l.id, name: l.name })), { id: SHOP_LINE_ID, name: "Shop time" }];   // Block 190: 11 = the old __test__ line, never offer it
       // Block 189: preselect the SELECTED person's natural line — Production →
       // their first usual line; Warehouse/Build/Body → their dept-time line;
       // everyone else → Shop time. Accounting shouldn't have to know lines.
       const selRow189 = tcEmpSel ? tcEmps.find((e) => e.id === tcEmpSel) : null;
-      const DEPT_LINE189 = { "Warehouse": 9, "Build": 12, "Body Shop": 13 };
+      const DEPT_LINE189 = { "Warehouse": 9, "Build": 12, "Body Shop": 13, "Accounting": 16 };   // Block 190: accounting's own dept-time line
       const defLine189 = !selRow189 ? null
         : selRow189.department === "Production" && Array.isArray(selRow189.lines) && selRow189.lines.length ? selRow189.lines[0]
         : DEPT_LINE189[selRow189.department] || SHOP_LINE_ID;
