@@ -2382,7 +2382,9 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   // pages notify when they need a human — nobody has to watch them.
   const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
-  const tools = isAdmin
+  const tools = tools95 === "time"
+    ? [["/payroll", "Pay Worksheet"], ["/reports", "Reports"]]   // Block 189: the Accounting-manager menu — time & pay only
+    : isAdmin
     ? daily95
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
@@ -2481,7 +2483,7 @@ const settingsPage117 = (me) => `<!doctype html>
   }
 </script></div></body></html>`;
 
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -2498,7 +2500,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <!-- Top nav (Sonnet UX escalation 2026-07-28, C16: there was no way BACK
        from Manager to Admin — nav now lives at the top of every console,
        same placement everywhere per file 22.4). -->
-  ${navBar95(isAdmin, showReports, !insp188)}
+  ${navBar95(isAdmin, showReports, acct189 ? "time" : !insp188)}
   <!-- Block 99b (owner-rep): the cockpit got long — one-tap section jumps,
        same sticky pattern as the admin console. Anchors are harmless when a
        lane isn't rendered that day. -->
@@ -2512,7 +2514,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        Fix jobs / Tools stay Production-manager (+admin) territory. Each
        department's manager view gets its own branch here as Daniel defines
        them (Accounting is next). -->
-  <div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;text-align:center;border-bottom:1px solid var(--line)">
+  ${acct189 ? "" : `<div style="position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;margin-bottom:8px;text-align:center;border-bottom:1px solid var(--line)">
     ${insp188 ? "" : `<a href="#oc" style="color:#fff;font-weight:700;margin-right:14px">On the clock</a>
     <a href="#rl" style="color:#fff;font-weight:700;margin-right:14px">Running long</a>`}
     <a href="#insp153" style="color:#fff;font-weight:700;margin-right:14px">Inspection</a>
@@ -2523,9 +2525,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${insp188 ? "" : `<a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
     <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
     <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>`}
-  </div>
+  </div>`}
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
-  <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : ""}</h2>
+  <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : acct189 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— time &amp; pay</span>` : ""}</h2>
   ${!insp188 && onClock.length ? `
   <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
        clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
@@ -2535,7 +2537,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
   </div>` : ""}
-  ${!insp188 && longRunners.length ? `
+  ${!insp188 && !acct189 && longRunners.length ? `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
        run; the who + since makes it self-explanatory. -->
@@ -2544,7 +2546,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
   </div>` : ""}
-  ${!insp188 && recentDone.length ? `
+  ${!insp188 && !acct189 && recentDone.length ? `
   <!-- RECENTLY CHECKED OFF (Q107): the shared undo. A step completed out
        from under a partner comes back here — audited, and the engine's
        earned-value math nets it out automatically (earned = completed
@@ -2554,7 +2556,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
-  ${!insp188 && afterHours.length ? `
+  ${!insp188 && !acct189 && afterHours.length ? `
   <!-- Q112 + blocks 107/108 (owner-rep): WHO worked leads each row, big and
        bold, lines below the name. Managers CONFIRM the approval claim here;
        the SIGN-OFF that releases pay hours is an ADMIN job (Admin console). -->
@@ -2569,7 +2571,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     </div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
   </div>` : ""}
-  ${rows.some((r) => (r.awaiting || []).length) ? `
+  ${!acct189 && rows.some((r) => (r.awaiting || []).length) ? `
   <!-- Block 153 (owner-rep D2): the sign-off / send-back used to live only
        inside each line's lane — a long scroll from the top. Every cab
        awaiting inspection now ALSO surfaces here, one glance from the top,
@@ -2611,7 +2613,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="toDecide('${t.id}','deny',this)">Deny</button></div>`).join("")}
   </div>` : ""}
   <div id="lines99"></div>
-  ${rows.map((r) => `
+  ${acct189 ? "" : rows.map((r) => `
     <div class="lane" id="line99-${r.line.id}">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
@@ -2677,7 +2679,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        the jump-nav above mirrors this exact order. -->
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
-  ${insp188 ? "" : `
+  ${insp188 || acct189 ? "" : `
   <div class="lane" id="to99"><h3>Time off</h3>
     ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
@@ -2711,7 +2713,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
         </tr>`).join("")}</table>` : `<div style="opacity:.6">No punches that day.</div>`}
       <p style="margin-top:12px">Add a missed punch pair:
-        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}"${tc.defLine189 === l.id ? " selected" : ""}>${l.name}</option>`).join("")}</select>
         IN <input type="time" id="tca-in" step="60"> OUT <input type="time" id="tca-out" step="60">
         <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
         <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
@@ -2723,7 +2725,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        return). Opening one re-opens its ORIGINAL record as a fix job (own
        deadline + hours bucket, re-inspection to close) and logs a sign-off
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
-  ${insp188 ? "" : `
+  ${insp188 || acct189 ? "" : `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
     ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off on its line (above).</div>`}
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
@@ -5794,7 +5796,7 @@ async function payrollData(startMs, endMs) {
     link: `/manager?tc_emp=${a.employee_id}&tc_date=${d148}#timecorrections` }; });
   return { rows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes, autoNotes };
 }
-function payrollPage(d) {
+function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers open this too — their nav must not carry admin links
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
   const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };
@@ -5815,7 +5817,7 @@ function payrollPage(d) {
 </style></head>
 <body><div class="wrap" style="max-width:1200px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${navBar95(true)}
+  ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
   <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Regular (up to 8/day) and Overtime (over 8/day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. This replaces the hand-tallied worksheet; download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
@@ -7460,7 +7462,13 @@ http.createServer(async (req, res) => {
       // production controls (line down/close, start next, active sign-off)
       // and the staff lanes (on-clock / running-long / after-hours / time
       // off / corrections / fix jobs / Tools) hidden. Admins always full.
-      const insp188 = me.role === "manager" && me.department !== "Production";
+      // Block 189 (owner ruling, same morning): ACCOUNTING manager = the
+      // TIME & PAY view — On the clock + Time corrections (their whole job:
+      // backfill the pay period from the physical punch clock, fix morning /
+      // lunch / end-of-day punches) + Tools menu of Pay Worksheet & Reports.
+      // No cab lines, no inspection — she thinks in punches, not lines.
+      const acct189 = me.role === "manager" && me.department === "Accounting";
+      const insp188 = me.role === "manager" && me.department !== "Production" && !acct189;
       const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
@@ -7577,7 +7585,7 @@ http.createServer(async (req, res) => {
       const tcEmpRaw = url.searchParams.get("tc_emp");
       const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;
       const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
-      const tcEmps = await db(`employee?select=id,first_name,last_name&active=is.true&order=first_name`);
+      const tcEmps = await db(`employee?select=id,first_name,last_name,department,lines&active=is.true&order=first_name`);   // Block 189: department + usual lines ride along so the add-pair picker can preselect the right line
       let tcPunches = [];
       if (tcEmpSel) {
         const d0 = phxDayStart(tcDate);
@@ -7588,8 +7596,23 @@ http.createServer(async (req, res) => {
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
       }
-      const tc = { emps: tcEmps, lines: [...lines.map((l) => ({ id: l.id, name: l.name })), { id: 10, name: "Shop time" }],
-        selEmp: tcEmpSel, date: tcDate, punches: tcPunches };
+      // Block 189: the add-pair line picker now carries the DEPT-TIME lines too
+      // (Warehouse 9 · Build 12 · Body Shop 13 — disabled on the TV but fully
+      // clockable), so accounting can backfill a punch pair for ANY department.
+      // Before this, only the enabled production lines + Shop time were offered,
+      // which made a Body/Build/Warehouse backfill land on the wrong line.
+      const linesAll189 = await db(`line?select=id,name&order=id`);
+      const tcLines189 = [...linesAll189.filter((l) => l.id !== FIX_LINE_ID && l.id !== 14 && l.id !== SHOP_LINE_ID).map((l) => ({ id: l.id, name: l.name })), { id: SHOP_LINE_ID, name: "Shop time" }];
+      // Block 189: preselect the SELECTED person's natural line — Production →
+      // their first usual line; Warehouse/Build/Body → their dept-time line;
+      // everyone else → Shop time. Accounting shouldn't have to know lines.
+      const selRow189 = tcEmpSel ? tcEmps.find((e) => e.id === tcEmpSel) : null;
+      const DEPT_LINE189 = { "Warehouse": 9, "Build": 12, "Body Shop": 13 };
+      const defLine189 = !selRow189 ? null
+        : selRow189.department === "Production" && Array.isArray(selRow189.lines) && selRow189.lines.length ? selRow189.lines[0]
+        : DEPT_LINE189[selRow189.department] || SHOP_LINE_ID;
+      const tc = { emps: tcEmps, lines: tcLines189,
+        selEmp: tcEmpSel, date: tcDate, punches: tcPunches, defLine189 };
       // Q92: time-off — pending requests (the "needs you" queue), the upcoming
       // approved list, and the add-for-anyone picker inputs.
       const toPendRows = await db(`time_off_request?select=id,employee_id,start_date,end_date,reason,request_note&status=eq.pending&order=start_date`);
@@ -7622,7 +7645,7 @@ http.createServer(async (req, res) => {
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const mgrBoard = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const { byOrder: mgrProj } = await cabProjections(mgrBoard);
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, insp188 ? false : canCloseLines, insp188 ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, insp188 ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -7720,8 +7743,11 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/payroll" || url.pathname === "/payroll.csv") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
-      if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
+      const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
+      // Block 189 (owner ruling): the ACCOUNTING manager runs payroll — the
+      // Pay Worksheet is literally her deliverable. Admins as before.
+      const payOk189 = me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting"));
+      if (!payOk189) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const period = payPeriod(url.searchParams);
       const data = await payrollData(period.startMs, period.endMs);
@@ -7731,17 +7757,20 @@ http.createServer(async (req, res) => {
         res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="shopboard-payroll-${tag}.csv"` });
         return res.end(payrollCsv(data));
       }
-      return send(200, "text/html; charset=utf-8", payrollPage(data));
+      return send(200, "text/html; charset=utf-8", payrollPage(data, me.role === "admin"));
     }
 
     if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       // Reports are ADMIN work (owner-rep 2026-07-29); a manager only gets in
       // if an admin flipped the "Managers can see Reports" switch (Q65).
-      if (me.role === "manager") {
+      // Block 189 (owner ruling): the ACCOUNTING manager gets in regardless —
+      // "any of the reports relating to time keeping and staffs clocked in
+      // hours" is her job; the toggle stays the gate for everyone else.
+      if (me.role === "manager" && me.department !== "Accounting") {
         const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
         if (!tog || !tog.enabled)
           return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center;max-width:560px"><h2>Reports are admin-only right now</h2><p style="opacity:.7">An admin can share them with managers from the console &mdash; Features, "Managers can see Reports".</p><p><a href="/home" style="color:#8e8e93">&#8962; Home</a></p></div></body></html>`);
