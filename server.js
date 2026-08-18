@@ -2851,10 +2851,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     }
     location.reload();
   }
+  // Block 192: Remove is ONE atomic server call now (void_pair) — the old
+  // two-call version could die halfway and strand a half-removed stint.
   async function tccRemove(ds, inId, outId, btn) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void", punch_id: inId, note: tccNote() })
-      && await tccCall(ds, { action: "void", punch_id: outId, note: tccNote() })) return location.reload();
+    if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return location.reload();
     btn.disabled = false;
   }
   async function tccVoidOne(ds, id, btn) {
@@ -8725,7 +8726,7 @@ http.createServer(async (req, res) => {
       const [meP] = await db(`employee?select=role&id=eq.${meId}`);
       if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note } = await body(req);
+      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id } = await body(req);   // Block 192: in_id/out_id feed void_pair
       if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
       // Q115: reject malformed ids before they reach Postgres (a non-uuid id
       // used to throw a 500). The UI only ever sends real ids.
@@ -8767,6 +8768,34 @@ http.createServer(async (req, res) => {
         logEvent("punch.moved", meId, { punch_id: p.id, employee_id: p.employee_id, from: p.claimed_at, to: new Date(toMs).toISOString(), note });
         return json(200, { ok: true });
       }
+      // Block 192: VOID_PAIR — the timecard editor's Remove erases a whole
+      // stint (its IN and its OUT) as ONE atomic action. The two-call client
+      // version could die halfway (it did, on the "+00:00" bug above) and
+      // leave a voided IN with a live OUT — a half-removed stint and a
+      // confusing "Punch not found" on retry. Both punches are validated
+      // together, the day is sanity-checked with BOTH gone, then both void
+      // in one pass. Dangling-punch guards don't apply: the pair leaves
+      // together, so nothing can be left dangling by design.
+      if (action === "void_pair") {
+        if (!isUuid(in_id) || !isUuid(out_id)) return json(400, { ok: false, error: "That punch reference isn't valid" });
+        const [pIn] = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=eq.${in_id}&voided=is.false`);
+        const [pOut] = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=eq.${out_id}&voided=is.false`);
+        if (!pIn && !pOut) return json(404, { ok: false, error: "Those punches are already gone — reload to see the day fresh" });
+        // Tolerate a half-removed stint from a past partial failure: whichever
+        // half is still alive gets voided, so a retry HEALS instead of 404ing.
+        const alive = [pIn, pOut].filter(Boolean);
+        if (alive.some((p2) => p2.employee_id !== alive[0].employee_id)) return json(400, { ok: false, error: "Those punches belong to different people" });
+        for (const p2 of alive) if (tooOld(new Date(p2.claimed_at).getTime())) return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        const goneIds = new Set(alive.map((p2) => p2.id));
+        const sane = await daySane(alive[0].employee_id, new Date(alive[0].claimed_at).getTime(), (evs) => evs.filter((e) => !goneIds.has(e.id)));
+        if (!sane) return json(400, { ok: false, error: "Removing that would tangle the day's punches — check the other rows" });
+        for (const p2 of alive)
+          await db(`clock_event?id=eq.${p2.id}`, { method: "PATCH", body: JSON.stringify({
+            voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
+        logEvent("punch.pair_voided", meId, { in_id, out_id, employee_id: alive[0].employee_id,
+          at: alive.map((p2) => p2.claimed_at), note });
+        return json(200, { ok: true });
+      }
       if (action === "void") {
         const [p] = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=eq.${punch_id}&voided=is.false`);
         if (!p) return json(404, { ok: false, error: "Punch not found" });
@@ -8781,8 +8810,13 @@ http.createServer(async (req, res) => {
         // two clock-ins together. Erasing a whole past stint: void its IN
         // first, then the OUT. Fixing a wrong time: that's Move.
         if (p.kind !== "clock_in") {
-          const [prevV] = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=lt.${p.claimed_at}&order=claimed_at.desc&limit=1`);
-          const [nextV] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=gt.${p.claimed_at}&order=claimed_at.asc&limit=1`);
+          // Block 192 (live find, day 2): p.claimed_at comes back from PostgREST
+          // as "...+00:00" — a RAW "+" in a URL query decodes to a SPACE, so
+          // these two filters 500'd on EVERY out-punch void (the guard's only
+          // callers never voided an OUT until the Block-191 Remove button).
+          // toISOString() emits the "Z" form, which is URL-safe.
+          const [prevV] = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=lt.${new Date(p.claimed_at).toISOString()}&order=claimed_at.desc&limit=1`);
+          const [nextV] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${p.employee_id}&claimed_at=gt.${new Date(p.claimed_at).toISOString()}&order=claimed_at.asc&limit=1`);
           const prevIn148 = prevV && prevV.kind === "clock_in";
           if (prevIn148 && nextV && nextV.kind === "clock_in")
             return json(400, { ok: false, error: "That would splice two clock-ins together — to erase the stint, void its clock-in first, then this one; to fix a wrong time, use Move" });
