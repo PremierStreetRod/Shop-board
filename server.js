@@ -810,6 +810,17 @@ const style = `<style>
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:#fff;min-height:100vh}
   .wrap{max-width:640px;margin:0 auto;padding:24px 16px}
+  /* Block 196 (owner, day 3): PHONES GET BIGGER. Staff with glasses on small
+     screens couldn't read the two-column grids or 13px links. On phone-width
+     screens: larger base type, roomier tap targets, 16px+ inputs so iOS
+     never zoom-jumps, and generous nav link padding. Tablets/desktops are
+     untouched. This is the site-wide floor; per-page fixes ride on top. */
+  @media (max-width:480px){
+    body{font-size:1.08em}
+    .wrap{padding:18px 12px}
+    input,select,textarea,button{font-size:16px}
+    a{padding-top:2px;padding-bottom:2px}
+  }
   .logo{font-weight:800;letter-spacing:.05em;font-size:1.6rem;text-align:center;margin:8px 0 20px}
   .logo span{color:var(--red)}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
@@ -1029,7 +1040,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 193: Admin console in every top row an admin can land on -->
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
   ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
@@ -1342,7 +1353,8 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 10px">${otherLines.length ? `<a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93;margin-right:18px">Switch line</a>` : ""}${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:18px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:18px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 168 dropped Clock/lines from the top; Block 187 (owner ruling day 2) brings Switch line BACK up top as well as bottom — it opens the same one-tap picker -->
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
+  ${otherLines.length ? `<p style="text-align:center;margin:-8px 0 10px"><a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93">Switch line</a></p>` : ""}   <!-- Block 187: Switch line up top, same one-tap picker -->
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
@@ -1673,7 +1685,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  <p style="text-align:center;margin:-4px 0 12px">${emp.role === "admin" ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}${emp.role === "manager" || emp.role === "admin" ? `<a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>` : ""}<a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a><a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 193: consoles in the top row for the roles that have them -->
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
   <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
@@ -1848,9 +1860,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${emp.role === "admin" || emp.role === "manager"
-    ? navBar95(emp.role === "admin", false, emp.role === "admin" ? true : emp.department === "Accounting" ? "time" : false)
-    : `<p style="text-align:center;margin:-4px 0 10px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">Shop board</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}   <!-- Block 193: managers/admins get the FULL nav at the TOP of the watcher home, department-aware — Accounting managers see the time Tools (Pay Worksheet + Reports) here exactly like the Manager console; Body/Build managers get no Tools (Block 188); plain staff keep the simple row. Replaces the Block-187 row + the old bottom navBar. -->
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
   <h2>Welcome, ${emp.first_name}.</h2>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
@@ -1963,7 +1973,8 @@ const inboxPage = (emp, notes) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a> &nbsp; <a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8962; Home</a> &nbsp; <a href="/logout" style="color:#8e8e93;font-size:.9rem;text-decoration:none">Sign out</a></p>   <!-- Block 187: Sign out joins the top row -->
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   <h2>Notifications</h2>
   ${notes.length ? notes.map((n) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
@@ -2013,7 +2024,7 @@ function handoffPage(info) {
 // THE TV BOARD skeleton (file 19) — view-only, dark, no buttons (Q-design).
 // Today it shows each enabled line + who's clocked on; cab tiles, colors,
 // and pace arrive with the time engine (Stage 2). Refreshes itself every 30 s.
-const boardPage = (tv98 = false) => `<!doctype html>
+const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}
@@ -2038,7 +2049,7 @@ const boardPage = (tv98 = false) => `<!doctype html>
   <!-- Block 118 (owner-rep loop report): the staff board had NO way home —
        its only "Back" replayed browser history, which ping-pongs with the
        cab card forever on a phone. Real links now; /tv stays link-free. -->
-  ${tv98 ? "" : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`}
+  ${tv98 ? "" : (emp196 ? `<div style="margin:8px 0 0">${nav196(emp196)}</div>` : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`)}   <!-- Block 196: the ONE shared nav (TV stays link-free) -->
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
   <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
@@ -2230,7 +2241,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     model, features, addons,
   };
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null) => {
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
   // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
   const note138 = (x) => canFull ? String(x == null ? "" : x) : scrubMoney138(x);
@@ -2255,7 +2266,8 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 @media (max-width:600px){.kv{grid-template-columns:1fr;row-gap:2px;padding:9px 0;font-size:1.06rem;border-bottom:1px solid #222}.kv b{opacity:.5;font-size:.85em;text-transform:uppercase;letter-spacing:.04em}}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
-  <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93;margin-right:18px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 187: Sign out joins the top row (this page had NO sign-out anywhere) -->
+  <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the board</a></p>
+  ${nav196(emp196)}   <!-- Block 196 (owner: "the customer order pages do not" have nav — the endless-loop page): the ONE shared nav -->
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -2423,6 +2435,23 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
       </div>
     </details>` : ""}
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
+  </div>`;
+};
+// Block 196 (owner directive, day 3): ONE navigation for EVERY signed-in
+// page — role- AND department-aware, always at the TOP. This replaces every
+// hand-rolled per-page nav row (the structural cause of blocks 186/187/193
+// and the "endless loops"): admins get the full admin bar, managers get
+// their department's flavor (Production: tools · Accounting: time tools ·
+// Body/Build: no tools), everyone else gets the simple row.
+function nav196(emp, showReports = false) {
+  if (!emp || !emp.role) return "";
+  if (emp.role === "admin") return navBar95(true, showReports);
+  if (emp.role === "manager")
+    return navBar95(false, showReports, emp.department === "Accounting" ? "time" : emp.department === "Production" ? true : false);
+  return `<div style="text-align:center;margin:-4px 0 14px">
+    <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
+    <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a>
   </div>
   <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
     // Block 110 (owner-rep): the Tools menu folds up like a normal menu —
@@ -2443,6 +2472,7 @@ const settingsPage117 = (me) => `<!doctype html>
 <body><div class="wrap" style="max-width:560px">
   <div class="logo">SHOP <span>BOARD</span></div>
   <p style="text-align:center;margin:2px 0 14px"><a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(me)}   <!-- Block 196: the ONE shared nav — this page (the gear icon everyone taps) had none -->
   <h2 style="text-align:center;margin:0 0 2px">&#9881; My settings</h2>
   <p style="text-align:center;opacity:.7;margin:0 0 14px">${me.first_name} ${me.last_name || ""}</p>
   <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px">
@@ -3146,7 +3176,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
 // entry: the floor right now, cabs finishing (awaiting sign-off), sign-offs in
 // the last 7 days, and who's out ahead. Prints cleanly. "The button is the
 // feature" (owner-rep) — an optional Monday auto-push can ride the scheduler later.
-function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 = false) {
+function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 = false, emp196 = null) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -3164,7 +3194,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${navBar95(isAdmin95)}
+  ${emp196 ? nav196(emp196) : navBar95(isAdmin95)}
   <h2>Meeting Pack</h2>
   <p class="muted" style="margin-top:-8px">A live snapshot for the meeting — ${esc(now)} (Phoenix). Reload for the latest.</p>
 
@@ -3289,7 +3319,7 @@ function projPhrase(p) {
 // thin day BEFORE it arrives instead of discovering it at 7am. Read-only,
 // reuses the shop-calendar work-day rule + the Q92 pt-1 time-off data. `days`
 // is pre-assembled by the route; this is a pure render.
-function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
+function coveragePage(now, days, builderCount, cabs, isAdmin95 = false, emp196 = null) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -3311,7 +3341,7 @@ function coveragePage(now, days, builderCount, cabs, isAdmin95 = false) {
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${navBar95(isAdmin95)}
+  ${emp196 ? nav196(emp196) : navBar95(isAdmin95)}
   <h2>Coverage — who's out, days ahead</h2>
   <p class="muted" style="margin-top:-8px;text-align:center">The next ${days.length} days at a glance — approved time off against the shop calendar.${builderCount ? ` ${builderCount} builder${builderCount === 1 ? "" : "s"} on the roster.` : ""} As of ${esc(now)} (Phoenix).</p>
   <div class="mp">
@@ -4167,7 +4197,7 @@ async function reportData(startMs, endMs) {
 }
 
 const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
-const reportsPage = (d, isAdmin = false) => `<!doctype html>
+const reportsPage = (d, isAdmin = false, emp196 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Reports</title>${style}
@@ -4188,7 +4218,7 @@ const reportsPage = (d, isAdmin = false) => `<!doctype html>
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${navBar95(isAdmin, true)}
+  ${emp196 ? nav196(emp196, true) : navBar95(isAdmin, true)}
   <h2>Reports</h2>
   <!-- Q119: clear period picker — rolling windows vs calendar to-date, plus a
        custom From/To range, with the exact dates shown so it's unambiguous. -->
@@ -7285,7 +7315,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/inbox") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=first_name&id=eq.${empId}`);
+      const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const notes = await db(`notification_log?select=id,title,body,created_at,read_at&intended_employee_id=eq.${empId}&order=created_at.desc&limit=100`);
       const html = inboxPage(emp, notes);
@@ -7313,7 +7343,8 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/shopboard") {
       const empB95 = await liveSession(req);
       if (!empB95) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      return send(200, "text/html; charset=utf-8", boardPage(false));
+      const [empNavB196] = await db(`employee?select=role,department&id=eq.${empB95}`);   // Block 196: shared nav
+      return send(200, "text/html; charset=utf-8", boardPage(false, empNavB196 || null));
     }
 
     // ORDER DETAIL (block 25) — public look-up from the board's order links.
@@ -7334,9 +7365,9 @@ http.createServer(async (req, res) => {
       const coyOrd86 = bO.coyote_root || String(bO.order_number || "").split(".")[0];
       let coyDetail86 = null;
       if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
-      let canFull86 = false;
+      let canFull86 = false, empNav196 = null;
       const empId86 = empView88;
-      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Owner";
+      if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) { canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Owner"; empNav196 = { role: me86.role, department: me86.department }; }
         // Block 90 (owner-rep): admin-gated role PREVIEW for checking work while
         // building — ?viewas=production|build|body|warehouse|accounting renders
         // this page as that tier sees it. Real admin session required; rendering
@@ -7356,7 +7387,7 @@ http.createServer(async (req, res) => {
         const fmF127 = fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc&limit=20000`));
         fixHrs127 = fmF127[bO.id] || 0;
       }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127));
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
@@ -7870,7 +7901,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/meeting") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`, { headers: { cookie: req.headers.cookie || "" } }).then((r) => r.json()).catch(() => null);
@@ -7902,7 +7933,7 @@ http.createServer(async (req, res) => {
       // Block 61: projected finish on the floor lines — shared helper, reusing
       // the board we already fetched above (no extra board read).
       const { byOrder: mtProj } = await cabProjections(board);
-      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out, mtProj, me.role === "admin"));
+      return send(200, "text/html; charset=utf-8", meetingPage(phxHM(Date.now()), board, awaiting, completed, out, mtProj, me.role === "admin", me));
     }
 
     // Q92 pt 2: the COVERAGE CALENDAR — the next 14 days of who's out, laid
@@ -7911,7 +7942,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/coverage") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const N = 14, HORIZON = 180;   // grid shows 14 days; projection scans up to 180 ahead
@@ -7950,7 +7981,7 @@ http.createServer(async (req, res) => {
       // source of truth the Meeting Pack floor + the cockpit also read.
       const board = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
       const { cabs } = await cabProjections(board);
-      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs, me.role === "admin"));
+      return send(200, "text/html; charset=utf-8", coveragePage(phxHM(Date.now()), days, builderCount, cabs, me.role === "admin", me));
     }
 
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
@@ -8003,7 +8034,7 @@ http.createServer(async (req, res) => {
           "content-disposition": `attachment; filename="shopboard-${which}-${tag}.csv"` });
         return res.end(reportCsv(which, data));
       }
-      return send(200, "text/html; charset=utf-8", reportsPage(data, me.role === "admin"));
+      return send(200, "text/html; charset=utf-8", reportsPage(data, me.role === "admin", me));
     }
 
     // Q84: MANAGER-INTEGRITY DIAGNOSTICS — ADMIN ONLY (file 25). The player-coach
@@ -9067,7 +9098,7 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/settings") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [me117] = await db(`employee?select=first_name,last_name,mobile,email,notify_push,notify_sms,notify_email&id=eq.${empId}`);
+      const [me117] = await db(`employee?select=first_name,last_name,mobile,email,notify_push,notify_sms,notify_email,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!me117) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       return send(200, "text/html; charset=utf-8", settingsPage117(me117));
     }
