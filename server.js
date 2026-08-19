@@ -628,6 +628,18 @@ function isAfterHours(ms, hrs = SHOP_HOURS) {
   const dow = phx.getUTCDay(), mins = phx.getUTCHours() * 60 + phx.getUTCMinutes();
   return dow === 0 || dow === 6 || mins < hrs.open * 60 - OPEN_GRACE_MIN_187 || mins >= hrs.close * 60;
 }
+// Block 195 (owner ruling, day 3): WAREHOUSE starts earlier than the floor —
+// "make the warehouse department able to clock in at 6am." Their pre-open
+// window widens by an hour (6:00 + the standing 5-min grace = 5:55); every
+// other department keeps the 7:00 open. Weekends + the close side unchanged,
+// and the TV's shop chip still runs on the plain 7-to-4 clock.
+const WAREHOUSE_EARLY_MIN_195 = 60;
+function isAfterHoursDept(ms, hrs, dept) {
+  const phx = new Date(ms - PHX_OFFSET_MS);
+  const dow = phx.getUTCDay(), mins = phx.getUTCHours() * 60 + phx.getUTCMinutes();
+  const openMin = hrs.open * 60 - OPEN_GRACE_MIN_187 - (dept === "Warehouse" ? WAREHOUSE_EARLY_MIN_195 : 0);
+  return dow === 0 || dow === 6 || mins < openMin || mins >= hrs.close * 60;
+}
 
 // Q91: the SHOP CALENDAR. Default work week is Mon-Fri; a shop_calendar row
 // OVERRIDES one date open or closed (holidays, or a rare worked Saturday).
@@ -1082,11 +1094,8 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     location.reload(); }, 45000);</script>` : ""}
   <!-- CLOCK OUT: shown when on the clock. Reason list = Q77 pick list. -->
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
-    ${state.lineId === 14 ? `<p class="msg" style="font-weight:700">Pick a line to start working</p>
-    <div class="grid" style="margin-bottom:16px">
-      ${[...usualLines, ...otherLines].map((l) => `<button class="name" data-switch="${l.id}">${l.name}</button>`).join("")}
-      <button class="name" style="opacity:.8" data-switch="10">Shop time</button>
-    </div>` : ""}
+    <!-- Block 195 (owner): clock-out kinds come FIRST — same shape as the
+         warehouse/body/build pages he likes. Line switching moved BELOW. -->
     ${ah.open ? `<div id="wrap107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:14px;margin:6px 0 12px;text-align:left">
       <p class="msg" style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
       <input id="wrapnote" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">   <!-- Block 169: 16px stops iOS Safari's auto-zoom-on-focus (it zooms any input under 16px) -->
@@ -1116,12 +1125,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%;font-size:16px"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
-    ${state.lineId === 14 ? "" : `<p class="msg" style="margin-top:18px">…or work a line — tap to jump on</p>
+    <p class="msg" style="margin-top:18px">${state.lineId === 14 ? "&hellip;or pick a line to start working" : "&hellip;or work a line — tap to jump on"}</p>
     <div class="grid">
-      ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" style="opacity:.8" data-switch="${l.id}">${l.name}</button>`).join("")}
+      ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" ${state.lineId === 14 ? "" : 'style="opacity:.8"'} data-switch="${l.id}">${l.name}</button>`).join("")}
       ${state.lineId === 10 ? "" : `<button class="name" style="opacity:.8" data-switch="10">Shop time</button>`}
-      <button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>
-    </div>`}
+      ${state.lineId === 14 ? "" : `<button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>`}
+    </div>
   </div>
 
   <!-- Q92: request time off — a date range + a reason, right from the phone.
@@ -1343,7 +1352,13 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
     <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
   </div>
-  ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor -->
+  ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 && (emp.role === "manager" || emp.role === "admin") ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor. Block 194 (owner): the order note (shipping etc.) is MANAGER/ADMIN-only on the cab screen — production builds from the checklist + flags, not customer notes. -->
+  ${tasks.every((t) => t.is_background || t.state === "complete") ? `
+  <!-- Block 194 (Blazer lesson): when the cab is DONE, say so at the TOP —
+       the finish box used to live only below the whole checklist. -->
+  <div class="cabbar" style="border-color:#30d158;cursor:pointer" onclick="const f194=document.getElementById('finish11');if(f194)f194.scrollIntoView({behavior:'smooth',block:'center'})">
+    <b style="color:#30d158">&#10003; Every step is checked!</b> ${photoHave >= photoMin ? "Tap here to finish — send it for inspection." : `Add ${photoMin - photoHave > 1 ? (photoMin - photoHave) + " completion photos" : "a completion photo"} and send it for inspection — tap here.`}
+  </div>` : ""}
   ${inRework ? `
   <!-- REWORK BANNER (files 11/18): the manager sent this cab back with a
        reason + a time frame. The fix tasks sit in the REWORK group below
@@ -1384,10 +1399,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
-        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}<a style="color:#8e8e93;cursor:pointer" onclick="toggleAtt('${t.id}')">${
+        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}<a style="display:inline-block;padding:6px 14px;margin:2px 0;border:1px solid #4a7ab0;border-radius:9px;color:#8ec2f0;font-size:.95rem;font-weight:600;cursor:pointer;white-space:nowrap" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
             ? `${(photosOf[t.id] || []).length ? `📎 ${(photosOf[t.id] || []).length} photo${(photosOf[t.id] || []).length === 1 ? "" : "s"}` : ""}${(photosOf[t.id] || []).length && (notesOf[t.id] || []).length ? " · " : ""}${(notesOf[t.id] || []).length ? `📝 ${(notesOf[t.id] || []).length} note${(notesOf[t.id] || []).length === 1 ? "" : "s"}` : ""} — view / add`
-            : "＋ note / photo"}</a>
+            : "&#128247; Add note / photo"}</a>
         <div id="att-${t.id}" hidden style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px">
           ${(notesOf[t.id] || []).map((n) => `<div style="opacity:.85;padding:3px 0;border-bottom:1px solid var(--line)">${String(n.note).replace(/</g, "&lt;")}</div>`).join("")}
           ${(photosOf[t.id] || []).length ? `<div style="margin-top:6px">${(photosOf[t.id] || []).map((p) =>
@@ -1406,7 +1421,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <!-- FINISH GATE (file 11, builder half): every step done -> final note ->
        cab goes AWAITING INSPECTION for the manager. Photos join when
        storage plumbing lands (noted in BUILD_LOG). -->
-  <div class="cabbar" style="border-color:#30d158;margin-top:18px">
+  <div class="cabbar" id="finish11" style="border-color:#30d158;margin-top:18px">
     <b>Every step is checked off.</b><br>
     <textarea id="fnote" placeholder="Final note for this cab (what the next set of eyes should know)"
       style="width:100%;min-height:80px;margin-top:10px;background:#111;color:#fff;
@@ -2234,7 +2249,10 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Order ${escH(b.order_number)}</title>${style}
 <style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-.kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}</style></head>
+.kv{opacity:.85;padding:4px 0;display:grid;grid-template-columns:9em 1fr;column-gap:12px;align-items:start}.kv b{opacity:.6;font-weight:600;overflow-wrap:anywhere}.kv span{overflow-wrap:anywhere;white-space:normal}
+/* Block 195 (owner, iPhone review): on a phone the two columns are too small
+   to read — stack label ABOVE value, one column, a touch bigger. */
+@media (max-width:600px){.kv{grid-template-columns:1fr;row-gap:2px;padding:9px 0;font-size:1.06rem;border-bottom:1px solid #222}.kv b{opacity:.5;font-size:.85em;text-transform:uppercase;letter-spacing:.04em}}</style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div>
   <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;margin-right:18px">&#8592; Shop board</a><a href="/home" style="color:#8e8e93;margin-right:18px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>   <!-- Block 187: Sign out joins the top row (this page had NO sign-out anywhere) -->
@@ -2573,6 +2591,18 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     </div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
   </div>` : ""}
+  ${!acct189 && rows.some((r) => r.active && r.active.ready194 && r.active.ready194.allDone) ? `
+  <!-- Block 194: cabs whose every step is checked but that haven't been SENT
+       yet surface at the very top of the Inspection lane's territory — this
+       is exactly the state the Blazer sat in while the managers hunted. -->
+  <div class="lane" style="border-color:#30d158" id="ready194"><h3>Ready to send — every step checked</h3>
+    ${rows.filter((r) => r.active && r.active.ready194 && r.active.ready194.allDone).map((r) => `
+    <div style="border:1px solid #30d158;border-radius:10px;padding:10px;margin-bottom:8px">
+      <b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.line.name} · ${r.active.ready194.done}/${r.active.ready194.total} steps &#10003;
+      <div style="opacity:.75;font-size:.85rem;margin:4px 0">${r.active.ready194.photosHave >= r.active.ready194.photosNeed ? `${r.active.ready194.photosHave} completion photo${r.active.ready194.photosHave === 1 ? "" : "s"} attached.` : `${r.active.ready194.photosHave} of ${r.active.ready194.photosNeed} completion photo${r.active.ready194.photosNeed === 1 ? "" : "s"} — crew adds them on the cab screen, or send now and the waiver goes on the record.`}</div>
+      <button class="btn" style="background:#1d5a2d;border:1px solid #30d158;margin-top:0" onclick="sendInsp194('${r.active.id}',this)">Send to inspection</button>
+    </div>`).join("")}
+  </div>` : ""}
   ${!acct189 && rows.some((r) => (r.awaiting || []).length) ? `
   <!-- Block 153 (owner-rep D2): the sign-off / send-back used to live only
        inside each line's lane — a long scroll from the top. Every cab
@@ -2664,12 +2694,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
         </div>`).join("")}
       ${r.active ? `
-        <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active${proj[r.active.order_number] ? ` · ${projPhrase(proj[r.active.order_number])}` : ""}</div>
+        <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active${r.active.ready194 && !r.active.ready194.allDone ? ` · <span style="opacity:.7">${r.active.ready194.done}/${r.active.ready194.total} steps</span>` : ""}${proj[r.active.order_number] ? ` · ${projPhrase(proj[r.active.order_number])}` : ""}</div>
+        ${r.active.ready194 && r.active.ready194.allDone ? `
+        <!-- Block 194 (Blazer lesson): a done cab is LOUD here now, and the
+             manager can send it to inspection from this very box. -->
+        <div style="border:2px solid #30d158;border-radius:10px;padding:10px;margin:8px 0;background:#10240f">
+          <b style="color:#30d158">&#10003; Every step is checked (${r.active.ready194.done}/${r.active.ready194.total}) — this cab is ready for inspection.</b>
+          <div style="opacity:.75;font-size:.85rem;margin:4px 0">${r.active.ready194.photosHave >= r.active.ready194.photosNeed ? `${r.active.ready194.photosHave} completion photo${r.active.ready194.photosHave === 1 ? "" : "s"} attached.` : `${r.active.ready194.photosHave} of ${r.active.ready194.photosNeed} completion photo${r.active.ready194.photosNeed === 1 ? "" : "s"} attached — the crew adds them on the cab screen, or sending from here waives them (goes on the record).`}</div>
+          <button class="btn" style="background:#1d5a2d;border:1px solid #30d158;margin-top:4px" onclick="sendInsp194('${r.active.id}',this)">Send to inspection</button>
+        </div>` : ""}
         ${(r.active.downs && r.active.downs.length) ? `<div style="margin:4px 0;padding:6px 8px;border-left:3px solid #9db4c8;background:#151a1f;border-radius:6px;font-size:.85rem;color:#c8d6e2">
           ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
-        ${insp188 ? "" : `<button class="btn" onclick="act('complete','${r.active.id}',this)">Sign off — production complete</button>`}`
+        ${insp188 ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`
       : `<div style="opacity:.6">No active cab</div>
         ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
@@ -2825,6 +2863,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = orig109;
+  }
+  // Block 194 (Blazer lesson): the cockpit's "Send to inspection" — the
+  // manager path of /api/build/finish (photo waiver rides along, audited).
+  async function sendInsp194(id, btn) {
+    btn.disabled = true; btn.textContent = "Sending…";
+    const err = document.getElementById("err");
+    try {
+      const r = await fetch("/api/build/finish", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, photo_pass: true, claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      err.textContent = out.error || "Something went wrong";
+    } catch (e) { err.textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Send to inspection";
   }
   // Block 191: the accounting timecard editor — a friendlier face on the
   // audited /api/punch/correct endpoint. Times type as Phoenix wall-clock;
@@ -6758,7 +6810,7 @@ http.createServer(async (req, res) => {
         // home screen — an evening warehouse punch-in was flatly denied. Same
         // three questions, same claim-then-confirm, now on this surface too.
         const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
-        const ahNowW = isAfterHours(Date.now());
+        const ahNowW = isAfterHoursDept(Date.now(), await shopHours(), "Warehouse");   // Block 195: warehouse runs from 6
         const ahApprW = ahNowW && !clockedInW106
           ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
         const ahReasW = ahNowW && !clockedInW106
@@ -6782,7 +6834,7 @@ http.createServer(async (req, res) => {
           // Block 106: Body + Build punch HERE — same Q112 after-hours
           // questionnaire and wrap-note the floor and warehouse get.
           const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
-          const ahNow92 = isAfterHours(Date.now());
+          const ahNow92 = isAfterHoursDept(Date.now(), await shopHours(), emp.department);   // Block 195: dept-aware open
           const ahAp92 = ahNow92 && !in92 ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
           const ahRe92 = ahNow92 && !in92 ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
           const [openAh92] = in92 ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
@@ -7006,7 +7058,8 @@ http.createServer(async (req, res) => {
       // recording no clock-in. lnGate.down_today was read above; used again there.
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
       const hrsIn = await shopHours();
-      if (isAfterHours(inAtMs, hrsIn)) {
+      const [meDep195] = await db(`employee?select=department&id=eq.${empId}`);   // Block 195: warehouse clocks in from 6
+      if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)) {
         if (!approved_by || !ah_reason || !String(ah_plan || "").trim())
           return json(400, { ok: false, error: "After hours needs three things: who approved it, what it's for, and what you're here to do" });
         const [appr] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
@@ -7572,6 +7625,28 @@ http.createServer(async (req, res) => {
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
       const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
+      // Block 194 (Blazer lesson): the cockpit must SEE a done-but-not-finished
+      // cab. For every ACTIVE build: step progress + whether every non-
+      // background step is checked + completion-photo status — feeds the
+      // "READY — send to inspection" state on the line card and the
+      // inspection lane. One query each, active cabs only (≤4 rows).
+      const activeIds194 = builds.filter((b) => b.state === "active").map((b) => b.id);
+      const ready194 = {};
+      if (activeIds194.length) {
+        const ts194 = await db(`task?select=build_id,is_background,state&build_id=in.(${activeIds194.join(",")})`);
+        const ph194 = await db(`build_photo?select=build_id&kind=eq.finish&build_id=in.(${activeIds194.join(",")})`);
+        const parts194 = [...new Set(builds.filter((b) => b.state === "active").map((b) => b.part_number).filter(Boolean))];
+        const prods194 = parts194.length ? await db(`product?select=part_number,photo_min&part_number=in.(${parts194.map((p) => `"${encodeURIComponent(p)}"`).join(",")})`) : [];
+        const pmin194 = Object.fromEntries(prods194.map((p) => [p.part_number, p.photo_min]));
+        for (const bid of activeIds194) {
+          const mine = ts194.filter((t) => t.build_id === bid && !t.is_background);
+          const done = mine.filter((t) => t.state === "complete").length;
+          const bld = builds.find((b) => b.id === bid);
+          ready194[bid] = { done, total: mine.length, allDone: mine.length > 0 && done === mine.length,
+            photosHave: ph194.filter((p) => p.build_id === bid).length,
+            photosNeed: bld && pmin194[bld.part_number] != null ? pmin194[bld.part_number] : 1 };
+        }
+      }
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200");
       const latestCk = {};
@@ -7597,7 +7672,8 @@ http.createServer(async (req, res) => {
       const photos = waitIds.length
         ? await db(`build_photo?select=id,build_id&build_id=in.(${waitIds.join(",")})&order=created_at`) : [];
       const rows = lines.map((l) => ({ line: l,
-        active: builds.find((b) => b.line_id === l.id && b.state === "active") || null,
+        active: (() => { const a194 = builds.find((b) => b.line_id === l.id && b.state === "active") || null;
+          return a194 ? { ...a194, ready194: ready194[a194.id] || null } : null; })(),
         rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => { // Block 184: the claim rides along with a display name + Phoenix HH:MM
@@ -8062,10 +8138,21 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/build/finish" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-      if (!lastCk || lastCk.kind !== "clock_in")
-        return json(403, { ok: false, error: "Clock in first" });
-      const { build_id, note, claimed_at } = await body(req);
+      // Block 194 (Blazer lesson, day 3): a MANAGER can send a done cab to
+      // inspection from the cockpit — no clock-in required (they're at the
+      // console, not on a line), and photo_pass lets them waive the
+      // completion-photo minimum (loudly audited below). The Blazer finished
+      // all 26 steps at 7:22 and got red-buttoned past inspection at 7:34
+      // because this path didn't exist. Crew path is unchanged: clocked in,
+      // photos required.
+      const [meF194] = await db(`employee?select=role&id=eq.${empId}`);
+      const mgrF194 = Boolean(meF194 && (meF194.role === "manager" || meF194.role === "admin"));
+      if (!mgrF194) {
+        const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        if (!lastCk || lastCk.kind !== "clock_in")
+          return json(403, { ok: false, error: "Clock in first" });
+      }
+      const { build_id, note, claimed_at, photo_pass } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number&id=eq.${build_id}`);
       // Accepts ACTIVE (first finish), REWORK (resubmit after fixes, file 18),
@@ -8079,8 +8166,14 @@ http.createServer(async (req, res) => {
       const photoNeed = prodF ? prodF.photo_min : 1;
       if (photoNeed > 0) {
         const shots = await db(`build_photo?select=id&build_id=eq.${build_id}&kind=eq.finish`);
-        if (shots.length < photoNeed)
-          return json(400, { ok: false, error: `This product needs at least ${photoNeed} completion photo${photoNeed === 1 ? "" : "s"} — attach ${photoNeed === 1 ? "one" : "them"} before finishing.` });
+        if (shots.length < photoNeed) {
+          // Block 194: a manager may WAIVE the photo minimum to unstick the
+          // hand-off — but it's a loud, separate audit event, same honesty
+          // pattern as Block 132's "started by management" flag.
+          if (!(mgrF194 && photo_pass))
+            return json(400, { ok: false, error: `This product needs at least ${photoNeed} completion photo${photoNeed === 1 ? "" : "s"} — attach ${photoNeed === 1 ? "one" : "them"} before finishing.` });
+          logEvent("build.photos_waived", empId, { build_id, order_number: b.order_number, have: shots.length, need: photoNeed });
+        }
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null,
