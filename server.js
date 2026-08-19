@@ -2234,6 +2234,30 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
       else features.push({ label: "", value: lines[i], stock: false });
     }
   }
+  // Block 197 (owner spot, day 3): SOME orders arrive with the WHOLE config on
+  // ONE line, options comma-separated ("...- Complete, Firewall Option: ...,
+  // Dash: Stock") — W115117 was the first seen (every other order uses one
+  // option per line). If the newline split produced no features but the single
+  // line carries "Label: value" segments, split it here. Chunks without a
+  // colon glue onto the previous value, so values that themselves contain
+  // commas ("Recessed Firewall, 4 inch Set Back") survive intact.
+  if (!features.length && model.includes(":") && model.includes(",")) {
+    const head197 = []; let cur197 = null;
+    for (const raw197 of model.split(",")) {
+      const seg197 = raw197.trim(); if (!seg197) continue;
+      const ci197 = seg197.indexOf(":");
+      if (ci197 > 0 && ci197 <= 40 && /^[A-Za-z0-9 .\/'&-]+$/.test(seg197.slice(0, ci197))) {
+        if (cur197) features.push(cur197);
+        cur197 = { label: seg197.slice(0, ci197).trim(), value: seg197.slice(ci197 + 1).trim(), stock: false };
+      } else if (cur197) cur197.value += ", " + seg197;
+      else head197.push(seg197);
+    }
+    if (cur197) features.push(cur197);
+    if (features.length) {
+      model = head197.join(", ");
+      for (const f197 of features) f197.stock = /^(stock|none|n\/a|no)\b/i.test(f197.value) || f197.value === "";   // "No Latch Upgrade" reads calm, not as an upgrade
+    }
+  }
   const ship = (c.ship_to && typeof c.ship_to === "object") ? c.ship_to : null;
   return {
     customer: { name: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(), company: String(c.company || "").trim(), email: String(c.email || "").trim(), phone: String(c.phone_primary || c.phone || "").trim(), billStr: fmtAddr(c.bill_to), shipStr: fmtAddr(ship), shipState: ship ? String(ship.state || "").trim() : "" },
@@ -2294,9 +2318,13 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${canFull ? `<div style="margin-top:6px"><a href="/order?n=${encodeURIComponent(b.coyote_root || String(b.order_number || "").split(".")[0])}" style="color:#8e8e93;font-size:.85rem">View Coyote push history &rarr;</a></div>` : ""}
   </div>
   <div class="lane" style="border-color:#C8102E">
-    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">CAB CONFIGURATION${detail.model ? ` &mdash; ${escH(detail.model)}` : ""}</div>
+    <!-- Block 197 (owner, floor-eyes pass): the model gets its OWN line under
+         the header instead of one long bold blob; upgrade values read bold
+         and bright with a real chip; stock rows stay calm but LEGIBLE. -->
+    <div style="font-weight:800;letter-spacing:.03em">CAB CONFIGURATION</div>
+    ${detail.model ? `<div style="opacity:.85;font-size:1.02rem;margin:2px 0 8px">${escH(detail.model)}</div>` : `<div style="margin-bottom:8px"></div>`}
     ${detail.features.length
-      ? detail.features.map((f) => `<div class="kv"><b>${escH(f.label || "—")}</b><span style="opacity:${f.stock ? ".55" : "1"}">${escH(f.value)}${f.stock ? "" : ` <span style="color:#5eaeff;font-size:.72em;font-weight:800;letter-spacing:.04em">UPGRADE</span>`}</span></div>`).join("")
+      ? detail.features.map((f) => `<div class="kv"><b>${escH(f.label || "—")}</b><span style="${f.stock ? "opacity:.7" : "color:#fff;font-weight:650"}">${escH(f.value)}${f.stock ? "" : ` <span style="background:#0e3a5f;color:#8ec9ff;font-size:.72em;font-weight:800;letter-spacing:.05em;padding:2px 8px;border-radius:7px;vertical-align:1px">UPGRADE</span>`}</span></div>`).join("")
       : `<div class="muted" style="font-size:1.02rem">No configuration detail on file for this cab yet.</div>`}
   </div>
   ${detail.addons.length ? `<div class="lane"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD-ONS &amp; EXTRAS</div>${detail.addons.map((a) => `<div style="padding:3px 0;font-size:1.03rem">&#9656; ${escH(a.desc)}</div>`).join("")}</div>` : ""}` : ""}
