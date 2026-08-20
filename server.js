@@ -6577,7 +6577,14 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // inspectors (Mike + Isaac + Jason). The event still targets admins too,
     // but for THEM the normal mutes apply, so the muted owners stay quiet
     // (Daniel's admin channels are ON, so he hears it the normal way).
-    const inspectPunch184 = eventType === "build.ready_inspection";
+    // Block 202 (owner, night of day 4): the inspection punch-through is
+    // SUSPENDED — Daniel: turn everyone's push OFF except his and Eric's
+    // ("i THINK i may have misunderstood something... we will dive into
+    // heavily tomorrow"). This flag let build.ready_inspection push MANAGERS
+    // straight through their OFF switch (the Blazer-era fix), which would
+    // have defeated tonight's quiet order the moment a cab hit inspection.
+    // RESTORE LATER = delete the leading "false && ".
+    const inspectPunch184 = false && eventType === "build.ready_inspection";
     const wants117 = (id, ch) => { const pp = prefs117[id]; if (ch === "push" && inspectPunch184 && pp && pp.role === "manager") return true; return !pp || pp["notify_" + ch] !== false; };
     const pushT117 = targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
