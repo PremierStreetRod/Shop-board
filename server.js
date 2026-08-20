@@ -1175,10 +1175,18 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   // claimed_at rides with every tap (Q103-1: the REAL tap time governs;
   // the server separately stamps received_at) — and it is stamped ONCE at
   // the tap, so Wi-Fi retries still land the true time.
+  // Block 199 (Michael's triple-tap, 8/18): three rapid taps on CLOCK IN
+  // fired three simultaneous requests — all read "not on the clock" before
+  // any insert landed, so the server's double-clock-in guard couldn't see
+  // them, and 3 duplicate punches landed in one second. One action in
+  // flight at a time now; the flag clears on failure so retries still work.
+  let busy199 = false;
   async function act(url, payload){
+    if (busy199) return; busy199 = true;
     const err = document.getElementById("err");
     const out = await sbPost(url, {...payload, claimed_at:new Date().toISOString()},
       (m) => { err.textContent = m; });
+    busy199 = false;
     // Block 163 (owner-rep): a successful switch must LAND on the new line's
     // screen. location.reload() kept ?clockout=1 alive, so tapping a line on
     // the clock screen just redrew the clock screen — Daniel hit this live.
@@ -2846,12 +2854,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div style="margin-top:10px">
         IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         ${s.out ? `&nbsp;OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">&nbsp;— still on the clock</span>`}
-        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this)">Save times</button>
-        ${s.out ? `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>` : ""}
+        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this,'${s.mids.join(",")}')">Save times</button>
+        ${s.out ? (s.midIds.length
+          ? `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this))">Remove</button>`
+          : `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>`) : ""}
       </div>`).join("")}
+      ${d.orphans.length ? `<div style="opacity:.6;font-size:.85rem;margin-top:10px">The extra punches below are usually an accidental double-tap — they don't count toward hours. Remove clears them.</div>` : ""}
       ${d.orphans.map((o) => `
       <div style="margin-top:10px">
-        lone ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        extra ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${o.id}','${o.hhmm}']],this)">Save</button>
         <button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccVoidOne('${d.ds}','${o.id}',this))">Remove</button>
       </div>`).join("")}
@@ -2987,7 +2998,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     } catch (e) { if (m) m.textContent = "Network hiccup — try again"; }
     return false;
   }
-  async function tccSave(ds, pairs, btn) {
+  async function tccSave(ds, pairs, btn, mids) {
+    // Block 199: a shop-level stint can contain line-move punches (the
+    // display chains them away). The day's edges can move freely as long
+    // as they don't cross a line move INSIDE the stint — catch that here
+    // with a plain sentence instead of the server's generic refusal.
+    const mm = (mids || "").split(",").filter(Boolean);
+    if (mm.length && pairs.length === 2) {
+      const vi = (document.getElementById("tcct-" + pairs[0][0]) || {}).value;
+      const vo = (document.getElementById("tcct-" + pairs[1][0]) || {}).value;
+      if ((vi && vi > mm[0]) || (vo && vo < mm[mm.length - 1])) {
+        const m199 = document.getElementById("tccmsg-" + ds);
+        if (m199) m199.textContent = "This stint has a line move at " + (vi && vi > mm[0] ? mm[0] : mm[mm.length - 1]) + " inside it — keep IN before it and OUT after it. Wrong altogether? Remove the stint, then Add the right hours.";
+        return;
+      }
+    }
     btn.disabled = true;
     for (const [id, orig] of pairs) {
       const v = (document.getElementById("tcct-" + id) || {}).value;
@@ -3001,6 +3026,13 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   async function tccRemove(ds, inId, outId, btn) {
     btn.disabled = true;
     if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return location.reload();
+    btn.disabled = false;
+  }
+  // Block 199: Remove for a stint that spans line moves — the whole punch
+  // chain (edges + interior switch pairs) voids as ONE atomic action.
+  async function tccRemoveRun(ds, idsCsv, btn) {
+    btn.disabled = true;
+    if (await tccCall(ds, { action: "void_run", ids: idsCsv.split(","), note: tccNote() })) return location.reload();
     btn.disabled = false;
   }
   async function tccVoidOne(ds, id, btn) {
@@ -7900,7 +7932,7 @@ http.createServer(async (req, res) => {
         let days191 = [];
         if (tcEmpSel) {
           const from191 = phxDayStart(phxDate(Date.now() - 13 * 86400000));
-          const evs191 = await db(`clock_event?select=id,kind,claimed_at&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(from191).toISOString()}&order=claimed_at.asc`);
+          const evs191 = await db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(from191).toISOString()}&order=claimed_at.asc`);
           const byDay191 = {};
           for (const ev of evs191) { const dsE = phxDate(new Date(ev.claimed_at).getTime()); (byDay191[dsE] = byDay191[dsE] || []).push(ev); }
           for (let i191 = 0; i191 < 14; i191++) {
@@ -7909,19 +7941,41 @@ http.createServer(async (req, res) => {
             const stints = [], orphans = [];
             let openIn191 = null;
             for (const p of byDay191[ds] || []) {
-              const t = { id: p.id, hhmm: phxHHMM(p.claimed_at), kind: p.kind };
+              const t = { id: p.id, hhmm: phxHHMM(p.claimed_at), kind: p.kind, at: p.claimed_at, rsn: p.reason || "" };
               if (p.kind === "clock_in") { if (openIn191) orphans.push(openIn191); openIn191 = t; }
               else if (openIn191) { stints.push({ in: openIn191, out: t }); openIn191 = null; }
               else orphans.push(t);
             }
             if (openIn191) stints.push({ in: openIn191, out: null });
+            // Hours come from the RAW stints (matches pay math exactly —
+            // the 1-second switch gaps stay excluded), BEFORE the display
+            // merge below.
             let mins191 = 0, open191 = false;
             for (const s of stints) {
               if (!s.out) { open191 = true; continue; }
               const [ih, im] = s.in.hhmm.split(":").map(Number), [oh, om] = s.out.hhmm.split(":").map(Number);
               mins191 += (oh * 60 + om) - (ih * 60 + im);
             }
-            days191.push({ ds, dow, stints, orphans, hours: Math.round(mins191 / 6) / 10, open: open191 });
+            // Block 199 (Daniel, day 4): SHOP-LEVEL VIEW. Accounting cares
+            // about time IN THE SHOP — first punch, lunch, last punch —
+            // never line moves. A line switch writes OUT+IN one second
+            // apart (reason "Switched lines"), which made a normal day
+            // read as four confusing mini-stints ("clocking in and out
+            // within minutes of eachother"). Chain those into ONE row
+            // here; the interior switch punches stay in the DB untouched
+            // (they feed cab pace math). Save moves only the day's real
+            // edges; Remove voids the whole chain atomically (void_run).
+            const merged199 = [];
+            for (const s of stints) {
+              const prev = merged199[merged199.length - 1];
+              if (prev && prev.out && prev.out.rsn === "Switched lines" && s.in &&
+                  new Date(s.in.at).getTime() - new Date(prev.out.at).getTime() < 120000) {
+                prev.mids.push(prev.out.hhmm);
+                prev.midIds.push(prev.out.id, s.in.id);
+                prev.out = s.out;   // may be null — still on the clock
+              } else merged199.push({ in: s.in, out: s.out, mids: [], midIds: [] });
+            }
+            days191.push({ ds, dow, stints: merged199, orphans, hours: Math.round(mins191 / 6) / 10, open: open191 });
           }
         }
         tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
@@ -8918,7 +8972,7 @@ http.createServer(async (req, res) => {
       const [meP] = await db(`employee?select=role&id=eq.${meId}`);
       if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id } = await body(req);   // Block 192: in_id/out_id feed void_pair
+      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id, ids } = await body(req);   // Block 192: in_id/out_id feed void_pair · Block 199: ids feeds void_run
       if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
       // Q115: reject malformed ids before they reach Postgres (a non-uuid id
       // used to throw a 500). The UI only ever sends real ids.
@@ -8932,10 +8986,23 @@ http.createServer(async (req, res) => {
       const tooOld = (ms) => meP.role !== "admin" && ms < nowP - 14 * 86400000;
       // Simulate the person's Phoenix day around `ms` with a change applied,
       // and ask: do the punches still alternate?
+      // Block 199 (Kailey's lockout, 8/20): a day that ALREADY had a tangle
+      // (Michael's 8/18 triple-tap left two duplicate clock-ins) used to
+      // refuse EVERY correction — including the exact removal that would
+      // heal it, so the whole day was locked. The rule is now "no worse":
+      // a change passes as long as it doesn't ADD a tangle. A clean day
+      // keeps the exact old behavior (zero tangles must stay zero).
+      const tangles199 = (evs) => {
+        const sorted = [...evs].sort((a, b) => new Date(a.claimed_at) - new Date(b.claimed_at));
+        let n = 0;
+        for (let i = 1; i < sorted.length; i++)
+          if ((sorted[i - 1].kind === "clock_in") === (sorted[i].kind === "clock_in")) n++;
+        return n;
+      };
       const daySane = async (empIdP, ms, mutate) => {
         const d0 = phxDayStart(phxDate(ms));
         const evsD = await db(`clock_event?select=id,kind,claimed_at&voided=is.false&employee_id=eq.${empIdP}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
-        return punchesAlternate(mutate(evsD));
+        return tangles199(mutate(evsD)) <= tangles199(evsD);
       };
       if (action === "move") {
         const [p] = await db(`clock_event?select=id,employee_id,kind,claimed_at,original_claimed_at&id=eq.${punch_id}&voided=is.false`);
@@ -8986,6 +9053,34 @@ http.createServer(async (req, res) => {
             voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.pair_voided", meId, { in_id, out_id, employee_id: alive[0].employee_id,
           at: alive.map((p2) => p2.claimed_at), note });
+        return json(200, { ok: true });
+      }
+      // Block 199: VOID_RUN — the shop-level Remove. In the accounting
+      // editor a stint can now SPAN line-switch punches (IN … out/in … OUT);
+      // erasing it means voiding the WHOLE chain in one atomic, audited
+      // action — voiding only the edges would strand the interior pair as
+      // lone punches. Same retry tolerance as void_pair: rows already gone
+      // are skipped, so a retry heals a half-removed chain.
+      if (action === "void_run") {
+        const idsR = Array.isArray(ids) ? ids.filter(isUuid) : [];
+        if (!idsR.length || idsR.length > 12 || !Array.isArray(ids) || ids.length !== idsR.length)
+          return json(400, { ok: false, error: "Those punch references aren't valid" });
+        const rowsR = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=in.(${idsR.join(",")})&voided=is.false`);
+        if (!rowsR.length) return json(404, { ok: false, error: "Those punches are already gone — reload to see the day fresh" });
+        if (rowsR.some((p2) => p2.employee_id !== rowsR[0].employee_id))
+          return json(400, { ok: false, error: "Those punches belong to different people" });
+        if (new Set(rowsR.map((p2) => phxDate(new Date(p2.claimed_at).getTime()))).size > 1)
+          return json(400, { ok: false, error: "One day at a time — those punches span days" });
+        for (const p2 of rowsR) if (tooOld(new Date(p2.claimed_at).getTime()))
+          return json(403, { ok: false, error: "Older than 14 days — that one belongs to an admin" });
+        const goneR = new Set(rowsR.map((p2) => p2.id));
+        const saneR = await daySane(rowsR[0].employee_id, new Date(rowsR[0].claimed_at).getTime(), (evs) => evs.filter((e) => !goneR.has(e.id)));
+        if (!saneR) return json(400, { ok: false, error: "Removing that would tangle the day's punches — check the other rows" });
+        for (const p2 of rowsR)
+          await db(`clock_event?id=eq.${p2.id}`, { method: "PATCH", body: JSON.stringify({
+            voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
+        logEvent("punch.run_voided", meId, { ids: rowsR.map((p2) => p2.id), employee_id: rowsR[0].employee_id,
+          at: rowsR.map((p2) => p2.claimed_at), note });
         return json(200, { ok: true });
       }
       if (action === "void") {
