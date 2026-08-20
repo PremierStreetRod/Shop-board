@@ -2837,7 +2837,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     <p style="margin:0 0 12px">
       <select style="font-size:1.1rem;padding:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:10px" onchange="if(this.value)location.href='/manager?tc_emp='+this.value">
         <option value="">— pick a person —</option>
-        ${tcard191.emps.map((e) => `<option value="${e.id}"${tcard191.selEmp === e.id ? " selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}
+        ${tcard191.emps.map((e) => `<option value="${e.id}"${tcard191.selEmp === e.id ? " selected" : ""}>${e.first_name} ${e.last_name}${e.pay_type === "salary" ? " — salary" : e.pay_type === "na" ? " — owner" : ""}</option>`).join("")}
       </select>
     </p>
     ${tcard191.selEmp ? `
@@ -2882,7 +2882,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        pair. Every change needs a note, is audited, and stamps the timecard. -->
   <div class="lane" id="timecorrections"><h3>Time corrections</h3>
     <p>
-      <select id="tc-emp">${tc.emps.map((e) => `<option value="${e.id}" ${tc.selEmp === e.id ? "selected" : ""}>${e.first_name} ${e.last_name}</option>`).join("")}</select>
+      <select id="tc-emp">${tc.emps.map((e) => `<option value="${e.id}" ${tc.selEmp === e.id ? "selected" : ""}>${e.first_name} ${e.last_name}${e.pay_type === "salary" ? " — salary" : e.pay_type === "na" ? " — owner" : ""}</option>`).join("")}</select>
       <input type="date" id="tc-date" value="${tc.date}">
       <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="tcLoad()">Load day</button>
     </p>
@@ -3587,11 +3587,12 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <button class="b grn" onclick="addEmp(this)">Add + issue temp code</button>
     <span id="np-msg" style="font-size:.85rem;margin-left:6px"></span>
   </div>
-  <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Usual lines</th><th></th><th></th><th></th></tr>
+  <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Pay</th><th>Usual lines</th><th></th><th></th><th></th></tr>
   ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
     <td><b>${e.first_name} ${e.last_name}</b></td>
     <td><select id="d-${e.id}">${DEPTS.map((d) => `<option ${e.department === d ? "selected" : ""}>${d}</option>`).join("")}</select></td>
     <td><select id="r-${e.id}">${ROLES.map((r) => `<option value="${r}" ${e.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
+    <td><select id="p-${e.id}">${[["hourly", "Hourly"], ["salary", "Salary"], ["na", "Owner — n/a"]].map(([pv, pl]) => `<option value="${pv}" ${(e.pay_type || "hourly") === pv ? "selected" : ""}>${pl}</option>`).join("")}</select></td>   <!-- Block 200: hourly people are payroll; salary/owner stay OFF the Pay Worksheet totals -->
     <td>${e.department === "Production" ? `<input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2">` : '<span style="opacity:.35">—</span>'}</td>
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
     <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
@@ -3877,7 +3878,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     // unconditionally threw for every other department and killed the Save
     // silently (found live: moving Body Shop -> manager did nothing).
     const le183 = document.getElementById("l-"+id);
-    post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id),
+    post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id), pay_type: v("p-"+id),
       lines: le183 ? le183.value.split(",").map(s=>Number(s.trim())).filter(n=>n>0) : [] }, btn); }
   function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
   // Q114: reset now ISSUES a temp code (the old reset opened the Q68 hole).
@@ -5997,7 +5998,7 @@ function payPeriod(params) {
 }
 async function payrollData(startMs, endMs) {
   const nowMs = Date.now();
-  const emps = await db(`employee?select=id,first_name,last_name,active&active=is.true&order=first_name,last_name`);
+  const emps = await db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`);   // Block 200: pay_type splits hourly vs salary/owner
   const events = await db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`);
   const ivs = workIntervals(events, nowMs);
   const dates = []; for (let ms = startMs; ms < endMs; ms += 86400000) dates.push(phxDate(ms));
@@ -6053,9 +6054,17 @@ async function payrollData(startMs, endMs) {
       sick += s; unpaid += u;
       if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: r, ot: o, sick: s, unpaid: u, otherOff, ahx: ax };
     }
-    return { id: e.id, name: `${e.first_name} ${e.last_name}`, reg, ot, sick, unpaid, ahx, total: reg + ot + sick + unpaid, byDay };
+    return { id: e.id, name: `${e.first_name} ${e.last_name}`, payType: e.pay_type || "hourly", reg, ot, sick, unpaid, ahx, total: reg + ot + sick + unpaid, byDay };
   }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || r.ahx || Object.keys(r.byDay).length);
-  const totals = rows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, ahx: 0, total: 0 });
+  // Block 200 (owner, day 4): SALARY and OWNER (n/a) people are NOT hourly
+  // payroll — "she's seeing only the hours of true numbers of the hourly
+  // employees." They come OUT of the tables and totals; anyone of them who
+  // did punch is listed by name below as informational only, so a salaried
+  // manager's punches can never inflate the pay run.
+  const salNotes = rows.filter((r) => r.payType === "salary" || r.payType === "na")
+    .map((r) => ({ name: r.name, label: r.payType === "salary" ? "salary" : "owner", hrs: roundQ(r.reg + r.ot) }));
+  const hourlyRows = rows.filter((r) => r.payType !== "salary" && r.payType !== "na");
+  const totals = hourlyRows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, ahx: 0, total: 0 });
   // v148 (owner-rep): every SYSTEM clock-out in the window gets a named note on
   // payroll's sheet — the machine closed someone's day, a human should glance
   // at it before the pay run (and can fix the punches in one tap).
@@ -6063,7 +6072,7 @@ async function payrollData(startMs, endMs) {
   const autoNotes = auto148.map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
     name: nmP111[a.employee_id] || "?", date: d148, at: phxHHMM(a.claimed_at),
     link: `/manager?tc_emp=${a.employee_id}&tc_date=${d148}#timecorrections` }; });
-  return { rows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes, autoNotes };
+  return { rows: hourlyRows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes, autoNotes, salNotes };
 }
 function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers open this too — their nav must not carry admin links
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -6122,7 +6131,11 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
     <h3>System clock-outs <span class="muted" style="font-weight:400;font-size:.85rem">(no clock-out was recorded — the day closed it; check before payroll)</span></h3>
     ${d.autoNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${esc(n.date)} · closed at ${esc(n.at)} <a href="${n.link}" style="color:#8e8e93;margin-left:10px">Fix punches</a></div>`).join("")}
   </div>` : ""}
-  <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here.</p>
+  ${(d.salNotes || []).length ? `<div class="lane">
+    <h3>Salaried &amp; owners <span class="muted" style="font-weight:400;font-size:.85rem">(not on hourly payroll — their punches are informational only and are NOT in the totals above)</span></h3>
+    ${d.salNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${n.label}${n.hrs ? ` · punched ${h1(n.hrs)}h this period` : ""}</div>`).join("")}
+  </div>` : ""}
+  <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here. Hourly people only — salaried &amp; owners never count in the totals (set who's who under People in the Admin console).</p>
 </div></body></html>`;
 }
 function payrollCsv(d) {
@@ -6142,6 +6155,11 @@ function payrollCsv(d) {
     L.push(""); L.push(q("System clock-outs (no clock-out recorded — day auto-closed; verify before payroll)"));
     L.push(["Employee", "Date", "Auto-closed at"].map(q).join(","));
     for (const n of d.autoNotes) L.push([n.name, n.date, n.at].map(q).join(","));
+  }
+  if ((d.salNotes || []).length) {
+    L.push(""); L.push(q("Salaried & owners (not on hourly payroll - informational only, NOT in the totals above)"));
+    L.push(["Employee", "Pay type", "Punched hours"].map(q).join(","));
+    for (const n of d.salNotes) L.push([n.name, n.label, h1(n.hrs || 0)].map(q).join(","));
   }
   L.push(""); L.push(""); L.push(q("Day-by-day detail"));
   L.push(["Employee", "Date", "Weekday", "Worked", "Regular", "Overtime", "Sick", "Unpaid"].map(q).join(","));
@@ -7890,7 +7908,7 @@ http.createServer(async (req, res) => {
       const tcEmpRaw = url.searchParams.get("tc_emp");
       const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;
       const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
-      const tcEmps = await db(`employee?select=id,first_name,last_name,department,lines&active=is.true&order=first_name`);   // Block 189: department + usual lines ride along so the add-pair picker can preselect the right line
+      const tcEmps = await db(`employee?select=id,first_name,last_name,department,lines,pay_type&active=is.true&order=first_name`);   // Block 189: department + usual lines ride along so the add-pair picker can preselect the right line · Block 200: pay_type tags salaried/owner names
       let tcPunches = [];
       if (tcEmpSel) {
         const d0 = phxDayStart(tcDate);
@@ -9321,7 +9339,7 @@ self.addEventListener("notificationclick", (e) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
-      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email&order=active.desc,first_name");
+      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email,pay_type&order=active.desc,first_name");   // Block 200: pay_type feeds the People panel
       const tmpls = await db("build_template?select=id,family&order=family");
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const steps = (tplId && isUuid(tplId)) ? await db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
@@ -9379,7 +9397,7 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/admin/employee" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p94 = await body(req);
-      const { id, department, role, lines, active, reset_pin } = p94;
+      const { id, department, role, lines, active, reset_pin, pay_type } = p94;   // Block 200: pay_type (hourly / salary / na)
       // Block 93 (owner-rep note 1): ADD a person from the console. Creates the
       // row + issues a temp passcode via the proven Q114 path (first sign-in
       // forces them to pick their own PIN). Lines only make sense for Production.
@@ -9416,6 +9434,9 @@ self.addEventListener("notificationclick", (e) => {
       if (department !== undefined) patch.lines = (department === "Production" && Array.isArray(lines)) ? lines.map(Number).filter(Number.isInteger) : [];
       else if (lines !== undefined) patch.lines = Array.isArray(lines) ? lines.map(Number).filter(Number.isInteger) : [];
       if (active !== undefined) patch.active = Boolean(active);
+      // Block 200: hourly = on the Pay Worksheet; salary / na (owners) are
+      // listed informationally only. Whitelisted — anything else is refused.
+      if (pay_type !== undefined) { if (!["hourly", "salary", "na"].includes(pay_type)) return json(400, { ok: false, error: "Pay type must be Hourly, Salary, or Owner — n/a" }); patch.pay_type = pay_type; }
       await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) });
       // Deactivating someone still ON the clock used to leave their interval
       // open forever (risk sweep) — close it at the moment of deactivation.
