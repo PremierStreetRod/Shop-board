@@ -1356,6 +1356,18 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   ${otherLines.length ? `<p style="text-align:center;margin:-8px 0 10px"><a href="#" onclick="const s187=document.getElementById('swpick');s187.hidden=!s187.hidden;if(!s187.hidden)s187.scrollIntoView({behavior:'smooth',block:'center'});return false" style="color:#8e8e93">Switch line</a></p>` : ""}   <!-- Block 187: Switch line up top, same one-tap picker -->
   <div style="text-align:center;margin:4px auto 12px;max-width:560px;padding:12px 16px;border-radius:14px;font-size:1.15rem;font-weight:800;letter-spacing:.02em;background:#1d5a2d;color:#fff;border:2px solid #30d158">${emp.first_name} · &#9679; ON THE CLOCK — ${lineName}</div>
+  <!-- Block 198 (owner, day 4): ONE-TAP LUNCH / END OF DAY right at the top
+       of the screen production lives on. Before this, lunch meant Switch
+       line → hold the line → a popup nobody understood → THEN clock out.
+       Daniel: staff "NEED TO HAVE a quick ability to clock OUT for lunch."
+       One tap now. The line HOLDS — a lunch punch never releases the cab;
+       clock back in from the home screen and the same steps are waiting. -->
+  <div style="display:flex;gap:10px;max-width:560px;margin:0 auto 4px">
+    <button onclick="quickOut198('Lunch',this)" style="flex:1.4;background:#3a2a00;color:#ffd60a;border:2px solid #ffd60a;border-radius:12px;padding:16px 10px;font-size:1.1rem;font-weight:800;cursor:pointer">&#127860; Clock out for LUNCH</button>
+    <button onclick="quickOut198('End of day',this)" style="flex:1;background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 10px;font-size:1rem;font-weight:700;cursor:pointer">&#127937; End of day</button>
+  </div>
+  <div style="text-align:center;max-width:560px;margin:0 auto 12px;font-size:.85rem;opacity:.6">Lunch holds your line — your cab and steps will be right here when you're back.</div>
+  <div class="msg err" id="qerr198" style="margin:0 0 8px"></div>
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
          — a quick look at what this order IS without a trip over to the shop
@@ -1478,6 +1490,27 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       (m) => { err.textContent = m; });
     if (out.ok) return location.reload();
     err.textContent = out.error || "Something went wrong";
+  }
+  // Block 198 (owner, day 4): the one-tap lunch / end-of-day buttons up top.
+  // Lunch never gets the open-steps popup (server exempts it — a lunch punch
+  // PAUSES the day). End of day keeps the soft heads-up, worded plainly.
+  async function quickOut198(reason, btn) {
+    btn.disabled = true; const keep198 = btn.textContent; btn.textContent = "Clocking out…";
+    const err = document.getElementById("qerr198") || document.getElementById("err");
+    err.textContent = "";
+    let out = await sbPost("/api/clock/out",
+      { reason: reason, claimed_at: new Date().toISOString() },
+      (m) => { err.textContent = m; });
+    if (out.nudge163) {
+      if (confirm(out.error + "\\n\\nOK clocks you out — the steps stay open for a teammate to finish.")) {
+        out = await sbPost("/api/clock/out",
+          { reason: reason, claimed_at: new Date().toISOString(), confirm163: true },
+          (m) => { err.textContent = m; });
+      } else { btn.disabled = false; btn.textContent = keep198; return; }
+    }
+    if (out.ok) return location.href = "/home";
+    err.textContent = out.error || "Something went wrong";
+    btn.disabled = false; btn.textContent = keep198;
   }
   async function switchLine(lineId, btn) {
     btn.disabled = true; btn.textContent = "Switching…";
@@ -7159,7 +7192,12 @@ http.createServer(async (req, res) => {
         return json(400, { ok: false, error: "You're not on the clock" });
       // Block 163 (owner-rep ruling): clocking OUT with steps you started
       // still open on your line — same soft heads-up as the line switch.
-      if (confirm163 !== true && lastOut107.line_id != null) {
+      // Block 198 (owner, day 4): LUNCH is exempt from the open-steps nudge —
+      // a lunch punch PAUSES the day, the person returns to the same steps,
+      // so "you still have steps open — clock out anyway?" only scared people
+      // (Daniel: staff "get a pop up message that they are UNSURE of what to
+      // do with"). End-of-day and every other reason keep the heads-up.
+      if (confirm163 !== true && reason !== "Lunch" && lastOut107.line_id != null) {
         const open163o = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
         const real163o = (open163o || []).filter((t) => !t.is_background);
         if (real163o.length) {
