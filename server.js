@@ -727,12 +727,20 @@ async function sweepForgottenClockOuts() {
         // closed the day, a human should glance before payroll. (An after-hours
         // auto-close already sends its own held-hours notice above.)
         try {
-          const [whoA148] = await db(`employee?select=first_name,last_name&id=eq.${ev.employee_id}`);
-          const admins148 = await db(`employee?select=id&active=is.true&role=eq.admin`);
-          notify("clock.auto_out", admins148.map((a) => a.id),
-            `System clocked out ${whoA148 ? whoA148.first_name + " " + ((whoA148.last_name || "")[0] || "") + "." : "someone"}`,
-            `No clock-out was recorded — the day closed it at ${phxHHMM(new Date(closeAt).toISOString())}. Worth a glance before payroll; fix the punches if the time is wrong.`,
-            `/manager?tc_emp=${ev.employee_id}&tc_date=${phxDate(new Date(ev.claimed_at).getTime())}#timecorrections`);
+          const [whoA148] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${ev.employee_id}`);
+          // Block 201 (owner, day 4, Jason's text): a SALARIED person or an
+          // OWNER forgetting to clock out is not a payroll problem — "him and
+          // other salaried people, like myself DO NOT need to clock in or
+          // out." The punch above still auto-closes for EVERYONE (data
+          // hygiene; their ability to clock in/out is untouched), but only an
+          // HOURLY person's forgotten punch buzzes the admins' phones.
+          if (!whoA148 || !["salary", "na"].includes(whoA148.pay_type)) {
+            const admins148 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+            notify("clock.auto_out", admins148.map((a) => a.id),
+              `System clocked out ${whoA148 ? whoA148.first_name + " " + ((whoA148.last_name || "")[0] || "") + "." : "someone"}`,
+              `No clock-out was recorded — the day closed it at ${phxHHMM(new Date(closeAt).toISOString())}. Worth a glance before payroll; fix the punches if the time is wrong.`,
+              `/manager?tc_emp=${ev.employee_id}&tc_date=${phxDate(new Date(ev.claimed_at).getTime())}#timecorrections`);
+          }
         } catch (e) { console.error("auto-out notify failed:", e.message); }
       }
       console.log("sweeper: auto clock-out", ev.employee_id, "opened", ev.claimed_at);
@@ -6015,6 +6023,7 @@ async function payrollData(startMs, endMs) {
   // DECLINED stints are pulled out of Regular/OT here and listed by name
   // below the tables (declines carry the typed reason).
   const nmP111 = {}; for (const e of emps) nmP111[e.id] = `${e.first_name} ${e.last_name}`;
+  const payOf201 = {}; for (const e of emps) payOf201[e.id] = e.pay_type || "hourly";   // Block 201: salaried/owner auto-closes stay off the worksheet's glance list
   const ahSess111 = await db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`);
   const ahCut = {}; const ahNotes = [];
   for (const sA of ahSess111) {
@@ -6069,7 +6078,8 @@ async function payrollData(startMs, endMs) {
   // payroll's sheet — the machine closed someone's day, a human should glance
   // at it before the pay run (and can fix the punches in one tap).
   const auto148 = await db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`);
-  const autoNotes = auto148.map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
+  const autoNotes = auto148.filter((a) => !["salary", "na"].includes(payOf201[a.employee_id]))   // Block 201: hourly people only — a salaried/owner auto-close isn't a payroll matter
+    .map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
     name: nmP111[a.employee_id] || "?", date: d148, at: phxHHMM(a.claimed_at),
     link: `/manager?tc_emp=${a.employee_id}&tc_date=${d148}#timecorrections` }; });
   return { rows: hourlyRows, dates, workdays: dates.filter((d) => workday[d]), totals, ahNotes, autoNotes, salNotes };
