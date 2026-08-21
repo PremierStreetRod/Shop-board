@@ -2571,10 +2571,13 @@ const settingsPage117 = (me) => `<!doctype html>
   </div>
   <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px">
     <b>How notices reach me</b>
-    <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Critical notices (pay decisions, inspection hand-offs) always come through.</p>
-    <div style="padding:10px 0;border-top:1px solid var(--line)"><b>Phone / web push</b> — <b style="color:#30d158">always on</b><br>
-      <small style="opacity:.55">Every notice pops on your allowed devices and ALWAYS lands in your \uD83D\uDD14 inbox — nothing to set up.</small></div>
-    ${[["sms", "Text message", "Sent to the mobile number above."]].map(([ch, label, note]) => `
+    <!-- Block 204 (owner ruling, day 5): the Block-154 "push is always on"
+         era is OVER — Daniel: staff control their OWN push and text. The
+         push toggle is restored below, and the copy now tells the truth:
+         the bell inbox always keeps a copy no matter what; these switches
+         only decide whether the phone gets tapped on the shoulder. -->
+    <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Everything ALWAYS lands in your \uD83D\uDD14 inbox no matter what you turn off here.</p>
+    ${[["push", "Phone / web push", "Pops up on your phone like any app. This device also has to allow notifications — the \uD83D\uDD14 button appears below if it hasn't yet."], ["sms", "Text message", "Sent to the mobile number above."]].map(([ch, label, note]) => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)">
       <div style="flex:1"><b>${label}</b><br><small style="opacity:.55">${note}</small></div>
       <b id="st-${ch}" style="opacity:.7">${me["notify_" + ch] === false ? "OFF" : "ON"}</b>
@@ -3617,7 +3620,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Block 117: the admin side of ⚙ My settings — every person's channel
        switches AND contact info, controllable from one table. -->
   <div class="panel" id="channels117"><h3>Notification channels &amp; contact — per person</h3>
-  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Role-critical notices (after-hours pay, inspection hand-offs, ship risk) always send. People can set their own text alerts from the &#9881; gear beside the bell; push is always on (block 154).</p>
+  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. OFF means OFF — nothing overrides these switches right now, and every notice ALWAYS lands in the person's bell inbox regardless. People can also flip their own Push and Text from the &#9881; gear beside the bell (Block 204). Text sending additionally needs the Text channel set up under Tools.</p>
   <!-- Block 171 (owner ruling): the Email toggle + Email address columns are
        hidden with the rest of the email channel — the stored addresses stay in
        the database untouched for a future revisit. -->
@@ -9303,7 +9306,10 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const p117 = await body(req);
       const ch117 = String(p117.channel || "");
-      if (ch117 !== "sms") return json(400, { ok: false, error: ch117 === "push" ? "Push is always on — every notice also lands in your inbox." : ch117 === "email" ? "Email notifications are turned off for now." : "Unknown channel" });   // Block 154 (B4): staff can't mute push · Block 171 (owner ruling): email channel hidden — self-toggle refused so the hidden switch can't be flipped by a stale page
+      // Block 204 (owner ruling, day 5): staff control their OWN push AND
+      // text — the Block-154 "staff can't mute push" refusal is retired.
+      // Email stays refused (Block 171: channel hidden, revisit later).
+      if (ch117 !== "sms" && ch117 !== "push") return json(400, { ok: false, error: ch117 === "email" ? "Email notifications are turned off for now." : "Unknown channel" });
       const on117 = p117.enabled === true || p117.enabled === "true";
       await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ ["notify_" + ch117]: on117 }) });
       logEvent("settings.channel", empId, { channel: ch117, enabled: on117, by: "self" });
