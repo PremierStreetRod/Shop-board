@@ -879,6 +879,9 @@ const style = `<style>
   :root{--red:#C8102E;--bg:#111;--card:#1c1c1e;--line:#2c2c2e}
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:#fff;min-height:100vh}
+  /* Block 208 (owner, Sat 8/22): TAP FEEDBACK — the instant-press flash.
+     Transform+filter+outline only: zero layout shift, works on any element. */
+  .tapfx208{outline:3px solid #0a84ff!important;outline-offset:2px;filter:brightness(1.35);transform:scale(.965);transition:transform .06s ease,filter .06s ease}
   .wrap{max-width:640px;margin:0 auto;padding:24px 16px}
   /* Block 196 (owner, day 3): PHONES GET BIGGER. Staff with glasses on small
      screens couldn't read the two-column grids or 13px links. On phone-width
@@ -914,6 +917,20 @@ const style = `<style>
 // PIN, or the inbox itself) a small clock-face links to /inbox and shows the
 // unread count, so a new notification is visible even with push/text/email off.
 (function(){
+  // Block 208 (owner, Sat 8/22): TAP FEEDBACK on EVERY page this script
+  // reaches — on the shop's slow Wi-Fi a tap could land with no visible
+  // response, so people tapped again ("staff will press it multiple times
+  // thinking the first push didn't take"). Now every button, link, and
+  // task flashes the instant a finger lands — pressed-in + blue glow for
+  // a beat — so "did it take?" is answered before the server responds.
+  // Runs BEFORE the bell's skip list on purpose: the login screen and
+  // inbox get the feedback too, just not the bell.
+  document.addEventListener("pointerdown", function(e){
+    var el = e.target && e.target.closest ? e.target.closest("button, a, [onclick]") : null;
+    if (!el || el.disabled) return;
+    el.classList.add("tapfx208");
+    setTimeout(function(){ el.classList.remove("tapfx208"); }, 1200);
+  }, true);
   var skip = ["/tv","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
   document.addEventListener("DOMContentLoaded", function(){
