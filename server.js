@@ -39,6 +39,7 @@
 // ============================================================
 const http = require("http");
 const crypto = require("crypto");
+const zlib = require("zlib");   // Block 212 (v201 SPEED): gzip — stdlib only, zero-dep rule intact
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || "";
@@ -3674,12 +3675,15 @@ async function cabProjections(board) {
   const phxMid = Math.floor((Date.now() - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS;
   const today = phxDate(phxMid);
   const horizonEnd = phxDate(phxMid + HORIZON * 86400000);
-  const calRows = await db(`shop_calendar?select=cal_date,is_open&cal_date=gte.${today}&cal_date=lte.${horizonEnd}`).catch(() => []);
+  // Block 212 (v201 SPEED): the three reads are independent — one round trip.
+  const [calRows, offRows, emps] = await Promise.all([
+    db(`shop_calendar?select=cal_date,is_open&cal_date=gte.${today}&cal_date=lte.${horizonEnd}`).catch(() => []),
+    db(`time_off_request?select=employee_id,start_date,end_date&status=eq.approved&end_date=gte.${today}&start_date=lte.${horizonEnd}&order=start_date`).catch(() => []),
+    db(`employee?select=id,role,lines&active=is.true`),
+  ]);
   const calOv = {};
   for (const r of calRows) calOv[String(r.cal_date).slice(0, 10)] = r.is_open === true;
   const isOpenDay = (d) => (d in calOv ? calOv[d] : (() => { const dw = new Date(d + "T12:00:00Z").getUTCDay(); return dw >= 1 && dw <= 5; })());
-  const offRows = await db(`time_off_request?select=employee_id,start_date,end_date&status=eq.approved&end_date=gte.${today}&start_date=lte.${horizonEnd}&order=start_date`).catch(() => []);
-  const emps = await db(`employee?select=id,role,lines&active=is.true`);
   const crewOf = {};   // line id -> [builder ids assigned to it]
   for (const e of emps) if (e.role === "production" && Array.isArray(e.lines)) for (const ln of e.lines) (crewOf[ln] = crewOf[ln] || []).push(e.id);
   const offOn = (id, d) => offRows.some((t) => t.employee_id === id && t.start_date <= d && t.end_date >= d);
@@ -4377,19 +4381,20 @@ async function reportData(startMs, endMs) {
   const nowMs = Date.now();
   const sinceMs = startMs;
   const winEnd = endMs;
-  const lines = await db(`line?select=id,name&order=id`);
-  const emps = await db(`employee?select=id,first_name,last_name,active,role`);
-  const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`);
-  // Sign-off + rework moments live in the append-only event log (spec §3).
-  // Q86: actor_id on the sign-off event = WHO passed steel.
-  const compEv = await db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`);
-  const rwEv = await db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`);
-  // Q85: sign-off escapes — a cab that came BACK after manager sign-off (a Body
-  // Shop kickback or a customer return, opened as a fix job).
-  const fxEv = await db(`event_log?select=at,payload&event_type=eq.build.fixjob_opened&order=at.asc&limit=2000`);
-  // Same windowing caveat as the board engine: fine for years at this shop's
-  // event volume; revisit alongside the engine if history ever outgrows it.
-  const events = await db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`);
+  // Block 212 (v201 SPEED): the eight independent reads → one round trip.
+  // Same queries verbatim: sign-off/rework/fix moments live in the append-only
+  // event log (spec §3); Q86 actor_id on the sign-off event = WHO passed
+  // steel; the 10k clock_event read keeps the board engine's windowing caveat.
+  const [lines, emps, builds, compEv, rwEv, fxEv, events, ahSess] = await Promise.all([
+    db(`line?select=id,name&order=id`),
+    db(`employee?select=id,first_name,last_name,active,role`),
+    db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`),
+    db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`),
+    db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`),
+    db(`event_log?select=at,payload&event_type=eq.build.fixjob_opened&order=at.asc&limit=2000`),
+    db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`),
+    db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,declined_by,decline_reason,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`),
+  ]);
   const ivs = workIntervals(events, nowMs);
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
@@ -4505,7 +4510,7 @@ async function reportData(startMs, endMs) {
   // session's hours are HELD off "paid" until a manager/admin SIGNS OFF on the
   // wrapped-up session in the cockpit (owner-rep: "MUST sign off before it
   // counts against their time card hours"). Sign-off releases them.
-  const ahSess = await db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,declined_by,decline_reason,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`);
+  // (ahSess fetched in the Block-212 wave above.)
   for (const sA of ahSess) {
     const sStart = new Date(sA.started_at).getTime();
     const sEnd = sA.ended_at ? new Date(sA.ended_at).getTime() : winEnd;
@@ -6321,10 +6326,17 @@ function payPeriod(params) {
 }
 async function payrollData(startMs, endMs) {
   const nowMs = Date.now();
-  const emps = await db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`);   // Block 200: pay_type splits hourly vs salary/owner
-  const events = await db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`);
-  const ivs = workIntervals(events, nowMs);
   const dates = []; for (let ms = startMs; ms < endMs; ms += 86400000) dates.push(phxDate(ms));
+  // Block 212 (v201 SPEED): the five reads are independent — one round trip
+  // (same queries verbatim; isWorkDay below rides the cached calendar).
+  const [emps, events, ahSess111, offRows, auto148] = await Promise.all([
+    db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner
+    db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`),
+    db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`),
+    db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []),
+    db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`),
+  ]);
+  const ivs = workIntervals(events, nowMs);
   const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
   // worked hours per emp per day (dayed by interval start, clipped to window)
   const worked = {};
@@ -6339,7 +6351,7 @@ async function payrollData(startMs, endMs) {
   // below the tables (declines carry the typed reason).
   const nmP111 = {}; for (const e of emps) nmP111[e.id] = `${e.first_name} ${e.last_name}`;
   const payOf201 = {}; for (const e of emps) payOf201[e.id] = e.pay_type || "hourly";   // Block 201: salaried/owner auto-closes stay off the worksheet's glance list
-  const ahSess111 = await db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`);
+  // (ahSess111 fetched in the Block-212 wave above.)
   const ahCut = {}; const ahNotes = [];
   for (const sA of ahSess111) {
     if (sA.signed_off_by) continue;
@@ -6362,7 +6374,7 @@ async function payrollData(startMs, endMs) {
   for (const eid in ahCut) for (const d in ahCut[eid]) if (worked[eid] && worked[eid][d] != null) worked[eid][d] = Math.max(0, worked[eid][d] - ahCut[eid][d]);
   // approved time off overlapping the window -> per emp per work-day, by reason
   const off = {};
-  const offRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []);
+  // (offRows fetched in the Block-212 wave above.)
   for (const r of offRows) {
     const rl = (r.reason || "").toLowerCase(), type = rl.includes("sick") ? "sick" : rl.includes("unpaid") ? "unpaid" : "other";
     let ms = Math.max(phxDayStart(r.start_date), startMs); const end = Math.min(phxDayStart(r.end_date) + 86400000, endMs);
@@ -6392,7 +6404,7 @@ async function payrollData(startMs, endMs) {
   // v148 (owner-rep): every SYSTEM clock-out in the window gets a named note on
   // payroll's sheet — the machine closed someone's day, a human should glance
   // at it before the pay run (and can fix the punches in one tap).
-  const auto148 = await db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`);
+  // (auto148 fetched in the Block-212 wave above.)
   const autoNotes = auto148.filter((a) => !["salary", "na"].includes(payOf201[a.employee_id]))   // Block 201: hourly people only — a salaried/owner auto-close isn't a payroll matter
     .map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
     name: nmP111[a.employee_id] || "?", date: d148, at: phxHHMM(a.claimed_at),
@@ -7148,6 +7160,17 @@ http.createServer(async (req, res) => {
       const sid97 = readSession(req.headers.cookie);
       if (sid97) res.setHeader("Set-Cookie", `sb_session=${makeSession(sid97, 30 * 60 * 1000)}; Path=/; HttpOnly; SameSite=Lax`);
     }
+    // Block 212 (v201 SPEED): gzip text responses when the browser accepts it
+    // (every browser does) — a 150 KB page becomes ~20 KB on shop Wi-Fi.
+    // Only text types come through send(); binaries (photos/icons) use their
+    // own writeHead paths and are untouched. Sync gzip on ≤150 KB ≈ 1 ms.
+    const canGzip212 = /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""));
+    const body212 = typeof data === "string" ? Buffer.from(data) : data;
+    if (canGzip212 && body212 && body212.length > 1024) {
+      const gz212 = zlib.gzipSync(body212);
+      res.writeHead(code, { "content-type": type, "content-encoding": "gzip", "vary": "Accept-Encoding" });
+      return res.end(gz212);
+    }
     res.writeHead(code, { "content-type": type }); res.end(data);
   };
   const json = (code, obj) => send(code, "application/json", JSON.stringify(obj));
@@ -7260,36 +7283,42 @@ http.createServer(async (req, res) => {
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
-        const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-        const reasonsW = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
-        const linesW = await db(`line?select=id,name&enabled=is.true&order=id`);
-        const buildsW = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`);
+        // Block 212 (v201 SPEED): independent reads fired together.
+        const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212] = await Promise.all([
+          db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+          db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
+          db(`line?select=id,name&enabled=is.true&order=id`),
+          db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),
+          // Block 97 (owner-rep): the delivered history — where warehouse's cabs
+          // ARE in production. Read-only; ship-prep/receive-back is a later stage.
+          db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`),
+          db(`employee?select=id&role=in.(manager,admin)`),
+          shopHours(),
+        ]);
+        const [lastW] = lastWRows;
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
           awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
           rework: buildsW.filter((b) => b.line_id === l.id && b.state === "rework"),
           queue: buildsW.filter((b) => b.line_id === l.id && b.state === "upcoming")
             .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
-        // Block 97 (owner-rep): the delivered history — where warehouse's cabs
-        // ARE in production. Read-only; ship-prep/receive-back is a later stage.
-        const histW97 = await db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`);
         const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
         // Block 132 (logic audit L8): a cockpit-started cab is stamped delivered by
         // the MANAGER, not warehouse — flag those rows so the list says so.
-        const mgrIds132 = new Set((await db(`employee?select=id&role=in.(manager,admin)`)).map((e) => e.id));
+        const mgrIds132 = new Set(mgrRows132.map((e) => e.id));
         histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); h.byMgmt = mgrIds132.has(h.kit_delivered_by); });
         // Block 106 (owner-rep live test): warehouse clocks in from THIS page,
         // but the Q112 after-hours questionnaire only existed on the floor's
         // home screen — an evening warehouse punch-in was flatly denied. Same
         // three questions, same claim-then-confirm, now on this surface too.
         const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
-        const ahNowW = isAfterHoursDept(Date.now(), await shopHours(), "Warehouse");   // Block 195: warehouse runs from 6
-        const ahApprW = ahNowW && !clockedInW106
-          ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
-        const ahReasW = ahNowW && !clockedInW106
-          ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
-        const [openAhW] = clockedInW106
-          ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
+        const ahNowW = isAfterHoursDept(Date.now(), hrsW212, "Warehouse");   // Block 195: warehouse runs from 6
+        const [ahApprW, ahReasW, openAhWRows] = await Promise.all([
+          (ahNowW && !clockedInW106) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
+          (ahNowW && !clockedInW106) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
+          clockedInW106 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+        ]);
+        const [openAhW] = openAhWRows;
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
             { now: ahNowW, approvers: ahApprW.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW) }));
@@ -7302,22 +7331,35 @@ http.createServer(async (req, res) => {
         const DEPT_LINE92 = { "Body Shop": 13, "Build": 12, "Accounting": 16 };
         let clk92 = null;
         if (DEPT_LINE92[emp.department]) {
-          const [lastC92] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-          const rs92 = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
+          // Block 212 (v201 SPEED): reads fired together per dependency wave.
+          const [lastC92Rows, rs92, hrs92] = await Promise.all([
+            db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+            db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
+            shopHours(),
+          ]);
+          const [lastC92] = lastC92Rows;
           // Block 106: Body + Build punch HERE — same Q112 after-hours
           // questionnaire and wrap-note the floor and warehouse get.
           const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
-          const ahNow92 = isAfterHoursDept(Date.now(), await shopHours(), emp.department);   // Block 195: dept-aware open
-          const ahAp92 = ahNow92 && !in92 ? await db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [];
-          const ahRe92 = ahNow92 && !in92 ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
-          const [openAh92] = in92 ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
+          const ahNow92 = isAfterHoursDept(Date.now(), hrs92, emp.department);   // Block 195: dept-aware open
+          const [ahAp92, ahRe92, openAh92Rows] = await Promise.all([
+            (ahNow92 && !in92) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
+            (ahNow92 && !in92) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
+            in92 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+          ]);
+          const [openAh92] = openAh92Rows;
           clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department],
             ah: { now: ahNow92, approvers: ahAp92.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) } };
         }
         return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
       }
-      const [last] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-      const allLines = await db(`line?select=id,name&enabled=is.true&order=id`);
+      // Block 212 (v201 SPEED): the floor home's three base reads together.
+      const [lastRows212, allLines, reasons] = await Promise.all([
+        db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`line?select=id,name&enabled=is.true&order=id`),
+        db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
+      ]);
+      const [last] = lastRows212;
       const clockedIn = last && last.kind === "clock_in";
       // Q111: Shop time (line 10) is disabled so it never appears in
       // allLines — name it by hand for the on-the-clock header.
@@ -7325,7 +7367,6 @@ http.createServer(async (req, res) => {
         : last.line_id === FIX_LINE_ID ? "Fix work"
         : last.line_id === 14 ? "no line yet — tap one below"
         : (allLines.find((l) => l.id === last.line_id) || {}).name || "") : "";
-      const reasons = await db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`);
       // Block 126 (M3): every OPEN fix, offered to whoever's on shift — the fix
       // lane any tech can grab from, on both the cab screen and the clock screen.
       const openFixes126 = clockedIn
@@ -7357,34 +7398,38 @@ http.createServer(async (req, res) => {
         if (build) {
           // Q107: started_by/completed_by ride along so the screen can show
           // WHO is on a step — two techs sharing a cab see each other's work.
-          const tasks = await db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build.id}&order=day_no,sort_order`);
-          // Per-task documentation (file 11) rides along with the task list.
-          const notes = await db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`);
-          const tphotos = await db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`);
-          // First names for the attribution lines (includes retired accounts
-          // so history never shows a blank), and the OTHER lines for the
-          // one-tap Switch line control (Q107 — helping another line moves
-          // your labor truth with you).
-          const folks = await db(`employee?select=id,first_name`);
+          // Block 212 (v201 SPEED): the cab screen is the floor's whole day —
+          // its nine build-dependent reads now land in ONE round trip.
+          const mid209 = phxDayStart(phxDate(Date.now()));
+          const [tasks, notes, tphotos, folks, prodMinRows212, cShots, progTogRows212, ph209, nt209q212] = await Promise.all([
+            db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build.id}&order=day_no,sort_order`),
+            // Per-task documentation (file 11) rides along with the task list.
+            db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`),
+            db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`),
+            // First names for the attribution lines (includes retired accounts
+            // so history never shows a blank).
+            db(`employee?select=id,first_name`),
+            // Q86: this product's completion-photo minimum drives the Finish gate.
+            db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`),
+            db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`),
+            db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
+            db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),
+            db(`build_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),
+          ]);
           const people = {}; for (const p of folks) people[p.id] = p.first_name;
           // Q111: Shop time joins the switch picker — a tech can step off
           // the cab to a meeting or in-house work with one honest tap.
           const otherLines = allLines.filter((l) => l.id !== last.line_id)
             .concat([{ id: SHOP_LINE_ID, name: "Shop time" }, { id: 14, name: "⏸ Off the line — stay on the clock" }]);
-          // Q86: this product's completion-photo minimum drives the phone Finish gate.
-          const [prodMin] = await db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`);
+          const [prodMin] = prodMinRows212;
           const photoMin = prodMin ? prodMin.photo_min : 1;
-          // Completion photos already on the cab (incl. any sent from a phone) count toward the minimum.
-          const cShots = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`);
           // Block 209 (owner, Sat 8/22): the end-of-day progress ask — does
           // TODAY's cab already carry a progress photo/note, and is the
           // mandatory switch on? (One photo per CAB per day satisfies the
           // gate for the whole crew — the customer needs one update, not
           // one per tech.)
-          const [progTog209] = await db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`);
-          const mid209 = phxDayStart(phxDate(Date.now()));
-          const ph209 = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
-          const nt209 = ph209.length ? [] : await db(`build_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
+          const [progTog209] = progTogRows212;
+          const nt209 = ph209.length ? [] : nt209q212;
           const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209.length) };
           return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }, prog209));
         }
@@ -7395,20 +7440,24 @@ http.createServer(async (req, res) => {
       // Q112: outside shop hours the clock-in screen collects governance,
       // and an open after-hours session makes the wrap-up note required.
       const ahNow = isAfterHours(Date.now());
-      const ahApprovers = ahNow && !clockedIn
-        ? (await db(`employee?select=id,first_name,last_name&active=is.true&role=in.(manager,admin)&order=first_name`))
-            .map((a) => ({ id: a.id, name: `${a.first_name} ${a.last_name}` })) : [];
-      const ahReasonRows = ahNow && !clockedIn
-        ? await db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [];
-      const [openAh] = clockedIn
-        ? await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [];
+      // Block 212 (v201 SPEED): the clock screen's six reads in one round trip
+      // (the time-off reason list is tiny — fetched alongside, applied only
+      // when the toggle is on, same result as before).
+      const [ahApprRows212, ahReasonRows, openAhRows212, toTogRows212, toReasonRows213, toMineRows] = await Promise.all([
+        (ahNow && !clockedIn) ? db(`employee?select=id,first_name,last_name&active=is.true&role=in.(manager,admin)&order=first_name`) : [],
+        (ahNow && !clockedIn) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
+        clockedIn ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+        db(`feature_toggle?select=enabled&key=eq.time_off_requests`),
+        db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`),
+        db(`time_off_request?select=start_date,end_date,reason,status,decision_note&employee_id=eq.${empId}&or=(status.eq.pending,end_date.gte.${phxDate(Date.now())})&order=start_date.desc&limit=8`),
+      ]);
+      const ahApprovers = ahApprRows212.map((a) => ({ id: a.id, name: `${a.first_name} ${a.last_name}` }));
+      const [openAh] = openAhRows212;
       // Q92: the request control shows when the admin toggle is on; the person
       // always sees their own pending + upcoming-approved requests here.
-      const [toTog] = await db(`feature_toggle?select=enabled&key=eq.time_off_requests`);
+      const [toTog] = toTogRows212;
       const toOn = !toTog || toTog.enabled !== false;
-      const toReasons = toOn
-        ? (await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`)).map((r) => r.label) : [];
-      const toMineRows = await db(`time_off_request?select=start_date,end_date,reason,status,decision_note&employee_id=eq.${empId}&or=(status.eq.pending,end_date.gte.${phxDate(Date.now())})&order=start_date.desc&limit=8`);
+      const toReasons = toOn ? toReasonRows213.map((r) => r.label) : [];
       const toMine = toMineRows.map((t) => ({
         dates: t.start_date === t.end_date ? t.start_date : `${t.start_date} → ${t.end_date}`,
         reason: t.reason, status: t.status, note: t.decision_note }));
@@ -7442,9 +7491,15 @@ http.createServer(async (req, res) => {
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const { task_id, to, claimed_at, confirm159 } = await body(req);
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
-      const [t] = await db(`task?select=id,state,build_id,display_no,is_background&id=eq.${task_id}`);
+      // Block 212 (v201 SPEED): the floor's most-tapped endpoint — the two
+      // independent lookups now share one round trip.
+      const [tRows212, lastCkRows212] = await Promise.all([
+        db(`task?select=id,state,build_id,display_no,is_background&id=eq.${task_id}`),
+        db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+      ]);
+      const [t] = tRows212;
       if (!t) return json(404, { ok: false, error: "Task not found" });
-      const [lastCk] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastCk] = lastCkRows212;
       if (!lastCk || lastCk.kind !== "clock_in") {
         // Q107: the ONE exception to "on the clock" — a manager/admin backing
         // a wrongly-completed step out from the cockpit. It's a correction,
@@ -7880,16 +7935,23 @@ http.createServer(async (req, res) => {
       if (!empH) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [meH] = await db(`employee?select=first_name,last_name,role,department&id=eq.${empH}`);
       if (!meH || meH.role !== "admin") return send(403, "text/plain; charset=utf-8", "Admin only.");
-      const linesH = await db(`line?select=id,name&enabled=is.true&order=id`);
+      // Block 212 (v201 SPEED): two parallel waves instead of 7 serial reads.
+      const [linesH, onB, doneEv, partsH] = await Promise.all([
+        db(`line?select=id,name&enabled=is.true&order=id`),
+        db(`build?select=id,order_number,cab_number,part_number,line_id&state=in.(active,rework,fix_job,awaiting_inspection)&order=line_id`),
+        db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=20`),
+        db(`product?select=part_number,family`),
+      ]);
       const lnName211 = Object.fromEntries(linesH.map((l) => [l.id, l.name]));
-      const onB = await db(`build?select=id,order_number,cab_number,part_number,line_id&state=in.(active,rework,fix_job,awaiting_inspection)&order=line_id`);
-      const doneEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=20`);
       const doneIds = [...new Set(doneEv.map((e) => e.payload && e.payload.build_id).filter(Boolean))];
-      const doneB = doneIds.length ? await db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [];
-      const allIds = [...onB, ...doneB].map((b2) => b2.id);
-      const phAll = allIds.length ? await db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish)&limit=2000`) : [];
-      const ntAll = allIds.length ? await db(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [];
-      const partsH = await db(`product?select=part_number,family`);
+      // photo/note batch runs over the on-line ids + candidate done ids (a
+      // superset of the final doneB — mk211 filters per build, extras unused).
+      const allIds = [...new Set([...onB.map((b2) => b2.id), ...doneIds])];
+      const [doneB, phAll, ntAll] = await Promise.all([
+        doneIds.length ? db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [],
+        allIds.length ? db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish)&limit=2000`) : [],
+        allIds.length ? db(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [],
+      ]);
       const famOf211 = Object.fromEntries(partsH.map((p2) => [p2.part_number, p2.family]));
       const midH = phxDayStart(phxDate(Date.now()));
       const mk211 = (b2, withToday) => {
@@ -7915,11 +7977,14 @@ http.createServer(async (req, res) => {
       if (!/^[\w.\- ]{1,40}$/.test(ordRep)) return send(404, "text/plain", "Not found");
       const [bRep] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ordRep)}&order=created_at.desc&limit=1`);
       if (!bRep) return send(404, "text/plain; charset=utf-8", "No build on record for that order.");
-      const prodRep = await db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`);
-      const tasksRep = await db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`);
-      const photosRep = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish)&order=created_at.asc&limit=300`);
-      const notesRep = await db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`);
-      const milesRep = await db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`);
+      // Block 212 (v201 SPEED): the five reads only need bRep — one round trip.
+      const [prodRep, tasksRep, photosRep, notesRep, milesRep] = await Promise.all([
+        db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`),
+        db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`),
+        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish)&order=created_at.asc&limit=300`),
+        db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
+        db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`),
+      ]);
       const dayMap210 = {};
       const dayOf210 = (ts) => { const ds = phxDate(new Date(ts).getTime()); return dayMap210[ds] = dayMap210[ds] || { ds, milestones: [], steps: [], notes: [], photos: [] }; };
       for (const t of tasksRep) if (t.completed_at) dayOf210(t.completed_at).steps.push(t.name);
@@ -7971,13 +8036,23 @@ http.createServer(async (req, res) => {
       // viewer; the public tile shows a "DOWN TODAY" badge with no reason anyway.
       const sessB133 = await liveSession(req);
       const showDownReason133 = Boolean(sessB133);
-      const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
-      const emps = await db(`employee?select=id,first_name&active=is.true`);
-      const builds = await db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`);
-      // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
-      // order #, customer or business name, ship-to state. The Q65 toggle
-      // ("Customer names on the TV") still governs the name; missing row = ON.
-      const [namesTog88] = await db(`feature_toggle?select=enabled&key=eq.customer_names_on_tv`);
+      // Block 212 (v201 SPEED): the board engine feeds the TV, the cockpit and
+      // the projections — its six independent reads now land in one round trip.
+      const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
+        db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
+        db(`employee?select=id,first_name&active=is.true`),
+        db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),
+        // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
+        // order #, customer or business name, ship-to state. The Q65 toggle
+        // ("Customer names on the TV") still governs the name; missing row = ON.
+        db(`feature_toggle?select=enabled&key=eq.customer_names_on_tv`),
+        db(`product?select=part_number,family,template_id`),
+        db(`build_template?select=id,total_days`),
+        // Block 104c: template man-hour sums — the day counter's denominator.
+        db(`step_template?select=template_id,man_hours&retired=is.false&limit=2000`),
+        shopHours(),
+      ]);
+      const [namesTog88] = namesTogRows212;
       const namesOn88 = !namesTog88 || namesTog88.enabled !== false;
       // Block 173 (break-pass F4): customer name + destination (the only PII here)
       // show only to a signed-in viewer or a shop-network/internal caller — an
@@ -7994,10 +8069,6 @@ http.createServer(async (req, res) => {
         .map((b) => new Date(b.started_at).getTime()).filter((n) => !isNaN(n));
       const windowStart = new Date((liveStarts.length ? Math.min(...liveStarts) : Date.now() - 7 * 86400000) - 86400000).toISOString();
       const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
-      const prods = await db(`product?select=part_number,family,template_id`);
-      const tmpls = await db(`build_template?select=id,total_days`);
-      // Block 104c: template man-hour sums — the day counter's denominator.
-      const stepRows104 = await db(`step_template?select=template_id,man_hours&retired=is.false&limit=2000`);
       const tmplMh104 = {}; for (const st of stepRows104) tmplMh104[st.template_id] = (tmplMh104[st.template_id] || 0) + Number(st.man_hours || 0);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
       const daysOfTmpl = Object.fromEntries(tmpls.map((t) => [t.id, t.total_days]));
@@ -8061,7 +8132,7 @@ http.createServer(async (req, res) => {
 
       // Q113: the master chip — open during shop hours; outside them,
       // AFTER HOURS if anyone is on an approved session, else CLOSED.
-      const hrsB = await shopHours();
+      // (hrsB fetched in the Block-212 wave above.)
       let shopState = { state: "open", detail: "" };
       if (isAfterHours(now, hrsB)) {
         const ahOpenB = await db(`after_hours_session?select=employee_id,line_id&ended_at=is.null`);
@@ -8193,26 +8264,76 @@ http.createServer(async (req, res) => {
       // No cab lines, no inspection — she thinks in punches, not lines.
       const acct189 = me.role === "manager" && me.department === "Accounting";
       const insp188 = me.role === "manager" && me.department !== "Production" && !acct189;
-      const lines = await db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`);
-      // Block 190: EVERY line's name (dept-time areas included) for the
-      // on-the-clock list and the punch corrector — an accounting or Body
-      // Shop punch should read "Accounting time", not a blank or "line 16".
-      const linesAll189 = await db(`line?select=id,name&order=id`);
+      // Block 212 (v201 SPEED): this cockpit had grown to ~45 db round-trips
+      // asked ONE AT A TIME (~6 s render, Daniel's audit ask). Same queries,
+      // same data, same assembly — now fired in TWO PARALLEL WAVES: wave 1 is
+      // everything independent, wave 2 is everything that needs wave-1 ids.
+      // The query strings are verbatim from their old positions; only the
+      // awaiting moved. Assembly logic below is UNCHANGED.
+      const tcEmpRaw = url.searchParams.get("tc_emp");
+      const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;   // Block 172 (break-pass): isUuid-guard before the filter
+      const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
+      const [lines, linesAll189, builds, reworkReasons, recentCk, empNames, open159,
+             repTogRows212, ahRows, togLineRows212, downReasonRows212, tcEmps, allNames,
+             toPendRows, toUpRows, toReasonRows212, fxOpenRows, fxCompleted, fxReasons,
+             fxSeed127, sbEv207, mgrBoard, tcRawP212, evs191, hrs133, ov133] = await Promise.all([
+        db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
+        // Block 190: EVERY line's name (dept-time areas included) for the
+        // on-the-clock list and the punch corrector — an accounting or Body
+        // Shop punch should read "Accounting time", not a blank or "line 16".
+        db(`line?select=id,name&order=id`),
+        db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`),
+        db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`),
+        db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200"),
+        db("employee?select=id,first_name,last_name&active=is.true"),
+        db("task?select=started_by,is_background&state=eq.in_progress"),
+        db(`feature_toggle?select=enabled&key=eq.manager_reports`),
+        db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by,signed_off_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`),
+        db(`feature_toggle?select=enabled&key=eq.manager_line_control`),
+        db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false&order=sort_order`),
+        db(`employee?select=id,first_name,last_name,department,lines,pay_type&active=is.true&order=first_name`),   // Block 189/200: dept + usual lines + pay_type ride along
+        db("employee?select=id,first_name"),
+        db(`time_off_request?select=id,employee_id,start_date,end_date,reason,request_note&status=eq.pending&order=start_date`),
+        db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${phxDate(Date.now())}&order=start_date&limit=40`),
+        db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`),
+        db(`build?select=id,order_number,cab_number,line_id,fix_kind,fix_reason,fix_hours,fix_note&state=eq.fix_job&order=fix_assigned_at`),
+        db(`build?select=id,order_number,cab_number&state=eq.production_complete&order=created_at.desc&limit=40`),
+        db(`pick_list_item?select=label&list_key=eq.fixjob_reason&retired=is.false&order=sort_order`),
+        db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&kind=eq.clock_in&limit=5000`),
+        db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=15`),
+        fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null),
+        tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
+        (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc`) : [],
+        shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
+      ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
-      const builds = await db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`);
-      const reworkReasons = await db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`);
+      // WAVE 2 — everything that needed wave-1 ids, still ONE round trip.
+      const activeIds194 = builds.filter((b) => b.state === "active").map((b) => b.id);
+      const parts194 = [...new Set(builds.filter((b) => b.state === "active").map((b) => b.part_number).filter(Boolean))];
+      const waitIds = builds.filter((b) => b.state === "awaiting_inspection").map((b) => b.id);
+      const workIds = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
+      const actIds133 = builds.filter((b) => b.state === "active" && lines.some((l) => l.id === b.line_id)).map((b) => b.id);
+      const fxEmps127 = [...new Set(fxSeed127.map((s) => s.employee_id))];
+      const [ts194, ph194, prods194, photos, doing212, dones212, ahPh107, dnRows133, fxPunches127, proj212] = await Promise.all([
+        activeIds194.length ? db(`task?select=build_id,is_background,state&build_id=in.(${activeIds194.join(",")})`) : [],
+        activeIds194.length ? db(`build_photo?select=build_id&kind=eq.finish&build_id=in.(${activeIds194.join(",")})`) : [],
+        parts194.length ? db(`product?select=part_number,photo_min&part_number=in.(${parts194.map((p) => `"${encodeURIComponent(p)}"`).join(",")})`) : [],
+        waitIds.length ? db(`build_photo?select=id,build_id&build_id=in.(${waitIds.join(",")})&order=created_at`) : [],
+        workIds.length ? db(`task?select=id,name,display_no,build_id,started_by,started_at&build_id=in.(${workIds.join(",")})&state=eq.in_progress&order=started_at.asc`) : [],
+        workIds.length ? db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`) : [],
+        ahRows.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRows.map((s) => s.id).join(",")})`) : [],
+        actIds133.length ? db(`line_down?select=build_id,reason,down_at,up_at&build_id=in.(${actIds133.join(",")})&order=down_at.asc`) : [],
+        fxEmps127.length ? db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc&limit=20000`) : [],
+        cabProjections(mgrBoard),
+      ]);
+      const [repTog] = repTogRows212; const [togLine] = togLineRows212;
       // Block 194 (Blazer lesson): the cockpit must SEE a done-but-not-finished
       // cab. For every ACTIVE build: step progress + whether every non-
       // background step is checked + completion-photo status — feeds the
       // "READY — send to inspection" state on the line card and the
       // inspection lane. One query each, active cabs only (≤4 rows).
-      const activeIds194 = builds.filter((b) => b.state === "active").map((b) => b.id);
       const ready194 = {};
       if (activeIds194.length) {
-        const ts194 = await db(`task?select=build_id,is_background,state&build_id=in.(${activeIds194.join(",")})`);
-        const ph194 = await db(`build_photo?select=build_id&kind=eq.finish&build_id=in.(${activeIds194.join(",")})`);
-        const parts194 = [...new Set(builds.filter((b) => b.state === "active").map((b) => b.part_number).filter(Boolean))];
-        const prods194 = parts194.length ? await db(`product?select=part_number,photo_min&part_number=in.(${parts194.map((p) => `"${encodeURIComponent(p)}"`).join(",")})`) : [];
         const pmin194 = Object.fromEntries(prods194.map((p) => [p.part_number, p.photo_min]));
         for (const bid of activeIds194) {
           const mine = ts194.filter((t) => t.build_id === bid && !t.is_background);
@@ -8224,14 +8345,11 @@ http.createServer(async (req, res) => {
         }
       }
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
-      const recentCk = await db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200");
       const latestCk = {};
       for (const ev of recentCk) if (!latestCk[ev.employee_id]) latestCk[ev.employee_id] = ev;
-      const empNames = await db("employee?select=id,first_name,last_name&active=is.true");
       // Block 159 (owner-rep F1): each on-clock person's OPEN (in-progress,
       // non-background) step count rides their row — a hoarder shows at a
       // glance, amber at 3+. Pairs with the soft cap on /api/task/state.
-      const open159 = await db("task?select=started_by,is_background&state=eq.in_progress");
       const openBy159 = {};
       for (const t159 of open159 || []) if (t159.started_by && !t159.is_background) openBy159[t159.started_by] = (openBy159[t159.started_by] || 0) + 1;
       const onClock = Object.values(latestCk).filter((e) => e.kind === "clock_in")
@@ -8244,9 +8362,6 @@ http.createServer(async (req, res) => {
         .filter(Boolean);
       // Completion photos for the inspection boxes (file 11: the manager
       // inspects note + photos together).
-      const waitIds = builds.filter((b) => b.state === "awaiting_inspection").map((b) => b.id);
-      const photos = waitIds.length
-        ? await db(`build_photo?select=id,build_id&build_id=in.(${waitIds.join(",")})&order=created_at`) : [];
       const rows = lines.map((l) => ({ line: l,
         active: (() => { const a194 = builds.find((b) => b.line_id === l.id && b.state === "active") || null;
           return a194 ? { ...a194, ready194: ready194[a194.id] || null } : null; })(),
@@ -8264,12 +8379,8 @@ http.createServer(async (req, res) => {
       // hours). Load each active cab's down history, total the WORKING minutes the
       // hold cost, and pre-escape here (the cockpit page has no esc of its own).
       const escM133 = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-      const actIds133 = rows.map((row133) => row133.active && row133.active.id).filter(Boolean);
-      if (actIds133.length) {
-        const dnRows133 = await db(`line_down?select=build_id,reason,down_at,up_at&build_id=in.(${actIds133.join(",")})&order=down_at.asc`);
+      {
         if (dnRows133.length) {
-          const hrs133 = await shopHours();
-          const ov133 = await calendarOverrides();
           const fmtMin133 = (mins) => { const m = Math.max(0, Math.round(mins)); const h = Math.floor(m / 60), rm = m % 60; return h ? `${h}h ${rm}m` : `${rm}m`; };
           const byB133 = {};
           for (const d of dnRows133) {
@@ -8296,29 +8407,23 @@ http.createServer(async (req, res) => {
       //   RECENTLY CHECKED OFF — the shared, audited undo. If a step got
       //   completed out from under a partner still working it, this is where
       //   it comes back (line-mates can also just tap the step itself).
-      const workIds = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
       const orderOf = {}; for (const b of builds) orderOf[b.id] = b.order_number;
       const lineOf99 = {}; for (const b of builds) lineOf99[b.id] = (lines.find((l) => l.id === b.line_id) || {}).name || (b.line_id ? "Line " + b.line_id : "");
-      const allNames = await db("employee?select=id,first_name");
       const nameOf = {}; for (const p of allNames) nameOf[p.id] = p.first_name;
       const phx = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(11, 16) : "";
       let longRunners = [], recentDone = [];
       if (workIds.length) {
-        const doing = await db(`task?select=id,name,display_no,build_id,started_by,started_at&build_id=in.(${workIds.join(",")})&state=eq.in_progress&order=started_at.asc`);
-        longRunners = doing.filter((t) => t.started_at && Date.now() - new Date(t.started_at).getTime() > 4 * 3600000)
+        longRunners = doing212.filter((t) => t.started_at && Date.now() - new Date(t.started_at).getTime() > 4 * 3600000)
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], line: lineOf99[t.build_id], who: nameOf[t.started_by] || "?", hhmm: phx(t.started_at) }));
-        const dones = await db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`);
-        recentDone = dones.filter((t) => t.completed_at)
+        recentDone = dones212.filter((t) => t.completed_at)
           .map((t) => ({ ...t, order_number: orderOf[t.build_id], line: lineOf99[t.build_id],
             who: nameOf[t.completed_by] || "", hhmm: phx(t.completed_at) }));
       }
       // Reports link only if the admin has shared the page (Q65 toggle,
       // owner-rep 2026-07-29: reports are admin work by default).
-      const [repTog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
       // Q112 + block 107: every after-hours session surfaces here until it is
       // SIGNED OFF — sign-off is what releases its held hours to the timecard.
-      const ahRows = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by,signed_off_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`);
-      const ahPh107 = ahRows.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRows.map((s) => s.id).join(",")})`) : [];
+      // (repTog, ahRows, ahPh107 all fetched in the Block-212 waves above.)
       const phxDT = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const afterHours = ahRows.map((s) => ({ id: s.id,
         who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "?",
@@ -8328,21 +8433,14 @@ http.createServer(async (req, res) => {
         hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
         photos: ahPh107.filter((p2) => p2.session_id === s.id).map((p2) => p2.id) }));
       // Q113: line open/close — admins always, managers behind the switch.
-      const [togLine] = await db(`feature_toggle?select=enabled&key=eq.manager_line_control`);
       const canCloseLines = me.role === "admin" || Boolean(togLine && togLine.enabled);
       // Q83: the "down for today" reason list (admin-editable pick list).
-      const downReasons = (await db(`pick_list_item?select=label&list_key=eq.line_down_reason&retired=is.false&order=sort_order`)).map((r) => r.label);
-      // Q111 pt 2: the time-corrections lane — a person + a Phoenix day.
-      // Block 172 (break-pass): isUuid-guard tc_emp before the clock_event filter.
-      const tcEmpRaw = url.searchParams.get("tc_emp");
-      const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;
-      const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
-      const tcEmps = await db(`employee?select=id,first_name,last_name,department,lines,pay_type&active=is.true&order=first_name`);   // Block 189: department + usual lines ride along so the add-pair picker can preselect the right line · Block 200: pay_type tags salaried/owner names
+      const downReasons = downReasonRows212.map((r) => r.label);
+      // Q111 pt 2: the time-corrections lane — a person + a Phoenix day
+      // (tcEmpSel/tcDate parsed above the Block-212 wave; punches rode wave 1).
       let tcPunches = [];
       if (tcEmpSel) {
-        const d0 = phxDayStart(tcDate);
-        const rawP = await db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
-        tcPunches = rawP.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
+        tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
           lineName: p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
@@ -8378,8 +8476,7 @@ http.createServer(async (req, res) => {
       if (acct189) {
         let days191 = [];
         if (tcEmpSel) {
-          const from191 = phxDayStart(phxDate(Date.now() - 13 * 86400000));
-          const evs191 = await db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(from191).toISOString()}&order=claimed_at.asc`);
+          // evs191 rode the Block-212 wave-1 fetch above.
           const byDay191 = {};
           for (const ev of evs191) { const dsE = phxDate(new Date(ev.claimed_at).getTime()); (byDay191[dsE] = byDay191[dsE] || []).push(ev); }
           for (let i191 = 0; i191 < 14; i191++) {
@@ -8429,9 +8526,7 @@ http.createServer(async (req, res) => {
       }
       // Q92: time-off — pending requests (the "needs you" queue), the upcoming
       // approved list, and the add-for-anyone picker inputs.
-      const toPendRows = await db(`time_off_request?select=id,employee_id,start_date,end_date,reason,request_note&status=eq.pending&order=start_date`);
-      const toUpRows = await db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&end_date=gte.${phxDate(Date.now())}&order=start_date&limit=40`);
-      const toReasonsM = (await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`)).map((r) => r.label);
+      const toReasonsM = toReasonRows212.map((r) => r.label);
       const toNameOf = (eid) => { const p = empNames.find((x) => x.id === eid); return p ? `${p.first_name} ${p.last_name}` : (nameOf[eid] || "?"); };
       const toDates = (a, b) => (a === b ? a : `${a} → ${b}`);
       const timeoff = {
@@ -8440,21 +8535,14 @@ http.createServer(async (req, res) => {
         emps: tcEmps, reasons: toReasonsM };
       // Q85: fix jobs — the currently-open ones + the recent signed-off cabs a
       // manager can send back, + the fixjob reason list.
-      const fxOpenRows = await db(`build?select=id,order_number,cab_number,line_id,fix_kind,fix_reason,fix_hours,fix_note&state=eq.fix_job&order=fix_assigned_at`);
       const fxLineName = Object.fromEntries(lines.map((l) => [l.id, l.name]));
-      const fxCompleted = await db(`build?select=id,order_number,cab_number&state=eq.production_complete&order=created_at.desc&limit=40`);
-      const fxReasons = await db(`pick_list_item?select=label&list_key=eq.fixjob_reason&retired=is.false&order=sort_order`);
       // Block 127 (M3, B2): hours-to-date per open fix — Fix-work punches summed by
-      // the order they were booked to (cheap: only techs who've clocked fix work).
-      const fxSeed127 = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&kind=eq.clock_in&limit=5000`);
-      const fxEmps127 = [...new Set(fxSeed127.map((s) => s.employee_id))];
-      const fxMap127 = fxEmps127.length
-        ? fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc&limit=20000`))
-        : {};
+      // the order they were booked to (cheap: only techs who've clocked fix work;
+      // rows fetched in the Block-212 waves above).
+      const fxMap127 = fxEmps127.length ? fixHoursByBuild(fxPunches127) : {};
       // Block 207: the ONE-TAP Body send-back list — the last few cabs to
       // LEAVE production (manager sign-off or crew self-pass), newest first,
       // still in production_complete (an already-returned cab drops off).
-      const sbEv207 = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=15`);
       const sbSeen207 = new Set(); const sendback207 = [];
       for (const evS of sbEv207) {
         const bidS = evS.payload && evS.payload.build_id; if (!bidS || sbSeen207.has(bidS)) continue; sbSeen207.add(bidS);
@@ -8468,8 +8556,7 @@ http.createServer(async (req, res) => {
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
-      const mgrBoard = await fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null);
-      const { byOrder: mgrProj } = await cabProjections(mgrBoard);
+      const { byOrder: mgrProj } = proj212;
       return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191));
     }
 
@@ -9811,29 +9898,46 @@ self.addEventListener("notificationclick", (e) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); } // Q114
-      const emps = await db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email,pay_type&order=active.desc,first_name");   // Block 200: pay_type feeds the People panel
-      const tmpls = await db("build_template?select=id,family&order=family");
+      // Block 212 (v201 SPEED): ~15 one-at-a-time reads → two parallel waves
+      // (same queries verbatim; only the awaiting moved).
+      const today = phxDate(Date.now());
+      const [emps, tmpls, toggles, cabRows, allNums, hrsAdmin, pickRows, products, calDays, ntRows, ahRowsA] = await Promise.all([
+        db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email,pay_type&order=active.desc,first_name"),   // Block 200: pay_type feeds the People panel
+        db("build_template?select=id,family&order=family"),
+        db("feature_toggle?select=key,enabled&order=key"),
+        // Q110: the cab-number editor works the OPEN cabs (upcoming through
+        // rework) — signed-off history is corrected by support, not this page.
+        db("build?select=id,order_number,part_number,cab_number,state&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at"),
+        // "Next up" per family = highest number seen per letter + 1, computed
+        // across ALL cabs ever (finished ones count — the counter never rewinds).
+        db("build?select=cab_number&cab_number=not.is.null"),
+        shopHours(),
+        // Q77: reason lists for the pick-list editor.
+        db(`pick_list_item?select=id,list_key,label,sort_order,retired&order=list_key,sort_order`),
+        // Q86: per-product completion-photo minimums.
+        db("product?select=part_number,family,photo_min&order=family,part_number"),
+        // Q91: the shop calendar (upcoming overrides only) + the nudge times.
+        db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&order=cal_date`).catch(() => []),
+        db(`shop_setting?select=key,value&key=in.(nudge_mon,nudge_tue,nudge_wed,nudge_thu,nudge_fri)`).catch(() => []),
+        // Block 108: the after-hours SIGN-OFF queue.
+        db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`),
+      ]);
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
-      const steps = (tplId && isUuid(tplId)) ? await db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [];
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
-      const optItems94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [];
-      const toggles = await db("feature_toggle?select=key,enabled&order=key");
-      // Q110: the cab-number editor works the OPEN cabs (upcoming through
-      // rework) — signed-off history is corrected by support, not this page.
-      const cabRows = await db("build?select=id,order_number,part_number,cab_number,state&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at");
-      // "Next up" per family = highest number seen per letter + 1, computed
-      // across ALL cabs ever (finished ones count — the counter never rewinds).
-      const allNums = await db("build?select=cab_number&cab_number=not.is.null");
+      const [steps, optItems94, ahPhA, linesA108] = await Promise.all([
+        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
+        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],
+        ahRowsA.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [],
+        ahRowsA.length ? db(`line?select=id,name`) : [],
+      ]);
       const hi = {};
       for (const r of allNums) {
         const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/);
         if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1]));
       }
       const nextUp = ["T", "A", "C", "F", "B", "D"].filter((f) => hi[f]).map((f) => `${hi[f] + 1}${f}`).join(" · ");
-      const hrsAdmin = await shopHours();
       // Q77: assemble the reason lists for the pick-list editor — every
       // pick_list_item grouped by list_key, active items and retired split.
-      const pickRows = await db(`pick_list_item?select=id,list_key,label,sort_order,retired&order=list_key,sort_order`);
       const plByKey = {};
       for (const r of pickRows) {
         const g = plByKey[r.list_key] || (plByKey[r.list_key] = { key: r.list_key, label: PICK_LIST_INFO[r.list_key] || r.list_key, items: [], retired: [] });
@@ -9841,18 +9945,9 @@ self.addEventListener("notificationclick", (e) => {
       }
       const pickOrder = Object.keys(PICK_LIST_INFO).concat(Object.keys(plByKey).filter((k) => !(k in PICK_LIST_INFO)));
       const pickLists = pickOrder.filter((k) => plByKey[k]).map((k) => plByKey[k]);
-      // Q86: per-product completion-photo minimums for the Product settings panel.
-      const products = await db("product?select=part_number,family,photo_min&order=family,part_number");
-      // Q91: the shop calendar (upcoming overrides only) + the nudge times.
-      const today = phxDate(Date.now());
-      const calDays = await db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${today}&order=cal_date`).catch(() => []);
-      const ntRows = await db(`shop_setting?select=key,value&key=in.(nudge_mon,nudge_tue,nudge_wed,nudge_thu,nudge_fri)`).catch(() => []);
       const nudgeTimes = {}; for (const r of ntRows) nudgeTimes[r.key.replace("nudge_", "")] = r.value;
       // Block 108 (owner-rep): the after-hours SIGN-OFF queue is an ADMIN
       // approval job — it lives here now, front and center under the title.
-      const ahRowsA = await db(`after_hours_session?select=id,employee_id,line_id,approved_by,reason,plan,wrap_note,started_at,ended_at,confirmed_by&signed_off_by=is.null&declined_by=is.null&order=started_at.desc&limit=20`);
-      const ahPhA = ahRowsA.length ? await db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [];
-      const linesA108 = ahRowsA.length ? await db(`line?select=id,name`) : [];
       const nmA108 = {}; for (const p of emps) nmA108[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
       const phxDTA = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const ahAdmin = ahRowsA.map((s) => ({ id: s.id,
