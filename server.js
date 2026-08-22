@@ -881,7 +881,7 @@ const style = `<style>
   body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:#fff;min-height:100vh}
   /* Block 208 (owner, Sat 8/22): TAP FEEDBACK — the instant-press flash.
      Transform+filter+outline only: zero layout shift, works on any element. */
-  .tapfx208{outline:3px solid #0a84ff!important;outline-offset:2px;filter:brightness(1.35);transform:scale(.965);transition:transform .06s ease,filter .06s ease}
+  .tapfx208{outline:1.5px solid #0a84ff!important;outline-offset:2px;filter:brightness(1.35);transform:scale(.965);transition:transform .06s ease,filter .06s ease}   /* Block 210: border halved per owner */
   .wrap{max-width:640px;margin:0 auto;padding:24px 16px}
   /* Block 196 (owner, day 3): PHONES GET BIGGER. Staff with glasses on small
      screens couldn't read the two-column grids or 13px links. On phone-width
@@ -925,12 +925,16 @@ const style = `<style>
   // a beat — so "did it take?" is answered before the server responds.
   // Runs BEFORE the bell's skip list on purpose: the login screen and
   // inbox get the feedback too, just not the bell.
-  document.addEventListener("pointerdown", function(e){
-    var el = e.target && e.target.closest ? e.target.closest("button, a, [onclick]") : null;
-    if (!el || el.disabled) return;
-    el.classList.add("tapfx208");
-    setTimeout(function(){ el.classList.remove("tapfx208"); }, 1200);
-  }, true);
+  // Block 210 (owner tune-up): quicker — flash and GONE (450ms, was 1.2s),
+  // and the PIN screens are skipped entirely (typing a 4-digit code left a
+  // trail of lingering glows — "the blue border sticks around WAY too long").
+  if (["/login", "/", "/change-pin"].indexOf(location.pathname) === -1)
+    document.addEventListener("pointerdown", function(e){
+      var el = e.target && e.target.closest ? e.target.closest("button, a, [onclick]") : null;
+      if (!el || el.disabled) return;
+      el.classList.add("tapfx208");
+      setTimeout(function(){ el.classList.remove("tapfx208"); }, 450);
+    }, true);
   var skip = ["/tv","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
   document.addEventListener("DOMContentLoaded", function(){
@@ -1469,8 +1473,8 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
        progress photo / jot a note, or skip (the skip disappears when the
        admin "REQUIRED" toggle flips — training first, mandatory later). -->
   <div id="prog209" hidden style="background:var(--card);border:2px solid #ffd60a;border-radius:14px;padding:14px;max-width:560px;margin:0 auto 10px;text-align:left">
-    <b>&#128247; One quick progress photo before you go</b>
-    <div style="opacity:.75;font-size:.95rem;margin:4px 0 8px">The owner of this truck gets build updates — a photo of today's progress goes straight into their report.${prog209.have ? ` <b style="color:#30d158">&#10003; Today's update is already on this cab</b> — add another if you like.` : ""}</div>
+    <b>&#128247; Please add progress photos &amp; notes before you go</b>
+    <div style="opacity:.75;font-size:.95rem;margin:4px 0 8px">The owner of this truck gets build updates — photos of today's progress go straight into their report.${prog209.have ? ` <b style="color:#30d158">&#10003; Today's update is already on this cab</b> — add another if you like.` : ""}</div>
     <input type="file" id="progph209" accept="image/*" multiple style="color:#8e8e93">
     <textarea id="prognote209" maxlength="500" placeholder="What got done today? (optional note — the owner may see this)" style="width:100%;min-height:52px;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px;font-family:inherit"></textarea>
     <div class="msg" id="progmsg209" style="min-height:1em"></div>
@@ -1614,7 +1618,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     const files = (document.getElementById("progph209") || {}).files || [];
     const note = ((document.getElementById("prognote209") || {}).value || "").trim();
     if (!files.length && !note) {
-      if (PROG209.mandatory && !PROG209.have) { m.textContent = "Add a photo or a quick note first — the owner gets today's update."; return; }
+      if (PROG209.mandatory && !PROG209.have) { m.textContent = "Add photos or a quick note first — the owner gets today's update."; return; }
       return progSkip209();   // nothing entered + not required = same as skip
     }
     btn.disabled = true; btn.textContent = "Saving…"; m.textContent = "";
@@ -2443,6 +2447,153 @@ function parseCoyoteDetail(payload, partNumber, allowSet) {
     model, features, addons,
   };
 }
+// Block 211 (owner, Sat 8/22): the PROGRESS REPORTS HUB — the front office's
+// front door: every cab on the lines (and recently moved on to Body) with
+// its photo/note counts, whether TODAY's update is in, and how many items
+// are hidden — one tap into the review-and-print page per cab. Lives in the
+// admin Tools menu; grows through Body/prime/crating as those stages start
+// feeding the same photo+note stream.
+const progressHubPage211 = (emp, onLines, movedOn) => {
+  const row211 = (r, showToday) => `<div class="qrow" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)">
+    <span style="min-width:12em"><b>ORDER ${escH(r.order)}</b>${r.cab ? ` · Cab #${escH(r.cab)}` : ""}<br><small style="opacity:.6">${escH(r.line || "")}${r.family ? " · " + escH(r.family) : ""}</small></span>
+    <span style="opacity:.85">&#128247; ${r.photos} photo${r.photos === 1 ? "" : "s"} · &#128221; ${r.notes} note${r.notes === 1 ? "" : "s"}${r.hiddenN ? ` · <b style="color:#ff9f0a">${r.hiddenN} hidden</b>` : ""}</span>
+    ${showToday ? (r.todayOk ? `<span style="color:#30d158;font-weight:700">&#10003; today's update in</span>` : `<span style="color:#ff9f0a;font-weight:700">no update yet today</span>`) : ""}
+    <a href="/report/progress/${encodeURIComponent(r.order)}" style="margin-left:auto;background:#1c1c1e;border:1px solid #4a90d9;border-radius:10px;color:#8ec2f0;padding:9px 16px;text-decoration:none;font-weight:700">Review &amp; print report</a>
+  </div>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Progress reports</title>${style}
+<style>.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}</style></head>
+<body><div class="wrap" style="max-width:760px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:2px 0 10px"><a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(emp, true)}
+  <h2 style="text-align:center;margin:0 0 4px">&#128247; Progress reports</h2>
+  <p style="text-align:center;opacity:.65;margin:0 0 14px;font-size:.95rem">The customer-facing build log per cab — review the photos &amp; notes, fix or hide anything, then print the report from the cab's page.</p>
+  <div class="lane"><h3>On the lines now</h3>
+    ${onLines.length ? onLines.map((r) => row211(r, true)).join("") : `<div style="opacity:.6">No cabs on the lines right now.</div>`}
+  </div>
+  <div class="lane"><h3>Moved on — at Body &amp; beyond</h3>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Recently signed off — their build logs keep growing as Body, prime and crating start adding photos.</div>
+    ${movedOn.length ? movedOn.map((r) => row211(r, false)).join("") : `<div style="opacity:.6">Nothing recently moved on.</div>`}
+  </div>
+</div></body></html>`;
+};
+
+// Block 210 (owner, Sat 8/22): THE CUSTOMER PROGRESS REPORT — "an ongoing
+// log of the customers cab build with notes and photos... a simple pdf that
+// is premier street rod watermarked... that we can send customer as they ask."
+// A LIGHT, print-first page (everything else in the app is dark; this is a
+// customer-facing DOCUMENT): letterhead, diagonal watermark on every printed
+// page, day-by-day log of work completed + crew notes + photos. The Print /
+// Save-as-PDF button uses the browser's print dialog — that IS the PDF the
+// front office sends. Feed: task completions (work done), build_photo kinds
+// progress+finish, build_note rows (editable; event_log keeps the original
+// as audit — Block 211), and the stage milestones —
+// Body/prime/crating/shipping will append to this same feed as those stages
+// come online (photos+notes are per-BUILD, not per-stage, by design).
+const progressReportPage210 = (b, family, days) => {
+  const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DOW = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const fmt = (ds) => { const d = new Date(ds + "T12:00:00Z"); return `${DOW[d.getUTCDay()]}, ${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`; };
+  const gen = new Date(Date.now() - 7 * 3600000);
+  const genLbl = `${MON[gen.getUTCMonth()]} ${gen.getUTCDate()}, ${gen.getUTCFullYear()}`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Build Progress — Order ${escH(b.order_number)}</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;font-family:Georgia,'Times New Roman',serif;background:#f4f4f4;color:#1a1a1a}
+  .sheet{max-width:8.5in;margin:0 auto;background:#fff;padding:.8in .75in;min-height:11in;position:relative}
+  .wm{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);font-family:system-ui,sans-serif;font-weight:900;font-size:64px;letter-spacing:.14em;color:rgba(200,16,46,.07);white-space:nowrap;pointer-events:none;z-index:0}
+  .inner{position:relative;z-index:1}
+  .lh{border-bottom:4px solid #C8102E;padding-bottom:14px;margin-bottom:6px}
+  .lh .co{font-family:system-ui,sans-serif;font-weight:900;font-size:26px;letter-spacing:.06em;color:#111}
+  .lh .co span{color:#C8102E}
+  .lh .tag{font-family:system-ui,sans-serif;font-size:11px;letter-spacing:.28em;color:#777;text-transform:uppercase;margin-top:2px}
+  h1{font-family:system-ui,sans-serif;font-size:21px;margin:18px 0 2px}
+  .meta{font-family:system-ui,sans-serif;color:#555;font-size:13px;margin-bottom:6px}
+  .intro{font-size:14px;color:#333;line-height:1.55;margin:10px 0 18px;border-left:3px solid #C8102E;padding-left:12px}
+  .day{margin:0 0 20px;break-inside:avoid-page}
+  .day h2{font-family:system-ui,sans-serif;font-size:15px;border-bottom:1px solid #ddd;padding-bottom:4px;margin:0 0 8px;color:#222}
+  .mile{font-family:system-ui,sans-serif;font-weight:800;color:#C8102E;font-size:14px;margin:4px 0}
+  .steps{font-size:13.5px;line-height:1.6;color:#333;margin:4px 0}
+  .steps b{font-family:system-ui,sans-serif;font-size:12px;letter-spacing:.08em;color:#888;text-transform:uppercase}
+  .note{font-size:13.5px;font-style:italic;color:#444;background:#faf7f2;border-left:3px solid #d9c9a3;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+  .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}
+  .shots img{width:100%;height:2.1in;object-fit:cover;border-radius:6px;border:1px solid #ddd}
+  .ft{font-family:system-ui,sans-serif;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:10px;margin-top:26px;display:flex;justify-content:space-between}
+  .printfab{position:fixed;top:14px;right:14px;z-index:5}
+  .printfab button{background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 24px;font-family:system-ui,sans-serif;font-weight:800;font-size:15px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  .printfab a{display:block;text-align:center;margin-top:6px;font-family:system-ui,sans-serif;font-size:12px;color:#666}
+  .modrow{font-family:system-ui,sans-serif;font-size:11px;margin:2px 0 6px}
+  .modbtn{background:#eee;border:1px solid #ccc;border-radius:8px;padding:4px 10px;font-family:system-ui,sans-serif;font-size:11px;cursor:pointer;margin-right:6px}
+  .modbtn.warn{background:#fbe9e9;border-color:#d9a0a0;color:#8f1622}
+  .hiddenitem{opacity:.4;outline:2px dashed #cf7d7d;outline-offset:3px;border-radius:6px;position:relative}
+  .hidtag{font-family:system-ui,sans-serif;font-size:10.5px;font-weight:800;color:#a33;letter-spacing:.05em}
+  .addbar{font-family:system-ui,sans-serif;background:#f2f6fb;border:1px solid #c9d8ec;border-radius:10px;padding:10px 12px;margin:0 0 16px}
+  .addbar input[type=date]{padding:6px;border:1px solid #bbb;border-radius:8px}
+  .addbar input[type=text]{padding:6px 8px;border:1px solid #bbb;border-radius:8px;width:55%}
+  .addbar button{background:#C8102E;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-weight:700;cursor:pointer}
+  @media print{ body{background:#fff} .sheet{max-width:none;padding:.55in .6in;min-height:0} .noprint{display:none!important} .shots img{height:2in} .hiddenitem{display:none!important} .modrow{display:none} .addbar{display:none} .hidtag{display:none} }
+</style></head>
+<body>
+<div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
+<div class="wm">PREMIER STREET ROD</div>
+<div class="sheet"><div class="inner">
+  <div class="lh"><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Peoria, Arizona</div></div>
+  <h1>Cab Build Progress Report</h1>
+  <div class="meta"><b>Order ${escH(b.order_number)}</b>${family ? ` &middot; ${escH(family)}` : ""}${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""}${b.started_at ? ` &middot; Production started ${escH(String(b.started_at).slice(0, 10))}` : ""} &middot; Report date ${genLbl}</div>
+  <div class="intro">A day-by-day look at your cab as it moves through our shop — the work completed, our builders' notes, and photos straight from the production floor. Every panel is fit, hung and finished by hand right here in our facility.</div>
+  <div class="addbar noprint"><b>Front office:</b> add a note onto any day &nbsp;
+    <input type="date" id="addD211"> <input type="text" id="addN211" maxlength="500" placeholder="e.g. Paint samples approved by the owner today">
+    <button onclick="modAdd211()">Add note</button>
+    <span style="font-size:11px;color:#777;margin-left:8px">Edits, hides and adds never show on the printed report controls — what you see below is exactly what prints.</span>
+  </div>
+  ${days.length ? days.map((d) => `
+  <div class="day">
+    <h2>${fmt(d.ds)}</h2>
+    ${d.milestones.map((m) => `<div class="mile">&#9733; ${escH(m)}</div>`).join("")}
+    ${d.steps.length ? `<div class="steps"><b>Work completed</b><br>${d.steps.map((x) => escH(x)).join(" &middot; ")}</div>` : ""}
+    ${d.notes.map((n) => `<div class="${n.hidden ? "hiddenitem" : ""}"><div class="note">&ldquo;${escH(n.note)}&rdquo; &mdash; the build crew</div>
+      <div class="modrow noprint">${n.hidden ? `<span class="hidtag">HIDDEN — will not print</span> <button class="modbtn" onclick="modNote211('unhide','${n.id}')">Restore</button>` : `<button class="modbtn" onclick="modEdit211('${n.id}', this)">&#9998; Edit</button><button class="modbtn warn" onclick="modNote211('hide','${n.id}')">Hide from report</button>`}</div>
+      ${n.hidden ? "" : `<div class="noprint" hidden data-orig="${escH(n.note)}"></div>`}</div>`).join("")}
+    ${d.photos.length ? `<div class="shots">${d.photos.map((p) => `<div class="${p.hidden ? "hiddenitem" : ""}"><img src="/photo/${p.id}" alt="build photo">
+      <div class="modrow noprint">${p.hidden ? `<span class="hidtag">HIDDEN</span> <button class="modbtn" onclick="modPhoto211('${p.id}', false)">Restore</button>` : `<button class="modbtn warn" onclick="modPhoto211('${p.id}', true)">Hide from report</button>`}</div></div>`).join("")}</div>` : ""}
+  </div>`).join("") : `<div class="steps">Production is just getting underway — check back soon for the first day's progress.</div>`}
+  <div class="ft"><span>Premier Street Rod &middot; PremierStreetRod.com</span><span>Order ${escH(b.order_number)} &middot; generated ${genLbl}</span></div>
+</div></div>
+<script>
+  // Block 211: front-office moderation — every change round-trips the
+  // audited admin endpoints and reloads, so the page always shows exactly
+  // what will print.
+  async function modCall211(path, payload) {
+    try {
+      const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      alert(out.error || "Something went wrong");
+    } catch (e) { alert("Network hiccup — try again"); }
+  }
+  function modNote211(action, id) { modCall211("/api/build/note-admin", { action: action, note_id: id }); }
+  function modEdit211(id, btn) {
+    const orig = btn.parentElement.nextElementSibling ? btn.parentElement.nextElementSibling.dataset.orig : "";
+    const txt = prompt("Edit this note (the customer may read it):", orig || "");
+    if (txt === null) return;
+    if (!txt.trim()) return alert("To remove it entirely, use Hide instead.");
+    modCall211("/api/build/note-admin", { action: "edit", note_id: id, note: txt.trim() });
+  }
+  function modAdd211() {
+    const d = document.getElementById("addD211").value;
+    const t = (document.getElementById("addN211").value || "").trim();
+    if (!t) return alert("Write the note first");
+    modCall211("/api/build/note-admin", { action: "add", build_id: "${b.id}", note: t, note_date: d || undefined });
+  }
+  function modPhoto211(id, hide) { modCall211("/api/photo/moderate", { photo_id: id, hidden: hide }); }
+</script>
+</body></html>`;
+};
+
 const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null) => {
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
   // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
@@ -2471,6 +2622,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the board</a></p>
   ${nav196(emp196)}   <!-- Block 196 (owner: "the customer order pages do not" have nav — the endless-loop page): the ONE shared nav -->
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
+  ${isAdmin97 ? `<p style="text-align:center;margin:0 0 12px"><a href="/report/progress/${encodeURIComponent(b.order_number)}" style="display:inline-block;background:#1c1c1e;border:1px solid #4a90d9;border-radius:10px;color:#8ec2f0;padding:10px 18px;text-decoration:none;font-weight:700">&#128247; Customer progress report</a></p>` : ""}   <!-- Block 210: the build-report the front office sends the owner -->
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
@@ -2618,7 +2770,7 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = tools95 === "time"
     ? [["/payroll", "Pay Worksheet"], ["/reports", "Reports"]]   // Block 189: the Accounting-manager menu — time & pay only
@@ -3657,7 +3809,7 @@ const ROLE_LABEL = { production: "Team Member", manager: "Manager", admin: "Admi
 // Plain-language names for every toggle key (file 22: no jargon on screens).
 const TOGGLE_INFO = {
   tv_board: ["The TV board", "The big board on the shop TV."],
-  eod_progress_photo_required: ["End-of-day cab photo — REQUIRED (production)", "OFF = the end-of-day clock-out ASKS for a cab progress photo or note but lets people skip (the training phase). ON = production can't clock out End-of-day from a line until TODAY's cab has a progress photo or note — the customer build-report feed. Flip it when the crew is ready; no deploy needed."],
+  eod_progress_photo_required: ["End-of-day cab photos — REQUIRED (production)", "OFF = the end-of-day clock-out ASKS for cab progress photos & notes but lets people skip (the training phase). ON = production can't clock out End-of-day from a line until TODAY's cab has at least one progress photo or note — the customer build-report feed. Flip it when the crew is ready; no deploy needed."],
   sms_alerts: ["Text alerts", "Text messages for red lines and daily events. Stays OFF until we go live."],
   email_notifications: ["Email notifications", "System emails. Stays OFF until we go live."],
   morning_prebrief: ["Morning pre-brief", "A short summary to the manager before the day starts."],
@@ -7231,8 +7383,8 @@ http.createServer(async (req, res) => {
           // one per tech.)
           const [progTog209] = await db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`);
           const mid209 = phxDayStart(phxDate(Date.now()));
-          const ph209 = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
-          const nt209 = ph209.length ? [] : await db(`event_log?select=id&event_type=eq.build.progress_note&payload->>build_id=eq.${build.id}&at=gte.${new Date(mid209).toISOString()}&limit=1`);
+          const ph209 = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
+          const nt209 = ph209.length ? [] : await db(`build_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
           const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209.length) };
           return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }, prog209));
         }
@@ -7464,9 +7616,9 @@ http.createServer(async (req, res) => {
             const [bG209] = await db(`build?select=id&line_id=eq.${lastOut107.line_id}&state=in.(active,rework,fix_job)&limit=1`);
             if (bG209) {
               const d0209 = phxDayStart(phxDate(Date.now()));
-              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=eq.progress&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
+              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
               if (!phG.length) {
-                const ntG = await db(`event_log?select=id&event_type=eq.build.progress_note&payload->>build_id=eq.${bG209.id}&at=gte.${new Date(d0209).toISOString()}&limit=1`);
+                const ntG = await db(`build_note?select=id&build_id=eq.${bG209.id}&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
                 if (!ntG.length)
                   return json(400, { ok: false, need_progress209: true, error: "The owner of this cab gets a progress update today — snap a photo (or add a note) on your line screen, then clock out." });
               }
@@ -7720,6 +7872,67 @@ http.createServer(async (req, res) => {
         fixHrs127 = fmF127[bO.id] || 0;
       }
       return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196));
+    }
+
+    // Block 211: the Progress Reports HUB — admin-only front door.
+    if (url.pathname === "/progress") {
+      const empH = await liveSession(req);
+      if (!empH) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meH] = await db(`employee?select=first_name,last_name,role,department&id=eq.${empH}`);
+      if (!meH || meH.role !== "admin") return send(403, "text/plain; charset=utf-8", "Admin only.");
+      const linesH = await db(`line?select=id,name&enabled=is.true&order=id`);
+      const lnName211 = Object.fromEntries(linesH.map((l) => [l.id, l.name]));
+      const onB = await db(`build?select=id,order_number,cab_number,part_number,line_id&state=in.(active,rework,fix_job,awaiting_inspection)&order=line_id`);
+      const doneEv = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=20`);
+      const doneIds = [...new Set(doneEv.map((e) => e.payload && e.payload.build_id).filter(Boolean))];
+      const doneB = doneIds.length ? await db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [];
+      const allIds = [...onB, ...doneB].map((b2) => b2.id);
+      const phAll = allIds.length ? await db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish)&limit=2000`) : [];
+      const ntAll = allIds.length ? await db(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [];
+      const partsH = await db(`product?select=part_number,family`);
+      const famOf211 = Object.fromEntries(partsH.map((p2) => [p2.part_number, p2.family]));
+      const midH = phxDayStart(phxDate(Date.now()));
+      const mk211 = (b2, withToday) => {
+        const ph = phAll.filter((x) => x.build_id === b2.id), nt = ntAll.filter((x) => x.build_id === b2.id);
+        const today = withToday && [...ph, ...nt].some((x) => !x.hidden && new Date(x.created_at).getTime() >= midH);
+        return { order: b2.order_number, cab: b2.cab_number, line: lnName211[b2.line_id] || "", family: famOf211[b2.part_number] || "",
+          photos: ph.filter((x) => !x.hidden).length, notes: nt.filter((x) => !x.hidden).length,
+          hiddenN: ph.filter((x) => x.hidden).length + nt.filter((x) => x.hidden).length, todayOk: today };
+      };
+      const seenH = new Set();
+      const movedOnRows = doneB.filter((b2) => !seenH.has(b2.id) && seenH.add(b2.id)).map((b2) => mk211(b2, false)).slice(0, 8);
+      return send(200, "text/html; charset=utf-8", progressHubPage211(meH, onB.map((b2) => mk211(b2, true)), movedOnRows));
+    }
+    // Block 210 (owner, Sat 8/22): the CUSTOMER PROGRESS REPORT route —
+    // admin-only (the front office generates it and sends it to the owner).
+    // Print / Save-as-PDF from the page is the deliverable.
+    if (url.pathname.startsWith("/report/progress/")) {
+      const empRep = await liveSession(req);
+      if (!empRep) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meRep] = await db(`employee?select=role&id=eq.${empRep}`);
+      if (!meRep || meRep.role !== "admin") return send(403, "text/plain; charset=utf-8", "Admin only — ask the front office for the customer report.");
+      const ordRep = decodeURIComponent(url.pathname.slice("/report/progress/".length));
+      if (!/^[\w.\- ]{1,40}$/.test(ordRep)) return send(404, "text/plain", "Not found");
+      const [bRep] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ordRep)}&order=created_at.desc&limit=1`);
+      if (!bRep) return send(404, "text/plain; charset=utf-8", "No build on record for that order.");
+      const prodRep = await db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`);
+      const tasksRep = await db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`);
+      const photosRep = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish)&order=created_at.asc&limit=300`);
+      const notesRep = await db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`);
+      const milesRep = await db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`);
+      const dayMap210 = {};
+      const dayOf210 = (ts) => { const ds = phxDate(new Date(ts).getTime()); return dayMap210[ds] = dayMap210[ds] || { ds, milestones: [], steps: [], notes: [], photos: [] }; };
+      for (const t of tasksRep) if (t.completed_at) dayOf210(t.completed_at).steps.push(t.name);
+      for (const p of photosRep) dayOf210(p.created_at).photos.push({ id: p.id, kind: p.kind, hidden: !!p.hidden });
+      for (const n of notesRep) { const dsN = n.note_date || phxDate(new Date(n.created_at).getTime());
+        (dayMap210[dsN] = dayMap210[dsN] || { ds: dsN, milestones: [], steps: [], notes: [], photos: [] }).notes.push({ id: n.id, note: n.note, hidden: !!n.hidden }); }
+      const MLBL210 = { "build.manager_started": "Cab entered production", "build.start": "Cab entered production",
+        "build.production_complete": "Metalwork complete — moved to the Body Shop", "build.self_passed": "Metalwork complete — moved to the Body Shop" };
+      for (const m of milesRep) { const l = MLBL210[m.event_type]; if (l) dayOf210(m.at).milestones.push(l); }
+      for (const k in dayMap210) dayMap210[k].milestones = [...new Set(dayMap210[k].milestones)];
+      const daysRep = Object.values(dayMap210).sort((a, z) => (a.ds < z.ds ? -1 : 1));
+      logEvent("report.progress_viewed", empRep, { build_id: bRep.id, order_number: bRep.order_number, days: daysRep.length });
+      return send(200, "text/html; charset=utf-8", progressReportPage210(bRep, prodRep[0] ? prodRep[0].family : "", daysRep));
     }
 
     // ============ THE TIME ENGINE v1 (spec §4, Stage 2 begins) ============
@@ -10483,6 +10696,54 @@ self.addEventListener("notificationclick", (e) => {
     // the words half of the customer build-report feed (photo OR note counts
     // toward the mandatory gate once the toggle flips). Event-logged; no new
     // table needed.
+    // Block 211 (owner, Sat 8/22): MODERATION — "i can forsee staff trying
+    // to be funny or grammer errors... i dont want to send a raunchy photo
+    // to a customer." Admin-only: edit or hide/unhide any progress note,
+    // hide/unhide any photo, and ADD a note onto any date of the build.
+    // Hidden items never print on the customer report (and never satisfy
+    // the end-of-day gate); everything is audited.
+    if (url.pathname === "/api/build/note-admin" && req.method === "POST") {
+      const empA = await liveSession(req);
+      if (!empA) return json(401, { ok: false, error: "Signed out" });
+      const [meA] = await db(`employee?select=role&id=eq.${empA}`);
+      if (!meA || meA.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const pA = await body(req);
+      if (pA.action === "add") {
+        if (!isUuid(pA.build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+        const txtA = String(pA.note || "").trim().slice(0, 500);
+        if (!txtA) return json(400, { ok: false, error: "Write the note first" });
+        const rowA = { build_id: pA.build_id, author_id: empA, note: txtA };
+        if (pA.note_date && /^\d{4}-\d{2}-\d{2}$/.test(pA.note_date)) rowA.note_date = pA.note_date;
+        await db("build_note", { method: "POST", body: JSON.stringify(rowA) });
+        logEvent("build.note_admin", empA, { action: "add", build_id: pA.build_id, note: txtA, note_date: rowA.note_date || null });
+        return json(200, { ok: true });
+      }
+      if (!isUuid(pA.note_id)) return json(400, { ok: false, error: "That note reference isn't valid" });
+      if (pA.action === "edit") {
+        const txtE = String(pA.note || "").trim().slice(0, 500);
+        if (!txtE) return json(400, { ok: false, error: "Write the note first" });
+        await db(`build_note?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ note: txtE, edited_by: empA, edited_at: new Date().toISOString() }) });
+        logEvent("build.note_admin", empA, { action: "edit", note_id: pA.note_id, note: txtE });
+        return json(200, { ok: true });
+      }
+      if (pA.action === "hide" || pA.action === "unhide") {
+        await db(`build_note?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ hidden: pA.action === "hide", edited_by: empA, edited_at: new Date().toISOString() }) });
+        logEvent("build.note_admin", empA, { action: pA.action, note_id: pA.note_id });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+    if (url.pathname === "/api/photo/moderate" && req.method === "POST") {
+      const empM = await liveSession(req);
+      if (!empM) return json(401, { ok: false, error: "Signed out" });
+      const [meM] = await db(`employee?select=role&id=eq.${empM}`);
+      if (!meM || meM.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const { photo_id, hidden } = await body(req);
+      if (!isUuid(photo_id)) return json(400, { ok: false, error: "That photo reference isn't valid" });
+      await db(`build_photo?id=eq.${photo_id}`, { method: "PATCH", body: JSON.stringify({ hidden: hidden === true }) });
+      logEvent("photo.moderated", empM, { photo_id, hidden: hidden === true });
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/build/prognote" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -10492,6 +10753,10 @@ self.addEventListener("notificationclick", (e) => {
       if (!txt209) return json(400, { ok: false, error: "Write the note first" });
       const [bP209] = await db(`build?select=id,order_number&id=eq.${build_id}`);
       if (!bP209) return json(404, { ok: false, error: "Cab not found" });
+      // Block 211 (owner): notes live in build_note now — a REAL row an admin
+      // can edit or hide before anything reaches a customer (event_log stays
+      // as the immutable audit of what was originally written).
+      await db("build_note", { method: "POST", body: JSON.stringify({ build_id, author_id: empId, note: txt209 }) });
       logEvent("build.progress_note", empId, { build_id, order_number: bP209.order_number, note: txt209 });
       return json(200, { ok: true });
     }
