@@ -1409,7 +1409,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false }) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false }, prog209 = { ask: false, mandatory: false, have: false }) => {
   const inRework = build.state === "rework";
   const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
   // Per-task documentation (file 11): count what's attached to each step.
@@ -1463,6 +1463,20 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   </div>
   <div style="text-align:center;max-width:560px;margin:0 auto 12px;font-size:.85rem;opacity:.6">Lunch holds your line — your cab and steps will be right here when you're back.</div>
   <div class="msg err" id="qerr198" style="margin:0 0 8px"></div>
+  ${prog209.ask ? `
+  <!-- Block 209 (owner, Sat 8/22): the END-OF-DAY PROGRESS ASK — customers
+       get build reports, so End of day opens this panel first: snap a
+       progress photo / jot a note, or skip (the skip disappears when the
+       admin "REQUIRED" toggle flips — training first, mandatory later). -->
+  <div id="prog209" hidden style="background:var(--card);border:2px solid #ffd60a;border-radius:14px;padding:14px;max-width:560px;margin:0 auto 10px;text-align:left">
+    <b>&#128247; One quick progress photo before you go</b>
+    <div style="opacity:.75;font-size:.95rem;margin:4px 0 8px">The owner of this truck gets build updates — a photo of today's progress goes straight into their report.${prog209.have ? ` <b style="color:#30d158">&#10003; Today's update is already on this cab</b> — add another if you like.` : ""}</div>
+    <input type="file" id="progph209" accept="image/*" multiple style="color:#8e8e93">
+    <textarea id="prognote209" maxlength="500" placeholder="What got done today? (optional note — the owner may see this)" style="width:100%;min-height:52px;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px;font-family:inherit"></textarea>
+    <div class="msg" id="progmsg209" style="min-height:1em"></div>
+    <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:8px" onclick="progGo209(this)">Save &amp; clock out</button>
+    ${prog209.mandatory && !prog209.have ? "" : `<p style="text-align:center;margin:8px 0 0"><a href="#" onclick="progSkip209();return false" style="color:#8e8e93">Skip today &amp; clock out</a></p>`}
+  </div>` : ""}
   <div class="cabbar">
     <!-- Block 101c (owner-rep): the order number taps through to the cab card
          — a quick look at what this order IS without a trip over to the shop
@@ -1590,7 +1604,42 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   // Block 198 (owner, day 4): the one-tap lunch / end-of-day buttons up top.
   // Lunch never gets the open-steps popup (server exempts it — a lunch punch
   // PAUSES the day). End of day keeps the soft heads-up, worded plainly.
+  // Block 209: the end-of-day progress ask. End-of-day taps open the photo
+  // panel first; Save uploads photo(s) (kind=progress) + the note, then
+  // clocks out; Skip clocks straight out (hidden once REQUIRED is on and
+  // today's cab has nothing yet). Server enforces the mandatory case too.
+  var PROG209 = { ask: ${prog209.ask}, mandatory: ${prog209.mandatory}, have: ${prog209.have}, done: false };
+  async function progGo209(btn) {
+    const m = document.getElementById("progmsg209");
+    const files = (document.getElementById("progph209") || {}).files || [];
+    const note = ((document.getElementById("prognote209") || {}).value || "").trim();
+    if (!files.length && !note) {
+      if (PROG209.mandatory && !PROG209.have) { m.textContent = "Add a photo or a quick note first — the owner gets today's update."; return; }
+      return progSkip209();   // nothing entered + not required = same as skip
+    }
+    btn.disabled = true; btn.textContent = "Saving…"; m.textContent = "";
+    for (const f of files) {
+      const blob = await toJpeg(f);
+      const up = await sbUpload("/api/photo/upload?build_id=${build.id}&kind=progress", blob.blob || blob, (blob.type || "image/jpeg"), (t) => { m.textContent = t; });
+      if (!up.ok) { m.textContent = up.error || "Photo didn't make it — try again"; btn.disabled = false; btn.textContent = "Save & clock out"; return; }
+    }
+    if (note) {
+      const nr = await sbPost("/api/build/prognote", { build_id: "${build.id}", note: note }, (t) => { m.textContent = t; });
+      if (!nr.ok) { m.textContent = nr.error || "Note didn't save — try again"; btn.disabled = false; btn.textContent = "Save & clock out"; return; }
+    }
+    PROG209.done = true; PROG209.have = true;
+    quickOut198("End of day", window.__eodBtn209 || btn);
+  }
+  function progSkip209() {
+    PROG209.done = true;
+    quickOut198("End of day", window.__eodBtn209);
+  }
   async function quickOut198(reason, btn) {
+    if (reason === "End of day" && PROG209.ask && !PROG209.done) {
+      const p209 = document.getElementById("prog209");
+      if (p209) { window.__eodBtn209 = btn; p209.hidden = false; p209.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+    }
+    if (!btn) btn = document.createElement("button");   // skip-path safety: a detached stub keeps the disable/label writes harmless
     btn.disabled = true; const keep198 = btn.textContent; btn.textContent = "Clocking out…";
     const err = document.getElementById("qerr198") || document.getElementById("err");
     err.textContent = "";
@@ -3608,6 +3657,7 @@ const ROLE_LABEL = { production: "Team Member", manager: "Manager", admin: "Admi
 // Plain-language names for every toggle key (file 22: no jargon on screens).
 const TOGGLE_INFO = {
   tv_board: ["The TV board", "The big board on the shop TV."],
+  eod_progress_photo_required: ["End-of-day cab photo — REQUIRED (production)", "OFF = the end-of-day clock-out ASKS for a cab progress photo or note but lets people skip (the training phase). ON = production can't clock out End-of-day from a line until TODAY's cab has a progress photo or note — the customer build-report feed. Flip it when the crew is ready; no deploy needed."],
   sms_alerts: ["Text alerts", "Text messages for red lines and daily events. Stays OFF until we go live."],
   email_notifications: ["Email notifications", "System emails. Stays OFF until we go live."],
   morning_prebrief: ["Morning pre-brief", "A short summary to the manager before the day starts."],
@@ -7174,7 +7224,17 @@ http.createServer(async (req, res) => {
           const photoMin = prodMin ? prodMin.photo_min : 1;
           // Completion photos already on the cab (incl. any sent from a phone) count toward the minimum.
           const cShots = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`);
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }));
+          // Block 209 (owner, Sat 8/22): the end-of-day progress ask — does
+          // TODAY's cab already carry a progress photo/note, and is the
+          // mandatory switch on? (One photo per CAB per day satisfies the
+          // gate for the whole crew — the customer needs one update, not
+          // one per tech.)
+          const [progTog209] = await db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`);
+          const mid209 = phxDayStart(phxDate(Date.now()));
+          const ph209 = await db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&created_at=gte.${new Date(mid209).toISOString()}&limit=1`);
+          const nt209 = ph209.length ? [] : await db(`event_log?select=id&event_type=eq.build.progress_note&payload->>build_id=eq.${build.id}&at=gte.${new Date(mid209).toISOString()}&limit=1`);
+          const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209.length) };
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }, prog209));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -7387,6 +7447,31 @@ http.createServer(async (req, res) => {
           const n163o = real163o.filter((t) => onLine163o.has(t.build_id)).length;
           if (n163o > 0)
             return json(200, { ok: false, nudge163: true, open: n163o, error: `You started ${n163o} step${n163o > 1 ? "s" : ""} on this line that ${n163o > 1 ? "are" : "is"} still open — a teammate can tap ${n163o > 1 ? "them" : "it"} done, or go finish first. Clock out anyway?` });
+        }
+      }
+      // Block 209 (owner, Sat 8/22): the MANDATORY progress-photo gate —
+      // dormant until the admin flips "End-of-day cab photo — REQUIRED
+      // (production)" in Features. When ON: a production tech clocking out
+      // End-of-day from a cab line must have TODAY's progress photo or note
+      // on that cab (by ANYONE on the crew — the customer needs one update
+      // per cab per day, not one per tech). Managers/admins exempt; lunch
+      // and other reasons never gated; a line with no active cab never gated.
+      if ((reason === "End of day" || reason === "End of shift") && [1, 2, 3, 4].includes(Number(lastOut107.line_id))) {
+        const [tog209] = await db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`);
+        if (tog209 && tog209.enabled === true) {
+          const [me209] = await db(`employee?select=department,role&id=eq.${empId}`);
+          if (me209 && me209.department === "Production" && me209.role === "production") {
+            const [bG209] = await db(`build?select=id&line_id=eq.${lastOut107.line_id}&state=in.(active,rework,fix_job)&limit=1`);
+            if (bG209) {
+              const d0209 = phxDayStart(phxDate(Date.now()));
+              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=eq.progress&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
+              if (!phG.length) {
+                const ntG = await db(`event_log?select=id&event_type=eq.build.progress_note&payload->>build_id=eq.${bG209.id}&at=gte.${new Date(d0209).toISOString()}&limit=1`);
+                if (!ntG.length)
+                  return json(400, { ok: false, need_progress209: true, error: "The owner of this cab gets a progress update today — snap a photo (or add a note) on your line screen, then clock out." });
+              }
+            }
+          }
         }
       }
       // Q112 + block 107: an open after-hours session can't close without its
@@ -10353,9 +10438,12 @@ self.addEventListener("notificationclick", (e) => {
         method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": ctype },
         body: buf });
       if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
+      // Block 209 (owner, Sat 8/22): kind=progress marks an END-OF-DAY cab
+      // progress photo — the feed the customer build reports will draw from.
+      const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : null;
       const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
-        build_id, task_id, uploaded_by: empId, storage_path: path, kind: task_id ? "task" : "finish" }) });
-      logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length });
+        build_id, task_id, uploaded_by: empId, storage_path: path, kind: kindQ209 || (task_id ? "task" : "finish") }) });
+      logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined });
       return json(200, { ok: true, id: row ? row.id : null });
     }
 
@@ -10391,6 +10479,22 @@ self.addEventListener("notificationclick", (e) => {
     // PER-TASK NOTE (file 11): a written note attached to one step —
     // documents a problem or the work right where it happened. Append-only
     // from the floor; who wrote it is recorded.
+    // Block 209 (owner, Sat 8/22): an END-OF-DAY progress NOTE on the cab —
+    // the words half of the customer build-report feed (photo OR note counts
+    // toward the mandatory gate once the toggle flips). Event-logged; no new
+    // table needed.
+    if (url.pathname === "/api/build/prognote" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const { build_id, note } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const txt209 = String(note || "").trim().slice(0, 500);
+      if (!txt209) return json(400, { ok: false, error: "Write the note first" });
+      const [bP209] = await db(`build?select=id,order_number&id=eq.${build_id}`);
+      if (!bP209) return json(404, { ok: false, error: "Cab not found" });
+      logEvent("build.progress_note", empId, { build_id, order_number: bP209.order_number, note: txt209 });
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/task/note" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
