@@ -623,21 +623,33 @@ async function shopHours() {
 // The close side and weekends are unchanged; the check is now minute-level
 // (it was hour-level, so grace was impossible to express).
 const OPEN_GRACE_MIN_187 = 5;
+// Block 205 (owner ruling, Sat 8/22): EVERYONE may clock in from an hour
+// before open — "let them BE able to clock in at 6am, or 5:55 with the
+// grace period." The shop FLOOR still opens at 7 (TV chip, day math, and
+// the board's day counter all keep the plain 7-to-4 clock) — this only
+// widens when a punch is a NORMAL punch instead of the after-hours
+// questionnaire. Clocking onto a line early simply opens that line's
+// clock (a down-hold already auto-resumes on clock-in). This generalizes
+// Block 195's warehouse-only 6:00 rule to the whole roster.
+const EARLY_MIN_205 = 60;
 function isAfterHours(ms, hrs = SHOP_HOURS) {
   const phx = new Date(ms - PHX_OFFSET_MS);
   const dow = phx.getUTCDay(), mins = phx.getUTCHours() * 60 + phx.getUTCMinutes();
-  return dow === 0 || dow === 6 || mins < hrs.open * 60 - OPEN_GRACE_MIN_187 || mins >= hrs.close * 60;
+  return dow === 0 || dow === 6 || mins < hrs.open * 60 - OPEN_GRACE_MIN_187 - EARLY_MIN_205 || mins >= hrs.close * 60;
 }
 // Block 195 (owner ruling, day 3): WAREHOUSE starts earlier than the floor —
 // "make the warehouse department able to clock in at 6am." Their pre-open
 // window widens by an hour (6:00 + the standing 5-min grace = 5:55); every
 // other department keeps the 7:00 open. Weekends + the close side unchanged,
 // and the TV's shop chip still runs on the plain 7-to-4 clock.
-const WAREHOUSE_EARLY_MIN_195 = 60;
+const WAREHOUSE_EARLY_MIN_195 = 60;   // Block 205: superseded — kept for the record
+// Block 205: the warehouse-only hour is now EVERYONE's hour; the dept
+// distinction is moot. Signature kept for call-site compatibility.
 function isAfterHoursDept(ms, hrs, dept) {
+  void dept;
   const phx = new Date(ms - PHX_OFFSET_MS);
   const dow = phx.getUTCDay(), mins = phx.getUTCHours() * 60 + phx.getUTCMinutes();
-  const openMin = hrs.open * 60 - OPEN_GRACE_MIN_187 - (dept === "Warehouse" ? WAREHOUSE_EARLY_MIN_195 : 0);
+  const openMin = hrs.open * 60 - OPEN_GRACE_MIN_187 - EARLY_MIN_205;
   return dow === 0 || dow === 6 || mins < openMin || mins >= hrs.close * 60;
 }
 
@@ -678,6 +690,41 @@ async function nudgeTimeFor(dow) {
 }
 // Close every interval still open long past its day end. Runs at boot (catches
 // anything that happened while the server was down) and every 10 minutes.
+// Block 206 (owner ruling, Sat 8/22): LONG-DAY check — "if anyone is on the
+// clock from clock in to end of day in which they are working more than 8
+// hours, a notification should be sent to admin and accounting managers to
+// VERIFY if they did or did not take a lunch that day." No lunch-window
+// guessing (people eat at 10, 12, or 1) — the trigger is simply a day
+// totaling over 8h. Runs after any clock-out, including the sweeper's
+// auto-outs. Hourly people only (a salary/owner day is not a pay matter);
+// ONE notice per person per Phoenix day; a 3-minute cushion so an 8h01m
+// punch doesn't nag anybody.
+async function longDayCheck206(empId, outIso) {
+  try {
+    const dayMs = new Date(outIso).getTime();
+    const d0 = phxDayStart(phxDate(dayMs));
+    const evs = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
+    let open206 = null, mins = 0;
+    for (const ev of evs) {
+      const t = new Date(ev.claimed_at).getTime();
+      if (ev.kind === "clock_in") open206 = t;
+      else if (open206 != null) { mins += (t - open206) / 60000; open206 = null; }
+    }
+    if (mins <= 8 * 60 + 3) return;
+    const [who] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${empId}`);
+    if (!who || ["salary", "na"].includes(who.pay_type)) return;
+    const dup = await db(`event_log?select=id&event_type=eq.timecard.long_day&payload->>employee_id=eq.${empId}&at=gte.${new Date(d0).toISOString()}&limit=1`);
+    if (dup.length) return;
+    logEvent("timecard.long_day", null, { employee_id: empId, minutes: Math.round(mins), day: phxDate(dayMs) });
+    const admins206 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+    const acct206 = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
+    const hrs206 = Math.round(mins / 6) / 10;
+    notify("timecard.long_day", [...new Set([...admins206.map((a) => a.id), ...acct206.map((a) => a.id)])],
+      `${who.first_name} ${((who.last_name || "")[0] || "")}. logged ${hrs206}h today — over 8`,
+      `Did they take a lunch? Speak with them, then verify or correct the day in Edit timecards — an unpunched lunch reads as overtime.`,
+      `/manager?tc_emp=${empId}`);
+  } catch (e) { console.error("long-day check failed:", e.message); }
+}
 async function sweepForgottenClockOuts() {
   if (!DB_READY) return;
   try {
@@ -697,7 +744,17 @@ async function sweepForgottenClockOuts() {
       // punch pair can ever straddle a day and the timecard math never sees an
       // overnight span (M2 closed structurally).
       const mid148 = Math.floor((inMs - PHX_OFFSET_MS) / 86400000) * 86400000 + PHX_OFFSET_MS + (23 * 60 + 59) * 60000;
-      const closeAt = Math.min(inMs >= end ? inMs + 8 * 3600000 : end, mid148);
+      // Block 205 (owner ruling, Sat 8/22): the floor closes at 4 but people
+      // legitimately run late (late deliveries — Ross). The old sweep cut a
+      // 4-o'clock stamp at 4:15, silently shorting anyone still working.
+      // Now: a normal day session is left alone until the HARD STOP (close
+      // + 1h = 5:00), and the auto-out stamps AT the hard stop — if the
+      // system must guess, it guesses high and the notice below tells
+      // admins + accounting to verify the true time and trim. Anyone who
+      // leaves at 4:10 just clocks out normally (outs are never blocked).
+      // Evening opt-in sessions keep their own +8h cap; nobody crosses midnight.
+      const hardStop205 = end + 3600000;
+      const closeAt = Math.min(inMs >= end ? inMs + 8 * 3600000 : hardStop205, mid148);
       if (now < closeAt + SWEEP_GRACE_MS) continue; // still plausibly working — leave it
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: ev.employee_id, line_id: ev.line_id, kind: "clock_out_auto",
@@ -705,6 +762,7 @@ async function sweepForgottenClockOuts() {
         claimed_at: new Date(closeAt).toISOString() }) });
       logEvent("clock.auto_out", null, { employee_id: ev.employee_id, line_id: ev.line_id,
         opened_at: ev.claimed_at, closed_at: new Date(closeAt).toISOString() });
+      await longDayCheck206(ev.employee_id, new Date(closeAt).toISOString());   // Block 206: an auto-closed long day still gets the lunch-verify notice
       // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
       // SESSION open forever — close it honestly so the cockpit lane and the
       // timecards tell the truth about forgetful nights.
@@ -735,8 +793,12 @@ async function sweepForgottenClockOuts() {
           // hygiene; their ability to clock in/out is untouched), but only an
           // HOURLY person's forgotten punch buzzes the admins' phones.
           if (!whoA148 || !["salary", "na"].includes(whoA148.pay_type)) {
+            // Block 205: accounting managers join the admins on this notice —
+            // "notify admin and accounting so they know to speak to that
+            // staff member AND correctly get their clock out time."
             const admins148 = await db(`employee?select=id&active=is.true&role=eq.admin`);
-            notify("clock.auto_out", admins148.map((a) => a.id),
+            const acct205 = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
+            notify("clock.auto_out", [...new Set([...admins148.map((a) => a.id), ...acct205.map((a) => a.id)])],
               `System clocked out ${whoA148 ? whoA148.first_name + " " + ((whoA148.last_name || "")[0] || "") + "." : "someone"}`,
               `No clock-out was recorded — the day closed it at ${phxHHMM(new Date(closeAt).toISOString())}. Worth a glance before payroll; fix the punches if the time is wrong.`,
               `/manager?tc_emp=${ev.employee_id}&tc_date=${phxDate(new Date(ev.claimed_at).getTime())}#timecorrections`);
@@ -1397,14 +1459,15 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   <!-- Block 194 (Blazer lesson): when the cab is DONE, say so at the TOP —
        the finish box used to live only below the whole checklist. -->
   <div class="cabbar" style="border-color:#30d158;cursor:pointer" onclick="const f194=document.getElementById('finish11');if(f194)f194.scrollIntoView({behavior:'smooth',block:'center'})">
-    <b style="color:#30d158">&#10003; Every step is checked!</b> ${photoHave >= photoMin ? "Tap here to finish — send it for inspection." : `Add ${photoMin - photoHave > 1 ? (photoMin - photoHave) + " completion photos" : "a completion photo"} and send it for inspection — tap here.`}
+    <b style="color:#30d158">&#10003; Every step is checked!</b> ${photoHave >= photoMin ? (inRework ? "Tap here to finish — send it to Body." : "Tap here to finish — send it for inspection.") : `Add ${photoMin - photoHave > 1 ? (photoMin - photoHave) + " completion photos" : "a completion photo"} and ${inRework ? "send it to Body" : "send it for inspection"} — tap here.`}
   </div>` : ""}
   ${inRework ? `
-  <!-- REWORK BANNER (files 11/18): the manager sent this cab back with a
-       reason + a time frame. The fix tasks sit in the REWORK group below
-       (day_no 0 sorts first). Finish them all and the finish gate returns —
-       resubmit sends the cab back to AWAITING INSPECTION (file 18: rework
-       can NEVER jump straight to production complete). -->
+  <!-- REWORK BANNER (files 11/18 · Block 207): the manager sent this cab
+       back with a reason + a time frame. The fix tasks sit in the REWORK
+       group below (day_no 0 sorts first). Finish them all and the finish
+       gate returns — and per the Block-207 ONE-INSPECTION ruling the crew
+       pushes the cab straight to BODY themselves (Body can send it back
+       with one tap if the fixes aren't right). -->
   <div class="note" style="background:#3a1200;border-color:#ff9f0a">
     ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"} · fix within ${Number(build.rework_hours) || "—"} hrs
     ${build.rework_note ? `<br><span style="opacity:.8">Manager's note: ${build.rework_note}</span>` : ""}
@@ -1473,7 +1536,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       <div id="hoff" style="margin-top:8px"></div></div>
     <div class="msg" id="upmsg"></div>
     <button class="name" style="background:#1d3a24;border-color:#30d158;margin-top:10px" data-min="${photoMin}" data-have="${photoHave}"
-      onclick="finishCab('${build.id}',this)">${(inRework || inFix) ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
+      onclick="finishCab('${build.id}',this)">${inRework ? "Fixes done — send to Body" : inFix ? "Fixes done — send back for re-inspection" : "Finished — send for inspection"}</button>
   </div>` : ""}
   <div class="msg err" id="err"></div>
   <!-- SWITCH LINE (Q107): going to help another line "for a bit" used to
@@ -2744,6 +2807,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       </div>
     </div>`)).join("")}
   </div>` : ""}
+  ${acct189 ? "" : `
+  <!-- Block 207 (owner ruling, Sat 8/22): the ONE-TAP Body send-back — the
+       safety valve of the one-inspection system. After rework the crew
+       pushes their own cab to Body; if the fixes aren't right, ONE tap
+       here returns it as a kickback FIX JOB: off the line, its own hours
+       bucket, the new cab on the line keeps rolling. A fixed kickback
+       re-inspects through the normal sign-off (the bar rises only after
+       the work has missed twice). No arm/confirm dance — the owner wants
+       this EASY for Body managers; it's fully audited and reversible
+       through the normal fix flow. -->
+  <div class="lane" style="border-color:#4a90d9" id="sendback207"><h3>Left production recently — send back if the fixes aren't right</h3>
+    ${(fixjob.sendback || []).length ? fixjob.sendback.map((c) => `<div class="qrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span><b>ORDER ${c.order}</b>${c.cab ? ` · Cab #${c.cab}` : ""}</span>
+      <button class="btn" style="margin-left:auto;margin-top:0;padding:8px 16px" onclick="sendBack207('${c.id}',this)">Send back to production</button></div>`).join("") : `<div style="opacity:.6">No cabs have left production recently.</div>`}
+    <div style="opacity:.5;font-size:.85rem;margin-top:6px">One tap opens a kickback fix job — off the line, its own hours; the crew grabs it from the Open-fixes lane. It re-inspects through the normal sign-off when fixed.</div>
+  </div>`}
   ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
        denial can carry a short note back to the person. Approved time shows
@@ -3065,6 +3143,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   // the other inspectors don't cross the shop for nothing. SOFT by design:
   // sign-off/rework stay open to any manager; Take over and Release are armed
   // (two-tap) so nobody grabs or drops a cab by accident.
+  // Block 207: the Body manager's ONE-TAP send-back — no arm, no form
+  // (owner: "single pass for them to send back so its easy"). Opens a
+  // kickback fix job with a standard reason; detail can be added via the
+  // full cockpit's fix form if ever needed.
+  async function sendBack207(id, btn) {
+    btn.disabled = true; btn.textContent = "Sending back…";
+    try {
+      const r = await fetch("/api/build/fixjob", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, kind: "kickback", reason: "Body Shop return — fixes not up to par", claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "Send back to production";
+  }
   async function claimInsp184(id, what, btn) {
     if (btn) btn.disabled = true;
     try {
@@ -7312,6 +7405,7 @@ http.createServer(async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, kind, reason: reason97 || null, claimed_at: claimed_at || new Date().toISOString() }) });
       logEvent("clock.out", empId, { reason: reason97, kind });
+      void longDayCheck206(empId, claimed_at || new Date().toISOString());   // Block 206: fire-and-forget — never slows the tap; guarded inside
       return json(200, { ok: true });
     }
 
@@ -8042,9 +8136,20 @@ http.createServer(async (req, res) => {
       const fxMap127 = fxEmps127.length
         ? fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc&limit=20000`))
         : {};
+      // Block 207: the ONE-TAP Body send-back list — the last few cabs to
+      // LEAVE production (manager sign-off or crew self-pass), newest first,
+      // still in production_complete (an already-returned cab drops off).
+      const sbEv207 = await db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=15`);
+      const sbSeen207 = new Set(); const sendback207 = [];
+      for (const evS of sbEv207) {
+        const bidS = evS.payload && evS.payload.build_id; if (!bidS || sbSeen207.has(bidS)) continue; sbSeen207.add(bidS);
+        const cS = fxCompleted.find((x) => x.id === bidS);
+        if (cS && sendback207.length < 6) sendback207.push({ id: cS.id, order: cS.order_number, cab: cS.cab_number });
+      }
       const fixjob = {
         open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0 })),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
+        sendback: sendback207,
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
@@ -8363,6 +8468,35 @@ http.createServer(async (req, res) => {
             return json(400, { ok: false, error: `This product needs at least ${photoNeed} completion photo${photoNeed === 1 ? "" : "s"} — attach ${photoNeed === 1 ? "one" : "them"} before finishing.` });
           logEvent("build.photos_waived", empId, { build_id, order_number: b.order_number, have: shots.length, need: photoNeed });
         }
+      }
+      // Block 207 (owner ruling, Sat 8/22): ONE-INSPECTION SYSTEM. A cab in
+      // REWORK already had its manager inspection — that's where the rework
+      // list came from. Once the crew checks off every rework item, they
+      // push their OWN cab through to Body: no second manager inspection.
+      // (This supersedes the file-18 "rework can never jump straight to
+      // production complete" rule — the owner's call, with the safety valve
+      // that Body managers send a bad fix back with ONE tap, which opens a
+      // kickback FIX JOB: off-line, own hours bucket, never blocks the new
+      // cab on the line. A kickback resubmit — state fix_job below — DOES
+      // still route through a manager sign-off: the bar rises only after
+      // the work has missed twice.) Loudly logged + bell-noticed so no
+      // manager is surprised the cab moved.
+      if (b.state === "rework") {
+        await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+          state: "production_complete", final_note: note || null,
+          rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null,
+          inspection_claimed_by: null, inspection_claimed_at: null }) });
+        logEvent("build.self_passed", empId, { build_id, order_number: b.order_number, note: note || "", at: claimed_at });
+        logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: "rework", self_pass: true, signed_off_at: claimed_at });
+        const [lnSP] = await db(`line?select=name&id=eq.${b.line_id}`);
+        notify("build.line_clear", await warehouseIds(),
+          `${lnSP ? lnSP.name : "Line"} is CLEAR`,
+          `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — rework done, crew sent it to Body. Deliver the next kit when it's ready.`, "/home");
+        const mgrsSP = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        if (mgrsSP.length) notify("build.self_passed", mgrsSP,
+          `ORDER ${b.order_number} — rework done, sent to Body by the crew`,
+          `Every rework item is checked off and production pushed the cab through (one-inspection system). If the fixes aren't right, Body sends it back with one tap on the Manager console.`, "/manager");
+        return json(200, { ok: true, self_passed: true });
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null,
