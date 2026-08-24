@@ -6559,8 +6559,11 @@ function payrollCsv(d) {
   const isoDs = String(d.rangeText || "").match(/\d{4}-\d{2}-\d{2}/g) || [];
   const mdy = (ds) => ds ? `${ds.slice(5, 7)}/${ds.slice(8, 10)}/${ds.slice(2, 4)}` : "";
   const fromDs = isoDs[0] || d.dates[0], toDs = isoDs[1] || d.dates[d.dates.length - 1];
+  // A truly-empty CSV line gets COLLAPSED by some viewers (Safari's preview
+  // dropped it — Daniel's screenshot); a row of empty CELLS survives everywhere.
+  const blankRow215 = () => Array(d.rows.length + 2).fill("").map(q).join(",");
   L.push(q(`Employee Pay Worksheet (${mdy(fromDs)} - ${mdy(toDs)})`));
-  L.push("");
+  L.push(blankRow215());
   L.push(["Date", "Day", ...d.rows.map((r) => colName(r))].map(q).join(","));
   for (const ds of d.dates) {
     const cells = d.rows.map((r) => { const c = r.byDay[ds];
@@ -6571,7 +6574,7 @@ function payrollCsv(d) {
       return hrs ? h1(hrs) : ""; });
     if (cells.some((c) => c !== "")) L.push([ds, dow(ds), ...cells].map(q).join(","));
   }
-  L.push("");   // Block 215c (Daniel): a breathing row between the days and the totals
+  L.push(blankRow215());   // Block 215c (Daniel): a breathing row between the days and the totals
   L.push(["", "Total", ...d.rows.map((r) => h1(r.total))].map(q).join(","));
   L.push(["", "Regular", ...d.rows.map((r) => h1(r.reg))].map(q).join(","));
   L.push(["", "Overtime", ...d.rows.map((r) => h1(r.ot))].map(q).join(","));
