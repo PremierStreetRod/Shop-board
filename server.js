@@ -96,6 +96,11 @@ async function db(path, opts = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+// Block 215 (Daniel): the Zz Test-Account stays ACTIVE (he pokes the app with
+// it) but must never cloud pay or reports — payrollData and reportData filter
+// it out by name. Matches "Zz ..." first name or a "Test-Account"-ish last name.
+const isTestAcct215 = (e) => Boolean(e && (String(e.first_name || "").trim().toLowerCase() === "zz" || /test[ -]?account/i.test(String(e.last_name || ""))));
+
 // Append to the event log (spec §3 — append-only, never updated).
 // Failures here must never block the floor: log to console and move on.
 function logEvent(event_type, actor_id, payload = {}) {
@@ -1206,23 +1211,21 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        straight in. Three quick things, then a completely normal session. -->
   ${ah.now && !state.clockedIn ? `
   <div id="ahp" style="display:none;background:var(--card);border:1px solid #7a5900;border-radius:14px;padding:16px;margin-top:14px">
-    ${ah.approvers.length && ah.reasons.length ? `
-    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Two quick taps${ah.lastAppr || ah.lastReason ? " (your last answers are pre-picked — change anything that's different)" : ""}:</p>
-    <p class="msg" style="margin-top:10px">Who approved it?</p>
-    <div class="grid">${ah.approvers.map((a) => `<button class="name ahap" data-appr="${a.id}" style="${a.id === ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
+    ${ah.reasons.length ? `
+    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. One quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
     <p class="msg" style="margin-top:10px">What's it for?</p>
     <div class="grid">${ah.reasons.map((r) => `<button class="name ahre" data-ahreason="${r}" style="${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
     <input id="ahplan" maxlength="200" placeholder="Anything to add? (optional)" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">
+    <p class="msg" style="opacity:.55;font-size:.85rem;margin-top:8px">The office approves or denies the hours after you wrap up — that's the OK, nothing else to answer here.</p>
     <p style="text-align:center;margin-top:12px">
       <button class="name" id="ahgo" style="display:inline-block;background:#1d5a2d">Clock in — after hours</button>
       <button class="back" id="ahback" style="margin-left:12px">cancel</button>
     </p>` : `
-    <!-- Block 129 (logic audit L3): after-hours clock-in enforces approval by
-         design (Q112). If it isn't set up (no manager/admin to approve, or no
-         after-hours reason list), EXPLAIN instead of a dead blank panel and
-         don't offer the broken path — the approval safeguard stays intact. -->
+    <!-- Block 129 (logic audit L3) → Block 215: the questionnaire is down to
+         ONE required answer (the reason); if the reason list is empty,
+         EXPLAIN instead of a dead blank panel. -->
     <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Not set up yet.</p>
-    <p class="msg" style="margin-top:8px">Clocking in after hours needs ${!ah.approvers.length ? "a manager or admin who can approve it" : ""}${(!ah.approvers.length && !ah.reasons.length) ? ", and " : ""}${!ah.reasons.length ? "an after-hours reason list" : ""}. Ask an admin to set ${(!ah.approvers.length && !ah.reasons.length) ? "these" : "that"} up in the console, then try again.</p>
+    <p class="msg" style="margin-top:8px">Clocking in after hours needs an after-hours reason list. Ask an admin to set that up in the console (Reason lists), then try again.</p>
     <p style="text-align:center;margin-top:12px"><button class="back" id="ahback">back</button></p>`}
   </div>` : ""}
 
@@ -1345,7 +1348,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   }
   // Q112: outside shop hours a line tap opens the governance panel first.
   const AH = ${ah.now && !state.clockedIn ? "true" : "false"};
-  let ahLine = 0, ahAppr = "${ah.lastAppr || ""}", ahReason = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214: last session pre-picked
+  let ahLine = 0, ahReason = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214/215: last reason pre-picked; approver question retired
   document.getElementById("in").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-line]"); if(!b) return;
     if (AH) { ahLine = Number(b.dataset.line);
@@ -1356,14 +1359,11 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   });
   const ahp = document.getElementById("ahp");
   if (ahp) ahp.addEventListener("click",(e)=>{
-    const a=e.target.closest(".ahap"); if(a){ ahAppr=a.dataset.appr;
-      ahp.querySelectorAll(".ahap").forEach(x=>{x.style.opacity=".75";x.style.outline="none";});
-      a.style.opacity="1"; a.style.outline="2px solid #30d158"; }
     const r=e.target.closest(".ahre"); if(r){ ahReason=r.dataset.ahreason;
       ahp.querySelectorAll(".ahre").forEach(x=>{x.style.opacity=".75";x.style.outline="none";});
       r.style.opacity="1"; r.style.outline="2px solid #30d158"; }
     if (e.target.id==="ahback"){ ahp.style.display="none"; document.getElementById("in").style.display="block"; }
-    if (e.target.id==="ahgo") act("/api/clock/in",{line_id:ahLine, approved_by:ahAppr, ah_reason:ahReason, ah_plan:document.getElementById("ahplan").value});
+    if (e.target.id==="ahgo") act("/api/clock/in",{line_id:ahLine, ah_reason:ahReason, ah_plan:document.getElementById("ahplan").value});
   });
   // Block 107: after hours, ANY reason tap opens the WRAP-UP step (required
   // note + optional photos) — and THAT submits the clock-out.
@@ -1933,14 +1933,13 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
          ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
-         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — two quick taps, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — one quick tap, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
          ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
-           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — two quick taps${ah.lastAppr || ah.lastReason ? " (your last answers are pre-picked)" : ""}:</p>
-           <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
-           <div>${ah.approvers.map((a) => `<button class="b ahapW" data-appr="${a.id}" style="margin:4px 6px 0 0;${a.id === ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — one quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
            <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
            <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
            <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px"><br>
+           <span style="opacity:.55;font-size:.85rem">The office approves or denies the hours after you wrap up.</span><br>
            <button class="b grn" style="margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
            <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
          </div>` : ""}`}
@@ -2026,17 +2025,14 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     if (p106) { p106.style.display = "block"; return; }
     post("/api/clock/in", { line_id: 9 }, btn);
   }
-  let ahApprW = "${ah.lastAppr || ""}", ahReasonW = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214: last session pre-picked
+  let ahReasonW = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214/215: last reason pre-picked; approver question retired
   document.addEventListener("click", (e) => {
-    const a = e.target.closest(".ahapW"); if (a) { ahApprW = a.dataset.appr;
-      document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
-      a.style.opacity = "1"; a.style.outline = "2px solid #30d158"; }
     const r = e.target.closest(".ahreW"); if (r) { ahReasonW = r.dataset.ahreason;
       document.querySelectorAll(".ahreW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
       r.style.opacity = "1"; r.style.outline = "2px solid #30d158"; }
   });
   function ahGoW(btn){
-    post("/api/clock/in", { line_id: 9, approved_by: ahApprW, ah_reason: ahReasonW,
+    post("/api/clock/in", { line_id: 9, ah_reason: ahReasonW,
       ah_plan: val("ahplanW") }, btn);
   }
   function clockOut(reason, btn, note){
@@ -2104,14 +2100,13 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
          <div id="ahmsgV107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
          <button class="wbtn" style="background:#1d5a2d;margin-top:8px" onclick="wrapGoV107(this)">Submit wrap-up &amp; clock out</button>
        </div>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px;font-size:16px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
-    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — two quick taps, then a normal shift.</div>
+    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — one quick tap, then a normal shift.</div>
       <div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:10px auto 0;text-align:left;max-width:560px">
-        <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — two quick taps${clk.ah.lastAppr || clk.ah.lastReason ? " (your last answers are pre-picked)" : ""}:</p>
-        <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
-        <div>${clk.ah.approvers.map((a) => `<button class="wbtn ahapW" data-appr="${a.id}" style="background:#2c2c2e;${a.id === clk.ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
+        <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — one quick tap${clk.ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
         <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
         <div>${clk.ah.reasons.map((r) => `<button class="wbtn ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="background:#2c2c2e;${r === clk.ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
         <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;font-size:16px"><br>
+        <span style="opacity:.55;font-size:.85rem">The office approves or denies the hours after you wrap up.</span><br>
         <button class="wbtn" style="background:#1d5a2d;margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
         <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
       </div>` : ""}`}</div>
@@ -2141,17 +2136,14 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
     if (p106) { p106.style.display = "block"; return; }
     wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0} }, btn);
   }
-  window.__ahApW = "${clk && clk.ah ? clk.ah.lastAppr || "" : ""}"; window.__ahReW = "${clk && clk.ah ? (clk.ah.lastReason || "").replace(/"/g, '\\"') : ""}";   // Block 214: last session pre-picked
+  window.__ahReW = "${clk && clk.ah ? (clk.ah.lastReason || "").replace(/"/g, '\\"') : ""}";   // Block 214/215: last reason pre-picked; approver question retired
   document.addEventListener("click", (e) => {
-    const a = e.target.closest(".ahapW"); if (a) { window.__ahApW = a.dataset.appr;
-      document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
-      a.style.opacity = "1"; a.style.outline = "2px solid #30d158"; }
     const r = e.target.closest(".ahreW"); if (r) { window.__ahReW = r.dataset.ahreason;
       document.querySelectorAll(".ahreW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
       r.style.opacity = "1"; r.style.outline = "2px solid #30d158"; }
   });
   function ahGoW(btn){
-    wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0}, approved_by: window.__ahApW,
+    wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0},
       ah_reason: window.__ahReW, ah_plan: document.getElementById("ahplanW").value }, btn);
   }
   // Block 107: after hours, ANY clock-out routes through the wrap-up step
@@ -2821,7 +2813,7 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
   const tools = tools95 === "time"
-    ? [["/payroll", "Pay Worksheet"], ["/reports", "Reports"]]   // Block 189: the Accounting-manager menu — time & pay only
+    ? [["/payroll", "Pay Worksheet"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed
     : isAdmin
     ? daily95
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
@@ -2942,7 +2934,7 @@ const settingsPage117 = (me) => `<!doctype html>
   }
 </script></div></body></html>`;
 
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -3184,6 +3176,19 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
       : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
   </div>`}
+  ${acct189 ? `
+  <!-- Block 215 (Daniel: "ANY oddities you find within regards to payroll or
+       punches should be displayed... so accounting KNOWS to fix it"): the
+       ODDITIES lane — the same alternation math the editor uses, run over
+       EVERYONE's last 14 days, surfaced instead of waiting to be found.
+       Each row opens that person + day in the editor below. -->
+  <div class="lane" id="oddities215" style="border-color:#7a5900"><h3>&#9888; Payroll oddities — worth a look</h3>
+    ${odd215.length ? odd215.map((o) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)">
+      <b>${o.name}</b> <span style="opacity:.7">${o.ds}</span> <span style="color:#ffd60a">${o.bits}</span>
+      <a href="/manager?tc_emp=${o.emp}&tc_date=${o.ds}#timecard191" style="margin-left:auto;background:#1c1c1e;border:1px solid #7a5900;border-radius:10px;color:#ffd60a;padding:7px 14px;text-decoration:none;font-weight:700">Open their timecard</a>
+    </div>`).join("") : `<div style="color:#30d158;font-weight:700">&#10003; No punch oddities in the last 14 days.</div>`}
+    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Checked daily over the last 14 days: extra INs/OUTs (usually double-taps), days with no clock-out, and days the system auto-closed. Fix them here before the pay run.</div>
+  </div>` : ""}
   ${acct189 && tcard191 ? `
   <!-- Block 191: the accounting TIMECARD EDITOR — person → last 14 days,
        stints (IN → OUT) with editable times, Remove, Add. No lines, no
@@ -4436,7 +4441,7 @@ async function reportData(startMs, endMs) {
   // Same queries verbatim: sign-off/rework/fix moments live in the append-only
   // event log (spec §3); Q86 actor_id on the sign-off event = WHO passed
   // steel; the 10k clock_event read keeps the board engine's windowing caveat.
-  const [lines, emps, builds, compEv, rwEv, fxEv, events, ahSess] = await Promise.all([
+  const [lines, empsAllR215, builds, compEv, rwEv, fxEv, events, ahSess] = await Promise.all([
     db(`line?select=id,name&order=id`),
     db(`employee?select=id,first_name,last_name,active,role`),
     db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`),
@@ -4446,6 +4451,7 @@ async function reportData(startMs, endMs) {
     db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`),
     db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,declined_by,decline_reason,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`),
   ]);
+  const emps = empsAllR215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches reports
   const ivs = workIntervals(events, nowMs);
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
@@ -6380,13 +6386,14 @@ async function payrollData(startMs, endMs) {
   const dates = []; for (let ms = startMs; ms < endMs; ms += 86400000) dates.push(phxDate(ms));
   // Block 212 (v201 SPEED): the five reads are independent — one round trip
   // (same queries verbatim; isWorkDay below rides the cached calendar).
-  const [emps, events, ahSess111, offRows, auto148] = await Promise.all([
+  const [empsAll215, events, ahSess111, offRows, auto148] = await Promise.all([
     db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner
     db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`),
     db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`),
     db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []),
     db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`),
   ]);
+  const emps = empsAll215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches payroll
   const ivs = workIntervals(events, nowMs);
   const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
   // worked hours per emp per day (dayed by interval start, clipped to window)
@@ -6418,7 +6425,8 @@ async function payrollData(startMs, endMs) {
       const d = phxDate(Math.max(iv.start, startMs));
       (ahCut[sA.employee_id] = ahCut[sA.employee_id] || {}); ahCut[sA.employee_id][d] = (ahCut[sA.employee_id][d] || 0) + o;
     }
-    if (cut111 > 0.005) ahNotes.push({ name: nmP111[sA.employee_id] || "?", date: phxDate(sStart), hrs: roundQ(cut111),
+    if (!nmP111[sA.employee_id]) continue;   // Block 215: test-account sessions stay off the sheet
+    if (cut111 > 0.005) ahNotes.push({ name: nmP111[sA.employee_id], date: phxDate(sStart), hrs: roundQ(cut111),
       declined: Boolean(sA.declined_by),
       note: sA.declined_by ? `DECLINED by ${nmP111[sA.declined_by] || "admin"}: "${sA.decline_reason || ""}"` : "pending admin sign-off" });
   }
@@ -6456,7 +6464,7 @@ async function payrollData(startMs, endMs) {
   // payroll's sheet — the machine closed someone's day, a human should glance
   // at it before the pay run (and can fix the punches in one tap).
   // (auto148 fetched in the Block-212 wave above.)
-  const autoNotes = auto148.filter((a) => !["salary", "na"].includes(payOf201[a.employee_id]))   // Block 201: hourly people only — a salaried/owner auto-close isn't a payroll matter
+  const autoNotes = auto148.filter((a) => nmP111[a.employee_id] && !["salary", "na"].includes(payOf201[a.employee_id]))   // Block 201: hourly only · Block 215: test account excluded
     .map((a) => { const d148 = phxDate(new Date(a.claimed_at).getTime()); return {
     name: nmP111[a.employee_id] || "?", date: d148, at: phxHHMM(a.claimed_at),
     link: `/manager?tc_emp=${a.employee_id}&tc_date=${d148}#timecorrections` }; });
@@ -6527,32 +6535,42 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
 </div></body></html>`;
 }
 function payrollCsv(d) {
+  // Block 215 (Daniel): the CSV is THE REPORT SENT TO THE ACCOUNTANT — just
+  // payroll hours for the period, shaped like the hand-made "Employee Pay
+  // Worksheet" they already send (his 8/15 example: DATES down the side,
+  // EMPLOYEES across the top, hours in the cells, a Total row). Gone from the
+  // file: the AH-not-counted column, system clock-outs, salaried/owners, and
+  // the long day-by-day dump — those live on the Pay Worksheet PAGE where
+  // accounting verifies before exporting. One safety line survives: if any
+  // after-hours time is still awaiting sign-off in the window, a note says
+  // hours are missing until it's approved — so a check can't be cut short
+  // silently. (Hourly people only; Zz test account already filtered out.)
   const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const dow = (ds) => ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(ds + "T00:00:00Z").getUTCDay()];
+  const first = (name) => String(name || "").split(" ")[0];
   const L = [];
-  L.push(["Shop Board — Pay Worksheet", d.label, d.rangeText].map(q).join(","));
+  L.push(["Shop Board — Employee Pay Worksheet", d.label, d.rangeText].map(q).join(","));
   L.push("");
-  L.push(["Employee", "Regular", "Overtime", "Sick", "Unpaid", "AH not counted", "Total"].map(q).join(","));
-  for (const r of d.rows) L.push([r.name, h1(r.reg), h1(r.ot), h1(r.sick), h1(r.unpaid), h1(r.ahx || 0), h1(r.total)].map(q).join(","));
-  L.push(["ALL", h1(d.totals.reg), h1(d.totals.ot), h1(d.totals.sick), h1(d.totals.unpaid), h1(d.totals.ahx || 0), h1(d.totals.total)].map(q).join(","));
-  if ((d.ahNotes || []).length) {
-    L.push(""); L.push(q("After-hours not counted (excluded from hours above)"));
-    L.push(["Employee", "Date", "Hours", "Status"].map(q).join(","));
-    for (const n of d.ahNotes) L.push([n.name, n.date, h1(n.hrs), n.note].map(q).join(","));
+  L.push(["Date", "Day", ...d.rows.map((r) => first(r.name))].map(q).join(","));
+  for (const ds of d.dates) {
+    const cells = d.rows.map((r) => { const c = r.byDay[ds];
+      if (!c) return "";
+      const hrs = c.worked || 0, s = c.sick || 0, u = c.unpaid || 0;
+      if (!hrs && s) return h1(s) + " S";      // sick day — marked like their "8 ST"
+      if (!hrs && u) return h1(u) + " U";      // unpaid day
+      return hrs ? h1(hrs) : ""; });
+    if (cells.some((c) => c !== "")) L.push([ds, dow(ds), ...cells].map(q).join(","));
   }
-  if ((d.autoNotes || []).length) {
-    L.push(""); L.push(q("System clock-outs (no clock-out recorded — day auto-closed; verify before payroll)"));
-    L.push(["Employee", "Date", "Auto-closed at"].map(q).join(","));
-    for (const n of d.autoNotes) L.push([n.name, n.date, n.at].map(q).join(","));
+  L.push(["", "Total", ...d.rows.map((r) => h1(r.total))].map(q).join(","));
+  L.push(["", "Regular", ...d.rows.map((r) => h1(r.reg))].map(q).join(","));
+  L.push(["", "Overtime", ...d.rows.map((r) => h1(r.ot))].map(q).join(","));
+  if (d.rows.some((r) => r.sick)) L.push(["", "Sick", ...d.rows.map((r) => h1(r.sick))].map(q).join(","));
+  if (d.rows.some((r) => r.unpaid)) L.push(["", "Unpaid", ...d.rows.map((r) => h1(r.unpaid))].map(q).join(","));
+  const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
+  if (pendAh.length) {
+    L.push("");
+    L.push(q(`NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`));
   }
-  if ((d.salNotes || []).length) {
-    L.push(""); L.push(q("Salaried & owners (not on hourly payroll - informational only, NOT in the totals above)"));
-    L.push(["Employee", "Pay type", "Punched hours"].map(q).join(","));
-    for (const n of d.salNotes) L.push([n.name, n.label, h1(n.hrs || 0)].map(q).join(","));
-  }
-  L.push(""); L.push(""); L.push(q("Day-by-day detail"));
-  L.push(["Employee", "Date", "Weekday", "Worked", "Regular", "Overtime", "Sick", "Unpaid"].map(q).join(","));
-  const dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
-  for (const r of d.rows) for (const ds of d.workdays) { const c = r.byDay[ds]; if (!c) continue; L.push([r.name, ds, dow(ds), h1(c.worked), h1(c.reg), h1(c.ot), h1(c.sick), h1(c.unpaid)].map(q).join(",")); }
   return L.join("\n");
 }
 
@@ -7376,17 +7394,16 @@ http.createServer(async (req, res) => {
         // three questions, same claim-then-confirm, now on this surface too.
         const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
         const ahNowW = isAfterHoursDept(Date.now(), hrsW212, "Warehouse");   // Block 195: warehouse runs from 6
-        const [ahApprW, ahReasW, openAhWRows, lastAhWRows214] = await Promise.all([
-          (ahNowW && !clockedInW106) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
+        const [ahReasW, openAhWRows, lastAhWRows214] = await Promise.all([
+          // Block 215: the approver roster fetch is gone with the question.
           (ahNowW && !clockedInW106) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
           clockedInW106 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
-          (ahNowW && !clockedInW106) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
+          (ahNowW && !clockedInW106) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
         ]);
         const [openAhW] = openAhWRows;
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
-            { now: ahNowW, approvers: ahApprW.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
-              lastAppr: (lastAhWRows214[0] && ahApprW.some((a) => a.id === lastAhWRows214[0].approved_by)) ? lastAhWRows214[0].approved_by : "",
+            { now: ahNowW, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
               lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }));
       }
       if (emp.department !== "Production") {
@@ -7408,16 +7425,15 @@ http.createServer(async (req, res) => {
           // questionnaire and wrap-note the floor and warehouse get.
           const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
           const ahNow92 = isAfterHoursDept(Date.now(), hrs92, emp.department);   // Block 195: dept-aware open
-          const [ahAp92, ahRe92, openAh92Rows, lastAh92Rows214] = await Promise.all([
-            (ahNow92 && !in92) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
+          const [ahRe92, openAh92Rows, lastAh92Rows214] = await Promise.all([
+            // Block 215: the approver roster fetch is gone with the question.
             (ahNow92 && !in92) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
             in92 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
-            (ahNow92 && !in92) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
+            (ahNow92 && !in92) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
           ]);
           const [openAh92] = openAh92Rows;
           clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department],
-            ah: { now: ahNow92, approvers: ahAp92.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
-              lastAppr: (lastAh92Rows214[0] && ahAp92.some((a) => a.id === lastAh92Rows214[0].approved_by)) ? lastAh92Rows214[0].approved_by : "",
+            ah: { now: ahNow92, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
         return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
@@ -7512,16 +7528,15 @@ http.createServer(async (req, res) => {
       // Block 212 (v201 SPEED): the clock screen's six reads in one round trip
       // (the time-off reason list is tiny — fetched alongside, applied only
       // when the toggle is on, same result as before).
-      const [ahApprRows212, ahReasonRows, openAhRows212, toTogRows212, toReasonRows213, toMineRows, lastAhRows214] = await Promise.all([
-        (ahNow && !clockedIn) ? db(`employee?select=id,first_name,last_name&active=is.true&role=in.(manager,admin)&order=first_name`) : [],
+      const [ahReasonRows, openAhRows212, toTogRows212, toReasonRows213, toMineRows, lastAhRows214] = await Promise.all([
+        // Block 215: the approver roster fetch is gone with the question.
         (ahNow && !clockedIn) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
         clockedIn ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
         db(`feature_toggle?select=enabled&key=eq.time_off_requests`),
         db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`),
         db(`time_off_request?select=start_date,end_date,reason,status,decision_note&employee_id=eq.${empId}&or=(status.eq.pending,end_date.gte.${phxDate(Date.now())})&order=start_date.desc&limit=8`),
-        (ahNow && !clockedIn) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
+        (ahNow && !clockedIn) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
       ]);
-      const ahApprovers = ahApprRows212.map((a) => ({ id: a.id, name: `${a.first_name} ${a.last_name}` }));
       const [openAh] = openAhRows212;
       // Q92: the request control shows when the admin toggle is on; the person
       // always sees their own pending + upcoming-approved requests here.
@@ -7549,8 +7564,7 @@ http.createServer(async (req, res) => {
       }
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
-          { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh),
-            lastAppr: (lastAhRows214[0] && ahApprovers.some((a) => a.id === lastAhRows214[0].approved_by)) ? lastAhRows214[0].approved_by : "",
+          { now: ahNow, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh),
             lastReason: (lastAhRows214[0] && ahReasonRows.some((r) => r.label === lastAhRows214[0].reason)) ? lastAhRows214[0].reason : "" },
           { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126 }));
     }
@@ -7670,25 +7684,31 @@ http.createServer(async (req, res) => {
       const hrsIn = await shopHours();
       const [meDep195] = await db(`employee?select=department&id=eq.${empId}`);   // Block 195: warehouse clocks in from 6
       if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)) {
-        // Block 214 (Daniel's ruling): the typed PLAN is now OPTIONAL — the
-        // approval claim + reason stay required (that's the governance), and
-        // the required wrap-up note at clock-out still says what got done.
-        if (!approved_by || !ah_reason)
-          return json(400, { ok: false, error: "After hours needs two things: who approved it and what it's for" });
+        // Block 214 (Daniel): typed PLAN optional. Block 215 (Daniel, Monday):
+        // the "who approved it" question is GONE too — "Ross would and is
+        // basically the only authority... admin can just approve or deny on
+        // our side." Only the REASON is required now; the admin Approve/Deny
+        // at sign-off IS the approval. approved_by stays in the table
+        // (nullable, pre-215 history intact); if a client ever still sends
+        // one it's validated and recorded, never required.
+        if (!ah_reason)
+          return json(400, { ok: false, error: "After hours needs one thing: what's it for" });
         const plan214 = String(ah_plan || "").trim();
-        const [appr] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
-        if (!appr || (appr.role !== "manager" && appr.role !== "admin"))
-          return json(400, { ok: false, error: "The approver has to be a manager, admin or owner" });
+        let appr215 = null;
+        if (approved_by && isUuid(String(approved_by))) {
+          const [apprRow] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
+          if (apprRow && (apprRow.role === "manager" || apprRow.role === "admin")) appr215 = apprRow;
+        }
         const [me2] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
         const [lnA] = await db(`line?select=name&id=eq.${line_id}`);
         await db("after_hours_session", { method: "POST", body: JSON.stringify({
-          employee_id: empId, line_id, approved_by, reason: String(ah_reason),
+          employee_id: empId, line_id, approved_by: appr215 ? appr215.id : null, reason: String(ah_reason),
           plan: plan214, started_at: new Date(inAtMs).toISOString() }) });
-        logEvent("afterhours.start", empId, { line_id, approved_by, reason: ah_reason, plan: plan214 });
+        logEvent("afterhours.start", empId, { line_id, approved_by: appr215 ? appr215.id : null, reason: ah_reason, plan: plan214 });
         const adminsA = await db(`employee?select=id&active=is.true&role=eq.admin`);
-        notify("afterhours.claimed", [...new Set([approved_by, ...adminsA.map((a) => a.id)])],
+        notify("afterhours.claimed", [...new Set([...(appr215 ? [appr215.id] : []), ...adminsA.map((a) => a.id)])],
           `After hours: ${me2 ? me2.first_name + " " + ((me2.last_name || "")[0] || "") + "." : "someone"} clocked in`,
-          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved.${plan214 ? ` Plan: ${plan214}.` : ""} Confirm from the Manager console.`, "/manager");
+          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason}.${plan214 ? ` Plan: ${plan214}.` : ""} Approve or deny from the Admin console once they wrap up.`, "/admin");
       }
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
@@ -8352,7 +8372,7 @@ http.createServer(async (req, res) => {
       const [lines, linesAll189, builds, reworkReasons, recentCk, empNames, open159,
              repTogRows212, ahRows, togLineRows212, downReasonRows212, tcEmps, allNames,
              toPendRows, toUpRows, toReasonRows212, fxOpenRows, fxCompleted, fxReasons,
-             fxSeed127, sbEv207, mgrBoard, tcRawP212, evs191, hrs133, ov133] = await Promise.all([
+             fxSeed127, sbEv207, mgrBoard, tcRawP212, evs191, hrs133, ov133, oddEvs215] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
         // Block 190: EVERY line's name (dept-time areas included) for the
         // on-the-clock list and the punch corrector — an accounting or Body
@@ -8381,6 +8401,7 @@ http.createServer(async (req, res) => {
         tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
         (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc`) : [],
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
+        acct189 ? db(`clock_event?select=employee_id,kind,claimed_at&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215: the oddities scan — everyone's last 14 days
       ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       // WAVE 2 — everything that needed wave-1 ids, still ONE round trip.
@@ -8600,6 +8621,38 @@ http.createServer(async (req, res) => {
         }
         tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
       }
+      // Block 215 (Daniel): the PAYROLL ODDITIES scan for the accounting view —
+      // the tcard editor's alternation math run over EVERYONE's last 14 days so
+      // tangles surface instead of waiting to be stumbled on. Flags per person
+      // per Phoenix day: extra INs / extra OUTs (double-taps), a past day with
+      // no clock-out, and system auto-closes (verify before the pay run).
+      // Hourly people only; the Zz test account excluded (Block 215).
+      let odd215 = [];
+      if (acct189) {
+        const byEmpDay215 = {};
+        for (const ev of oddEvs215) { const dsO = phxDate(new Date(ev.claimed_at).getTime());
+          ((byEmpDay215[ev.employee_id] = byEmpDay215[ev.employee_id] || {})[dsO] = byEmpDay215[ev.employee_id][dsO] || []).push(ev); }
+        const todayO215 = phxDate(Date.now());
+        for (const eO of tcEmps) {
+          if (isTestAcct215(eO) || ["salary", "na"].includes(eO.pay_type)) continue;
+          const daysO = byEmpDay215[eO.id] || {};
+          for (const dsO in daysO) {
+            let openP = null, extraIns = 0, extraOuts = 0, autoN = 0;
+            for (const pO of daysO[dsO]) {
+              if (pO.kind === "clock_in") { if (openP) extraIns++; openP = pO; }
+              else { if (pO.kind === "clock_out_auto") autoN++; if (!openP) extraOuts++; openP = null; }
+            }
+            const openEnd = Boolean(openP) && dsO !== todayO215;
+            if (extraIns || extraOuts || openEnd || autoN) odd215.push({
+              emp: eO.id, name: `${eO.first_name} ${eO.last_name}`, ds: dsO,
+              bits: [extraIns ? `${extraIns} extra IN${extraIns > 1 ? "s" : ""} (double-tap?)` : "",
+                     extraOuts ? `${extraOuts} extra OUT${extraOuts > 1 ? "s" : ""}` : "",
+                     openEnd ? "no clock-out recorded" : "",
+                     autoN ? "auto-closed by the system — verify" : ""].filter(Boolean).join(" · ") });
+          }
+        }
+        odd215.sort((aO, zO) => (aO.ds < zO.ds ? 1 : aO.ds > zO.ds ? -1 : aO.name < zO.name ? -1 : 1));
+      }
       // Q92: time-off — pending requests (the "needs you" queue), the upcoming
       // approved list, and the add-for-anyone picker inputs.
       const toReasonsM = toReasonRows212.map((r) => r.label);
@@ -8633,7 +8686,7 @@ http.createServer(async (req, res) => {
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const { byOrder: mgrProj } = proj212;
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215));
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -8755,10 +8808,11 @@ http.createServer(async (req, res) => {
       if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       // Reports are ADMIN work (owner-rep 2026-07-29); a manager only gets in
       // if an admin flipped the "Managers can see Reports" switch (Q65).
-      // Block 189 (owner ruling): the ACCOUNTING manager gets in regardless —
-      // "any of the reports relating to time keeping and staffs clocked in
-      // hours" is her job; the toggle stays the gate for everyone else.
-      if (me.role === "manager" && me.department !== "Accounting") {
+      // Block 189 gave the Accounting manager a free pass; Block 215 (Daniel)
+      // REVOKED it — "this position does not need access to reports, only pay
+      // worksheet." Accounting managers now go through the same toggle as
+      // every other manager.
+      if (me.role === "manager") {
         const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
         if (!tog || !tog.enabled)
           return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center;max-width:560px"><h2>Reports are admin-only right now</h2><p style="opacity:.7">An admin can share them with managers from the console &mdash; Features, "Managers can see Reports".</p><p><a href="/home" style="color:#8e8e93">&#8962; Home</a></p></div></body></html>`);
