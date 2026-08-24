@@ -3212,10 +3212,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
       ${d.off216 ? `
       <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="color:#5eaeff;font-weight:700">${/sick/i.test(d.off216.reason) ? "&#129298; SICK day recorded — 8 hrs on the worksheet" : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))}`}</span>
+        <span style="color:#5eaeff;font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
         <button class="b" style="padding:5px 12px" onclick="tccSickCancel216('${d.off216.id}','${d.ds}',this)">Remove</button>
       </div>` : `
-      <div style="margin-top:8px"><button class="b" style="padding:5px 12px;opacity:.8" onclick="tccSick216('${d.ds}',this)">&#129298; Mark a SICK day (8 hrs)</button></div>`}
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="opacity:.75">&#129298; Sick time:</span>
+        <input id="tccsh-${d.ds}" type="number" value="8" min="0.25" max="8" step="0.25" style="width:4.5em;font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <span style="opacity:.75">hrs</span>
+        <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccSick216('${d.ds}',this)">Add sick time</button>
+      </div>`}
       ${d.stints.map((s) => `
       <div style="margin-top:10px">
         IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
@@ -3366,7 +3371,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     } catch (e) { if (m) m.textContent = "Network hiccup — try again"; }
     btn.disabled = false;
   }
-  function tccSick216(ds, btn) { tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Sick" }, btn); }
+  function tccSick216(ds, btn) {
+    const hEl = document.getElementById("tccsh-" + ds);
+    const hrs = hEl && hEl.value !== "" ? Number(hEl.value) : 8;   // Block 217: partial sick hours (2, 4, ...) — default a full 8
+    tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Sick", hours: hrs }, btn);
+  }
   function tccSickCancel216(id, ds, btn) { tccOff216(ds, "/api/timeoff/cancel", { request_id: id }, btn); }
   function tccIso(ds, hhmm) { return new Date(ds + "T" + hhmm + ":00-07:00").toISOString(); }
   async function tccCall(ds, payload) {
@@ -6411,7 +6420,7 @@ async function payrollData(startMs, endMs) {
     db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner
     db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`),
     db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`),
-    db(`time_off_request?select=employee_id,start_date,end_date,reason&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []),
+    db(`time_off_request?select=employee_id,start_date,end_date,reason,hours&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []),
     db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`),
   ]);
   const emps = empsAll215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches payroll
@@ -6458,7 +6467,7 @@ async function payrollData(startMs, endMs) {
   for (const r of offRows) {
     const rl = (r.reason || "").toLowerCase(), type = rl.includes("sick") ? "sick" : rl.includes("unpaid") ? "unpaid" : "other";
     let ms = Math.max(phxDayStart(r.start_date), startMs); const end = Math.min(phxDayStart(r.end_date) + 86400000, endMs);
-    for (; ms < end; ms += 86400000) { const d = phxDate(ms); if (!workday[d]) continue; (off[r.employee_id] = off[r.employee_id] || {}); off[r.employee_id][d] = { type, reason: r.reason || "" }; }
+    for (; ms < end; ms += 86400000) { const d = phxDate(ms); if (!workday[d]) continue; (off[r.employee_id] = off[r.employee_id] || {}); off[r.employee_id][d] = { type, reason: r.reason || "", hours: r.hours != null ? roundQ(Number(r.hours)) : null }; }   // Block 217: hours=null means a full standard day
   }
   const rows = emps.map((e) => {
     const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0, ahx = 0; const byDay = {};
@@ -6466,7 +6475,8 @@ async function payrollData(startMs, endMs) {
       const ax = roundQ((ahCut[e.id] || {})[d] || 0); ahx += ax;
       const h = roundQ(wk[d] || 0);
       let s = 0, u = 0, otherOff = null;
-      if (of[d]) { if (of[d].type === "sick") s = PAY_STD_DAY; else if (of[d].type === "unpaid") u = PAY_STD_DAY; else otherOff = of[d].reason; }
+      if (of[d]) { const offH217 = of[d].hours != null ? of[d].hours : PAY_STD_DAY;   // Block 217 (Daniel): partial sick time — "sometimes they just take 2 hours or 4 hours"
+        if (of[d].type === "sick") s = offH217; else if (of[d].type === "unpaid") u = offH217; else otherOff = of[d].reason; }
       sick += s; unpaid += u;
       if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: h, ot: 0, sick: s, unpaid: u, otherOff, ahx: ax };
     }
@@ -6505,7 +6515,7 @@ async function payrollData(startMs, endMs) {
 function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers open this too — their nav must not carry admin links
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
-  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">S</span>'); if (day.unpaid) marks.push('<span class="up">U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">8 S</span>' : '<span class="up">8 U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };
+  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">' + h1(day.sick) + ' S</span>'); if (day.unpaid) marks.push('<span class="up">' + h1(day.unpaid) + ' U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">' + h1(day.sick) + ' S</span>' : '<span class="up">' + h1(day.unpaid) + ' U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };   // Block 217: sick/unpaid marks carry their HOURS (partial sick days)
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Pay Worksheet</title>${style}
@@ -6603,6 +6613,8 @@ function payrollCsv(d) {
       const hrs = c.worked || 0, s = c.sick || 0, u = c.unpaid || 0;
       if (!hrs && s) return h1(s) + " S";      // sick day — marked like their "8 ST"
       if (!hrs && u) return h1(u) + " U";      // unpaid day
+      if (hrs && s) return h1(hrs) + " +" + h1(s) + "S";   // Block 217: worked part of the day + partial sick hours
+      if (hrs && u) return h1(hrs) + " +" + h1(u) + "U";
       return hrs ? h1(hrs) : ""; });
     if (cells.some((c) => c !== "")) L.push([ds, dow(ds), ...cells].map(q).join(","));
   }
@@ -8448,7 +8460,7 @@ http.createServer(async (req, res) => {
         (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc`) : [],
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
         acct189 ? db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
-        (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(Date.now() - 13 * 86400000)}&order=start_date`) : [],   // Block 216: the selected person's recorded time off — sick days show + cancel from the editor
+        (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason,hours&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(Date.now() - 13 * 86400000)}&order=start_date`) : [],   // Block 216/217: the selected person's recorded time off (hours = partial day) — shows + cancels from the editor
       ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       // WAVE 2 — everything that needed wave-1 ids, still ONE round trip.
@@ -8667,7 +8679,7 @@ http.createServer(async (req, res) => {
             // (sick days show on the card; the office can cancel a mis-tap).
             const to216 = toSel216.find((tRow) => tRow.start_date <= ds && tRow.end_date >= ds) || null;
             days191.push({ ds, dow, stints: merged199, orphans, hours: Math.round(mins191 / 6) / 10, open: open191,
-              off216: to216 ? { id: to216.id, reason: to216.reason || "time off" } : null });
+              off216: to216 ? { id: to216.id, reason: to216.reason || "time off", offHrs: to216.hours != null ? Number(to216.hours) : 8 } : null });
           }
         }
         tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
@@ -9706,8 +9718,16 @@ http.createServer(async (req, res) => {
       const acctMgr216 = me && me.role === "manager" && me.department === "Accounting";
       if (!me || (me.role !== "admin" && !acctMgr216))
         return json(403, { ok: false, error: "Time-off entry is for admins and accounting" });
-      const { employee_id, start_date, end_date, reason } = await body(req);
+      const { employee_id, start_date, end_date, reason, hours } = await body(req);
       if (!isUuid(employee_id)) return json(400, { ok: false, error: "Pick a person" });
+      // Block 217 (Daniel): PARTIAL sick time — optional hours (quarter-hour
+      // steps, up to a standard day). Absent/blank = the full 8-hour day.
+      let hours217 = null;
+      if (hours != null && hours !== "") {
+        hours217 = Math.round(Number(hours) * 4) / 4;
+        if (!(hours217 > 0) || hours217 > PAY_STD_DAY) return json(400, { ok: false, error: `Hours must be between 0.25 and ${PAY_STD_DAY}` });
+        if (hours217 === PAY_STD_DAY) hours217 = null;   // a full day stores as the default
+      }
       const okDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
       if (!okDate(start_date)) return json(400, { ok: false, error: "Pick a start date" });
       const end = okDate(end_date) ? end_date : start_date;
@@ -9719,9 +9739,9 @@ http.createServer(async (req, res) => {
       // payroll math keys on those words, not the list.
       const rsn = reason && (okR.some((r) => r.label === reason) || /^(sick|unpaid)$/i.test(String(reason))) ? reason : null;
       const [row] = await db(`time_off_request`, { method: "POST",
-        body: JSON.stringify({ employee_id, start_date, end_date: end, reason: rsn, requested_by: empId,
+        body: JSON.stringify({ employee_id, start_date, end_date: end, reason: rsn, hours: hours217, requested_by: empId,
           added_by_manager: true, status: "approved", decided_by: empId, decided_at: new Date().toISOString() }) });
-      logEvent("timeoff.added", empId, { request_id: row && row.id, employee_id, start_date, end_date: end, reason: rsn });
+      logEvent("timeoff.added", empId, { request_id: row && row.id, employee_id, start_date, end_date: end, reason: rsn, hours: hours217 });
       await notify("timeoff.added", [employee_id], "Time off added",
         `Time off was recorded for you: ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.`, "/home");
       return json(200, { ok: true });
