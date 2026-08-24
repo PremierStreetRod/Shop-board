@@ -6548,10 +6548,14 @@ function payrollCsv(d) {
   const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
   const dow = (ds) => ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(ds + "T00:00:00Z").getUTCDay()];
   const first = (name) => String(name || "").split(" ")[0];
+  // Two Jonathans = two identical columns — a shared first name gets its last
+  // initial ("Jonathan A" / "Jonathan T"), like the hand sheet's "John T".
+  const seen215 = {}; d.rows.forEach((r) => { const f = first(r.name); seen215[f] = (seen215[f] || 0) + 1; });
+  const colName = (r) => { const f = first(r.name); return seen215[f] > 1 ? `${f} ${(String(r.name).split(" ")[1] || "")[0] || ""}` : f; };
   const L = [];
   L.push(["Shop Board — Employee Pay Worksheet", d.label, d.rangeText].map(q).join(","));
   L.push("");
-  L.push(["Date", "Day", ...d.rows.map((r) => first(r.name))].map(q).join(","));
+  L.push(["Date", "Day", ...d.rows.map((r) => colName(r))].map(q).join(","));
   for (const ds of d.dates) {
     const cells = d.rows.map((r) => { const c = r.byDay[ds];
       if (!c) return "";
