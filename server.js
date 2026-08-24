@@ -3210,6 +3210,12 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <span style="opacity:.75;font-weight:700">${d.open ? "on the clock now" : d.hours ? `${d.hours} hrs` : "no hours"}</span>
       </div>
       <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
+      ${d.off216 ? `
+      <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="color:#5eaeff;font-weight:700">${/sick/i.test(d.off216.reason) ? "&#129298; SICK day recorded — 8 hrs on the worksheet" : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))}`}</span>
+        <button class="b" style="padding:5px 12px" onclick="tccSickCancel216('${d.off216.id}','${d.ds}',this)">Remove</button>
+      </div>` : `
+      <div style="margin-top:8px"><button class="b" style="padding:5px 12px;opacity:.8" onclick="tccSick216('${d.ds}',this)">&#129298; Mark a SICK day (8 hrs)</button></div>`}
       ${d.stints.map((s) => `
       <div style="margin-top:10px">
         IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
@@ -3347,6 +3353,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   const TCC_EMP = "${tcard191 && tcard191.selEmp ? tcard191.selEmp : ""}";
   const TCC_LINE = ${tcard191 ? Number(tcard191.defLine) || 10 : 10};
   function tccNote() { const n = document.getElementById("tcc-note"); return n && n.value.trim() ? n.value.trim() : "punch clock correction"; }
+  // Block 216: SICK DAY straight from the timecard — one tap records an
+  // approved sick day (8 hrs on the worksheet); Remove cancels a mis-tap.
+  async function tccOff216(ds, url, payload, btn) {
+    btn.disabled = true;
+    const m = document.getElementById("tccmsg-" + ds);
+    try {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      if (m) m.textContent = out.error || "Something went wrong";
+    } catch (e) { if (m) m.textContent = "Network hiccup — try again"; }
+    btn.disabled = false;
+  }
+  function tccSick216(ds, btn) { tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Sick" }, btn); }
+  function tccSickCancel216(id, ds, btn) { tccOff216(ds, "/api/timeoff/cancel", { request_id: id }, btn); }
   function tccIso(ds, hhmm) { return new Date(ds + "T" + hhmm + ":00-07:00").toISOString(); }
   async function tccCall(ds, payload) {
     const m = document.getElementById("tccmsg-" + ds);
@@ -6443,13 +6464,24 @@ async function payrollData(startMs, endMs) {
     const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0, ahx = 0; const byDay = {};
     for (const d of dates) {
       const ax = roundQ((ahCut[e.id] || {})[d] || 0); ahx += ax;
-      const h = roundQ(wk[d] || 0), r = Math.min(h, 8), o = Math.max(0, h - 8); reg += r; ot += o;
+      const h = roundQ(wk[d] || 0);
       let s = 0, u = 0, otherOff = null;
       if (of[d]) { if (of[d].type === "sick") s = PAY_STD_DAY; else if (of[d].type === "unpaid") u = PAY_STD_DAY; else otherOff = of[d].reason; }
       sick += s; unpaid += u;
-      if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: r, ot: o, sick: s, unpaid: u, otherOff, ahx: ax };
+      if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: h, ot: 0, sick: s, unpaid: u, otherOff, ahx: ax };
     }
-    return { id: e.id, name: `${e.first_name} ${e.last_name}`, payType: e.pay_type || "hourly", reg, ot, sick, unpaid, ahx, total: reg + ot + sick + unpaid, byDay };
+    // Block 216 (Daniel: "we are in arizona... overtime is paid ONLY when they
+    // work more than 40 hours in a one week period"): WEEKLY overtime, the
+    // Arizona/FLSA rule — OT = hours WORKED beyond 40 in a 7-day week, not
+    // "over 8 in a day". Weeks are 7-day blocks from the period's first day
+    // (a standard pay period = exactly two whole weeks). Paid leave (sick /
+    // unpaid days) never counts toward the 40. The old per-day split
+    // (min(h,8)/max(0,h-8)) is retired; byDay keeps the raw worked hours.
+    const wkSum216 = [];   // wk[] is already net of not-yet-signed-off after-hours time (the ahCut pass above)
+    dates.forEach((d216, i216) => { const w216 = Math.floor(i216 / 7);
+      wkSum216[w216] = roundQ((wkSum216[w216] || 0) + roundQ(wk[d216] || 0)); });
+    for (const wS of wkSum216) { const wOt = Math.max(0, roundQ(wS) - 40); ot = roundQ(ot + wOt); reg = roundQ(reg + (roundQ(wS) - wOt)); }
+    return { id: e.id, name: `${e.first_name} ${e.last_name}`, payType: e.pay_type || "hourly", reg, ot, sick, unpaid, ahx, total: roundQ(reg + ot + sick + unpaid), byDay };
   }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || r.ahx || Object.keys(r.byDay).length);
   // Block 200 (owner, day 4): SALARY and OWNER (n/a) people are NOT hourly
   // payroll — "she's seeing only the hours of true numbers of the hourly
@@ -6493,7 +6525,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
-  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Regular (up to 8/day) and Overtime (over 8/day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. This replaces the hand-tallied worksheet; download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. Paid leave never counts toward the 40. Download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
     <span style="opacity:.55">Pay period:</span>
     <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
@@ -8386,7 +8418,7 @@ http.createServer(async (req, res) => {
       const [lines, linesAll189, builds, reworkReasons, recentCk, empNames, open159,
              repTogRows212, ahRows, togLineRows212, downReasonRows212, tcEmps, allNames,
              toPendRows, toUpRows, toReasonRows212, fxOpenRows, fxCompleted, fxReasons,
-             fxSeed127, sbEv207, mgrBoard, tcRawP212, evs191, hrs133, ov133, oddEvs215] = await Promise.all([
+             fxSeed127, sbEv207, mgrBoard, tcRawP212, evs191, hrs133, ov133, oddEvs215, toSel216] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
         // Block 190: EVERY line's name (dept-time areas included) for the
         // on-the-clock list and the punch corrector — an accounting or Body
@@ -8415,7 +8447,8 @@ http.createServer(async (req, res) => {
         tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
         (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc`) : [],
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
-        acct189 ? db(`clock_event?select=employee_id,kind,claimed_at&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215: the oddities scan — everyone's last 14 days
+        acct189 ? db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
+        (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(Date.now() - 13 * 86400000)}&order=start_date`) : [],   // Block 216: the selected person's recorded time off — sick days show + cancel from the editor
       ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       // WAVE 2 — everything that needed wave-1 ids, still ONE round trip.
@@ -8630,7 +8663,11 @@ http.createServer(async (req, res) => {
                 prev.out = s.out;   // may be null — still on the clock
               } else merged199.push({ in: s.in, out: s.out, mids: [], midIds: [] });
             }
-            days191.push({ ds, dow, stints: merged199, orphans, hours: Math.round(mins191 / 6) / 10, open: open191 });
+            // Block 216: any approved time-off row covering this day rides along
+            // (sick days show on the card; the office can cancel a mis-tap).
+            const to216 = toSel216.find((tRow) => tRow.start_date <= ds && tRow.end_date >= ds) || null;
+            days191.push({ ds, dow, stints: merged199, orphans, hours: Math.round(mins191 / 6) / 10, open: open191,
+              off216: to216 ? { id: to216.id, reason: to216.reason || "time off" } : null });
           }
         }
         tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
@@ -8654,7 +8691,11 @@ http.createServer(async (req, res) => {
             let openP = null, extraIns = 0, extraOuts = 0, autoN = 0;
             for (const pO of daysO[dsO]) {
               if (pO.kind === "clock_in") { if (openP) extraIns++; openP = pO; }
-              else { if (pO.kind === "clock_out_auto") autoN++; if (!openP) extraOuts++; openP = null; }
+              // Block 216 (Daniel: "we've adjusted their clock out times BUT
+              // they dont seem to be going away"): an auto-close's KIND never
+              // changes when accounting fixes its time — so a corrected or
+              // replaced auto-out counts as VERIFIED and stops flagging.
+              else { if (pO.kind === "clock_out_auto" && !pO.corrected_by && !pO.added_by) autoN++; if (!openP) extraOuts++; openP = null; }
             }
             const openEnd = Boolean(openP) && dsO !== todayO215;
             if (extraIns || extraOuts || openEnd || autoN) odd215.push({
@@ -9655,11 +9696,16 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/timeoff/add" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       // Q92 (owner-rep 2026-08-03): entering time off for someone lands it
-      // already approved, so it is an ADMIN action too.
-      if (!me || me.role !== "admin")
-        return json(403, { ok: false, error: "Time-off entry is admin-only" });
+      // already approved, so it was ADMIN-only. Block 216 (Daniel): the
+      // ACCOUNTING manager records sick time on timecards — "she needs to be
+      // able to add in sick time hours whenever needed manually for any
+      // employee" — so she gets this power too (works regardless of the
+      // staff-requests Features toggle, which stays OFF).
+      const acctMgr216 = me && me.role === "manager" && me.department === "Accounting";
+      if (!me || (me.role !== "admin" && !acctMgr216))
+        return json(403, { ok: false, error: "Time-off entry is for admins and accounting" });
       const { employee_id, start_date, end_date, reason } = await body(req);
       if (!isUuid(employee_id)) return json(400, { ok: false, error: "Pick a person" });
       const okDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -9669,13 +9715,37 @@ http.createServer(async (req, res) => {
       const [who] = await db(`employee?select=id&id=eq.${employee_id}&active=is.true`);
       if (!who) return json(404, { ok: false, error: "Person not found" });
       const okR = await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false`);
-      const rsn = reason && okR.some((r) => r.label === reason) ? reason : null;
+      // Block 216: "Sick" / "Unpaid" always work even if the pick list drifts —
+      // payroll math keys on those words, not the list.
+      const rsn = reason && (okR.some((r) => r.label === reason) || /^(sick|unpaid)$/i.test(String(reason))) ? reason : null;
       const [row] = await db(`time_off_request`, { method: "POST",
         body: JSON.stringify({ employee_id, start_date, end_date: end, reason: rsn, requested_by: empId,
           added_by_manager: true, status: "approved", decided_by: empId, decided_at: new Date().toISOString() }) });
       logEvent("timeoff.added", empId, { request_id: row && row.id, employee_id, start_date, end_date: end, reason: rsn });
       await notify("timeoff.added", [employee_id], "Time off added",
         `Time off was recorded for you: ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.`, "/home");
+      return json(200, { ok: true });
+    }
+
+    // Block 216: CANCEL an office-entered time-off row (a mis-tapped sick day
+    // in the timecard editor). Cancel-never-delete: the row flips to denied
+    // with a note, so history keeps it while payroll stops counting it.
+    // Admins + the accounting manager, same gate as /api/timeoff/add.
+    if (url.pathname === "/api/timeoff/cancel" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      const acctC216 = me && me.role === "manager" && me.department === "Accounting";
+      if (!me || (me.role !== "admin" && !acctC216))
+        return json(403, { ok: false, error: "Time-off entry is for admins and accounting" });
+      const { request_id } = await body(req);
+      if (!isUuid(request_id)) return json(400, { ok: false, error: "That entry reference isn't valid" });
+      const [rowC] = await db(`time_off_request?select=id,employee_id,start_date,end_date,status&id=eq.${request_id}`);
+      if (!rowC) return json(404, { ok: false, error: "Entry not found" });
+      if (rowC.status !== "approved") return json(400, { ok: false, error: "Only an approved entry can be cancelled" });
+      await db(`time_off_request?id=eq.${request_id}`, { method: "PATCH", body: JSON.stringify({
+        status: "denied", decided_by: empId, decided_at: new Date().toISOString(), decision_note: "cancelled by the office" }) });
+      logEvent("timeoff.cancelled", empId, { request_id, employee_id: rowC.employee_id, start_date: rowC.start_date, end_date: rowC.end_date });
       return json(200, { ok: true });
     }
 
