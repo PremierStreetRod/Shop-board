@@ -903,10 +903,12 @@ const style = `<style>
         text-align:center;cursor:pointer}
   .name:active{background:#2a2a2c}
   .name small{display:block;font-weight:400;opacity:.55;font-size:.85rem;margin-top:6px}
-  .pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:320px;margin:18px auto}
-  .key{padding:20px;font-size:1.6rem;font-weight:700;background:var(--card);
-       border:1px solid var(--line);border-radius:14px;color:#fff;cursor:pointer}
-  .key:active{background:#2a2a2c}
+  .pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:340px;margin:18px auto}
+  .key{padding:24px 20px;font-size:1.9rem;font-weight:700;background:var(--card);
+       border:1px solid var(--line);border-radius:14px;color:#fff;cursor:pointer;
+       touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}   /* Block 214: taps land on finger-DOWN; double-tap zoom can no longer eat a digit */
+  .key:active,.key.hit214{background:#2a2a2c;transform:scale(.96);border-color:#0a84ff}
+  .key.spacer214{visibility:hidden;pointer-events:none}
   .dots{text-align:center;font-size:2rem;letter-spacing:.5rem;min-height:2.6rem}
   .msg{text-align:center;opacity:.75;min-height:1.4rem}
   .err{color:#ff6b6b}
@@ -936,6 +938,22 @@ const style = `<style>
       el.classList.add("tapfx208");
       setTimeout(function(){ el.classList.remove("tapfx208"); }, 450);
     }, true);
+  // Block 214 (Daniel): SHARED-TABLET WALK-AWAY LOGOUT. A marked tablet
+  // (Tools -> Tablet setup) signs out after 2 QUIET minutes — the timer only
+  // counts while the screen is visible and untouched, so working a checklist
+  // or shooting end-of-day photos in the camera app never trips it. The
+  // sliding server session (send()) stays as the 10-minute backstop.
+  if (/(^|; )sb_shared_ui=1/.test(document.cookie || "") &&
+      ["/tv", "/login", "/", "/h"].indexOf(location.pathname) === -1) {
+    var last214 = Date.now();
+    var poke214 = function(){ last214 = Date.now(); };
+    document.addEventListener("pointerdown", poke214, true);
+    document.addEventListener("keydown", poke214, true);
+    document.addEventListener("visibilitychange", poke214, true);
+    setInterval(function(){
+      if (!document.hidden && Date.now() - last214 > 120000) location.replace("/logout");
+    }, 10000);
+  }
   var skip = ["/tv","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
   document.addEventListener("DOMContentLoaded", function(){
@@ -1033,14 +1051,20 @@ const loginPage = (employees) => `<!doctype html>
       ${[1,2,3,4,5,6,7,8,9].map((n)=>`<button class="key" data-k="${n}">${n}</button>`).join("")}
       <button class="key" data-k="back">&#9003;</button>
       <button class="key" data-k="0">0</button>
-      <button class="key" data-k="go">&#10003;</button>
+      <button class="key spacer214" tabindex="-1"></button>
     </div>
   </div>
 </div>
 <script>
   // Plain-English note: this is deliberately simple phone/kiosk JS —
   // pick a name, tap digits, submit. No framework until Stage 3.
-  let who=null, entered="";
+  // Block 214 (Daniel: "make those numbers MORE touchable... it's very
+  // fickle"): digits register on POINTERDOWN — the instant the finger
+  // lands — instead of a full down-and-up "click" a sliding finger could
+  // cancel; touch-action:manipulation (in .key) stops double-tap zoom from
+  // eating fast repeat digits. The 4th digit AUTO-SUBMITS (checkmark
+  // retired — a wrong PIN clears the dots and you just type again).
+  let who=null, entered="", busy214=false;
   const q=(s)=>document.querySelector(s);
   q("#who").addEventListener("click",(ev)=>{
     const b=ev.target.closest(".name"); if(!b) return;
@@ -1054,23 +1078,33 @@ const loginPage = (employees) => `<!doctype html>
   q("#backBtn").onclick=()=>{ q("#pin").style.display="none"; q("#who").style.display="block"; };
   function paint(msg,isErr){ q("#dots").textContent="•".repeat(entered.length);
     const m=q("#msg"); m.textContent=msg||""; m.className="msg"+(isErr?" err":""); }
-  q(".pinpad").addEventListener("click",async(ev)=>{
-    const k=ev.target.closest(".key"); if(!k) return;
-    const v=k.dataset.k;
+  function key214(v){
+    if(busy214) return;
     if(v==="back"){ entered=entered.slice(0,-1); return paint(""); }
-    if(v==="go"){
-      if(entered.length!==4) return paint("PIN is 4 digits",true);
-      return send("/api/login",{id:who,pin:entered});
-    }
-    if(entered.length<4){ entered+=v; paint(""); }
+    if(entered.length<4){ entered+=v; paint("");
+      if(entered.length===4){ busy214=true; send("/api/login",{id:who,pin:entered}); } }
+  }
+  q(".pinpad").addEventListener("pointerdown",(ev)=>{
+    const k=ev.target.closest(".key"); if(!k||!k.dataset.k) return;
+    ev.preventDefault();
+    k.classList.add("hit214"); setTimeout(()=>k.classList.remove("hit214"),160);
+    key214(k.dataset.k);
+  });
+  q(".pinpad").addEventListener("click",(ev)=>ev.preventDefault());   // pointerdown already handled it
+  document.addEventListener("keydown",(ev)=>{   // physical keyboards work too
+    if(q("#pin").style.display==="none") return;
+    if(/^[0-9]$/.test(ev.key)) key214(ev.key);
+    else if(ev.key==="Backspace"){ ev.preventDefault(); key214("back"); }
   });
   async function send(url,payload){
     paint("Checking…");
-    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)});
-    const out=await r.json();
-    if(out.ok){ location.href = out.change_required ? "/change-pin" : "/home"; }
-    else { entered=""; paint(out.error||"Something went wrong",true); }
+    try {
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload)});
+      const out=await r.json();
+      if(out.ok){ location.href = out.change_required ? "/change-pin" : "/home"; return; }
+      entered=""; busy214=false; paint(out.error||"Something went wrong",true);
+    } catch(e){ entered=""; busy214=false; paint("Network hiccup — try again",true); }
   }
 </script></body></html>`;
 
@@ -1090,35 +1124,48 @@ const changePinPage = (first) => `<!doctype html>
     ${[1,2,3,4,5,6,7,8,9].map((n)=>`<button class="key" data-k="${n}">${n}</button>`).join("")}
     <button class="key" data-k="back">&#9003;</button>
     <button class="key" data-k="0">0</button>
-    <button class="key" data-k="go">&#10003;</button>
+    <button class="key spacer214" tabindex="-1"></button>
   </div>
 </div>
 <script>
-  let entered="", stage="set1", firstPin="";
+  // Block 214: same instant-tap pad as the login screen — pointerdown entry,
+  // no zoom-eaten digits, and the 4th digit auto-advances each stage.
+  let entered="", stage="set1", firstPin="", busy214=false;
   const q=(s)=>document.querySelector(s);
   function paint(msg,isErr){ q("#dots").textContent="•".repeat(entered.length);
     const m=q("#msg"); m.textContent=msg||""; m.className="msg"+(isErr?" err":""); }
-  q(".pinpad").addEventListener("click",async(ev)=>{
-    const k=ev.target.closest(".key"); if(!k) return;
-    const v=k.dataset.k;
-    if(v==="back"){ entered=entered.slice(0,-1); return paint(""); }
-    if(v==="go"){
-      if(entered.length!==4) return paint("PIN is 4 digits",true);
-      if(stage==="set1"){ firstPin=entered; entered=""; stage="set2";
-        q("#pinTitle").textContent="Type it once more to confirm"; return paint(""); }
-      if(entered!==firstPin){ stage="set1"; entered=""; firstPin="";
-        q("#pinTitle").textContent="They didn't match — choose YOUR 4-digit PIN";
-        return paint("Try again",true); }
-      paint("Saving…");
+  async function full214(){
+    if(stage==="set1"){ firstPin=entered; entered=""; stage="set2";
+      q("#pinTitle").textContent="Type it once more to confirm"; return paint(""); }
+    if(entered!==firstPin){ stage="set1"; entered=""; firstPin="";
+      q("#pinTitle").textContent="They didn't match — choose YOUR 4-digit PIN";
+      return paint("Try again",true); }
+    busy214=true; paint("Saving…");
+    try {
       const r=await fetch("/api/pin/change",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({pin:entered})});
       const out=await r.json();
-      if(out.ok){ location.href="/home"; }
-      else { stage="set1"; entered=""; firstPin="";
-        q("#pinTitle").textContent="Choose YOUR 4-digit PIN"; paint(out.error||"Something went wrong",true); }
-      return;
-    }
-    if(entered.length<4){ entered+=v; paint(""); }
+      if(out.ok){ location.href="/home"; return; }
+      stage="set1"; entered=""; firstPin=""; busy214=false;
+      q("#pinTitle").textContent="Choose YOUR 4-digit PIN"; paint(out.error||"Something went wrong",true);
+    } catch(e){ stage="set1"; entered=""; firstPin=""; busy214=false;
+      q("#pinTitle").textContent="Choose YOUR 4-digit PIN"; paint("Network hiccup — try again",true); }
+  }
+  function key214(v){
+    if(busy214) return;
+    if(v==="back"){ entered=entered.slice(0,-1); return paint(""); }
+    if(entered.length<4){ entered+=v; paint(""); if(entered.length===4) full214(); }
+  }
+  q(".pinpad").addEventListener("pointerdown",(ev)=>{
+    const k=ev.target.closest(".key"); if(!k||!k.dataset.k) return;
+    ev.preventDefault();
+    k.classList.add("hit214"); setTimeout(()=>k.classList.remove("hit214"),160);
+    key214(k.dataset.k);
+  });
+  q(".pinpad").addEventListener("click",(ev)=>ev.preventDefault());
+  document.addEventListener("keydown",(ev)=>{
+    if(/^[0-9]$/.test(ev.key)) key214(ev.key);
+    else if(ev.key==="Backspace"){ ev.preventDefault(); key214("back"); }
   });
 </script></body></html>`;
 
@@ -1160,12 +1207,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   ${ah.now && !state.clockedIn ? `
   <div id="ahp" style="display:none;background:var(--card);border:1px solid #7a5900;border-radius:14px;padding:16px;margin-top:14px">
     ${ah.approvers.length && ah.reasons.length ? `
-    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Three quick things:</p>
+    <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. Two quick taps${ah.lastAppr || ah.lastReason ? " (your last answers are pre-picked — change anything that's different)" : ""}:</p>
     <p class="msg" style="margin-top:10px">Who approved it?</p>
-    <div class="grid">${ah.approvers.map((a) => `<button class="name ahap" data-appr="${a.id}" style="opacity:.75">${a.name}</button>`).join("")}</div>
+    <div class="grid">${ah.approvers.map((a) => `<button class="name ahap" data-appr="${a.id}" style="${a.id === ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
     <p class="msg" style="margin-top:10px">What's it for?</p>
-    <div class="grid">${ah.reasons.map((r) => `<button class="name ahre" data-ahreason="${r}" style="opacity:.75">${r}</button>`).join("")}</div>
-    <input id="ahplan" placeholder="What are you here to get done?" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px">
+    <div class="grid">${ah.reasons.map((r) => `<button class="name ahre" data-ahreason="${r}" style="${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
+    <input id="ahplan" maxlength="200" placeholder="Anything to add? (optional)" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">
     <p style="text-align:center;margin-top:12px">
       <button class="name" id="ahgo" style="display:inline-block;background:#1d5a2d">Clock in — after hours</button>
       <button class="back" id="ahback" style="margin-left:12px">cancel</button>
@@ -1298,7 +1345,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   }
   // Q112: outside shop hours a line tap opens the governance panel first.
   const AH = ${ah.now && !state.clockedIn ? "true" : "false"};
-  let ahLine = 0, ahAppr = "", ahReason = "";
+  let ahLine = 0, ahAppr = "${ah.lastAppr || ""}", ahReason = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214: last session pre-picked
   document.getElementById("in").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-line]"); if(!b) return;
     if (AH) { ahLine = Number(b.dataset.line);
@@ -1886,14 +1933,14 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
          ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
-         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — three quick questions, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — two quick taps, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
          ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
-           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — two quick taps${ah.lastAppr || ah.lastReason ? " (your last answers are pre-picked)" : ""}:</p>
            <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
-           <div>${ah.approvers.map((a) => `<button class="b ahapW" data-appr="${a.id}" style="margin:4px 6px 0 0;opacity:.75">${a.name}</button>`).join("")}</div>
+           <div>${ah.approvers.map((a) => `<button class="b ahapW" data-appr="${a.id}" style="margin:4px 6px 0 0;${a.id === ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
            <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
-           <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;opacity:.75">${r}</button>`).join("")}</div>
-           <input id="ahplanW" maxlength="200" placeholder="What are you here to get done?" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"><br>
+           <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
+           <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px"><br>
            <button class="b grn" style="margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
            <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
          </div>` : ""}`}
@@ -1979,7 +2026,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     if (p106) { p106.style.display = "block"; return; }
     post("/api/clock/in", { line_id: 9 }, btn);
   }
-  let ahApprW = "", ahReasonW = "";
+  let ahApprW = "${ah.lastAppr || ""}", ahReasonW = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214: last session pre-picked
   document.addEventListener("click", (e) => {
     const a = e.target.closest(".ahapW"); if (a) { ahApprW = a.dataset.appr;
       document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
@@ -2057,14 +2104,14 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
          <div id="ahmsgV107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
          <button class="wbtn" style="background:#1d5a2d;margin-top:8px" onclick="wrapGoV107(this)">Submit wrap-up &amp; clock out</button>
        </div>` : ""}<button class="wbtn" style="background:#5c4a10" onclick="wclk('/api/clock/out',{reason:'Lunch'},this)">OUT FOR LUNCH</button> <button class="wbtn" style="background:#5a1d1d" onclick="wclk('/api/clock/out',{reason:'End of day'},this)">END OF DAY</button><div style="margin-top:8px">${(clk.reasons || []).filter((r) => r !== "Lunch" && r !== "End of day").map((r) => `<button class="wbtn" style="background:#2c2c2e;font-size:.82rem;padding:8px 14px" onclick="wclk('/api/clock/out',{reason:'${r.replace(/'/g, "\\'")}'},this)">${r}</button>`).join(" ")}</div><div id="woth97" style="display:none;margin-top:8px"><input id="wothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;width:220px;font-size:16px"> <button class="wbtn" style="background:#1d5a2d" onclick="wclk('/api/clock/out',{reason:window.__othW97,note:document.getElementById('wothn97').value},this)">Clock out</button></div>`
-    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — three quick questions, then a normal shift.</div>
+    : `<button class="wbtn" style="background:#1d5a2d;font-size:1.2rem;padding:16px 34px" onclick="wClockIn106(this)">CLOCK IN</button>${clk.ah && clk.ah.now ? `<div style="color:#ffd60a;font-weight:700;margin-top:6px">After hours — two quick taps, then a normal shift.</div>
       <div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:10px auto 0;text-align:left;max-width:560px">
-        <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — three quick things:</p>
+        <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — two quick taps${clk.ah.lastAppr || clk.ah.lastReason ? " (your last answers are pre-picked)" : ""}:</p>
         <p style="opacity:.7;margin:6px 0 4px">Who approved it?</p>
-        <div>${clk.ah.approvers.map((a) => `<button class="wbtn ahapW" data-appr="${a.id}" style="background:#2c2c2e;opacity:.75">${a.name}</button>`).join("")}</div>
+        <div>${clk.ah.approvers.map((a) => `<button class="wbtn ahapW" data-appr="${a.id}" style="background:#2c2c2e;${a.id === clk.ah.lastAppr ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${a.name}</button>`).join("")}</div>
         <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
-        <div>${clk.ah.reasons.map((r) => `<button class="wbtn ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="background:#2c2c2e;opacity:.75">${r}</button>`).join("")}</div>
-        <input id="ahplanW" maxlength="200" placeholder="What are you here to get done?" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px"><br>
+        <div>${clk.ah.reasons.map((r) => `<button class="wbtn ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="background:#2c2c2e;${r === clk.ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
+        <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;font-size:16px"><br>
         <button class="wbtn" style="background:#1d5a2d;margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
         <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
       </div>` : ""}`}</div>
@@ -2094,7 +2141,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
     if (p106) { p106.style.display = "block"; return; }
     wclk("/api/clock/in", { line_id: ${clk && clk.lineId ? clk.lineId : 0} }, btn);
   }
-  window.__ahApW = ""; window.__ahReW = "";
+  window.__ahApW = "${clk && clk.ah ? clk.ah.lastAppr || "" : ""}"; window.__ahReW = "${clk && clk.ah ? (clk.ah.lastReason || "").replace(/"/g, '\\"') : ""}";   // Block 214: last session pre-picked
   document.addEventListener("click", (e) => {
     const a = e.target.closest(".ahapW"); if (a) { window.__ahApW = a.dataset.appr;
       document.querySelectorAll(".ahapW").forEach(x => { x.style.opacity = ".75"; x.style.outline = "none"; });
@@ -2976,7 +3023,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${afterHours.map((s) => `<div class="qrow" style="display:block;padding:10px 0">
       <div style="font-size:1.15rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
       <div style="margin:2px 0 0">${s.lineName}</div>
-      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved ${s.plan ? ` · plan: "${s.plan}"` : ""}</div>
       ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock)</div>`}
       <div style="margin-top:8px">${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? (isAdmin ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="document.getElementById('dcm-${s.id}').style.display='block';document.getElementById('dcmr-${s.id}').focus()">Decline</button>` : `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN sign-off — hours held till then.</span>`) : ""}</div>
       ${s.ended && isAdmin ? `<div id="dcm-${s.id}" style="display:none;margin-top:6px"><input id="dcmr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px"> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>declAh110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
@@ -3896,12 +3943,16 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     ${afterHours.map((s) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
       <div style="font-size:1.2rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
       <div style="margin:2px 0 0">${s.lineName}</div>
-      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved · plan: "${s.plan}"</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved ${s.plan ? ` · plan: "${s.plan}"` : ""}</div>
       ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock — sign off after the wrap-up lands)</div>`}
-      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="b" onclick="ahConf108('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<button class="b grn" onclick="arm(this,()=>ahSign108('${s.id}',this))">Sign off — count the hours</button> <button class="b red" onclick="document.getElementById('dc-${s.id}').style.display='block';document.getElementById('dcr-${s.id}').focus()">Decline</button>` : ""}</div>
-      ${s.ended ? `<div id="dc-${s.id}" style="display:none;margin-top:6px"><input id="dcr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px"> <button class="b red" onclick="arm(this,()=>ahDecl110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
+      <!-- Block 214 (Daniel: "should just be two... one tap"): APPROVE + DENY.
+           The old "Confirm approval" was for managers vouching for the claim
+           (they still can, from their console); an admin Approve auto-confirms
+           server-side, so it was a wasted tap here. No armed second tap. -->
+      <div style="margin-top:8px">${s.ended ? `<button class="b grn" onclick="ahSign108('${s.id}',this)">&#10003; Approve — count the hours</button> <button class="b red" onclick="document.getElementById('dc-${s.id}').style.display='block';document.getElementById('dcr-${s.id}').focus()">Deny</button>` : ""}</div>
+      ${s.ended ? `<div id="dc-${s.id}" style="display:none;margin-top:6px"><input id="dcr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px"> <button class="b red" onclick="ahDecl110('${s.id}',this)">Deny — hours don't count</button></div>` : ""}
     </div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Signing off releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Managers can confirm the approval claim from the Manager console; the sign-off itself is yours.</div>
+    <div style="opacity:.5;font-size:.85rem;margin-top:8px">Approve releases the session's hours onto the timecard — until then they're HELD and flagged on the Pay Worksheet. Deny needs one typed line for the record; the person is notified. Both are one tap.</div>
   </div>` : ""}
 
   <div class="panel" id="people"><h3>People</h3>
@@ -4164,7 +4215,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       if (out.ok) return location.reload();
       showErrA(btn, out.error || "Something went wrong");
     } catch(e){ showErrA(btn, "Network hiccup — try again"); }
-    btn.disabled = false; btn.textContent = "Sign off — count the hours";
+    btn.disabled = false; btn.textContent = "\u2713 Approve — count the hours";
   }
   // Block 110: decline with a typed reason — refuses the hours for good.
   async function ahDecl110(id, btn){
@@ -7156,9 +7207,18 @@ http.createServer(async (req, res) => {
     // Block 97: shared-tablet sliding sign-out — each page load on a marked
     // device renews a 30-minute window; 30 quiet minutes = signed out. Skips
     // /logout so signing out sticks. Phones (unmarked) are untouched.
-    if (String(type).startsWith("text/html") && url.pathname !== "/logout" && /sb_shared=1/.test(req.headers.cookie || "")) {
+    // Block 214: shared tablets renew on page views AND on action POSTs (a
+    // photo upload or step tap keeps you signed in mid-flow), window now 10
+    // minutes — the 2-minute walk-away logout is the client watchdog in the
+    // bell script; this is the backstop. Never clobber a cookie a route
+    // already set (login/logout/tablet mint their own).
+    if ((String(type).startsWith("text/html") || (req.method === "POST" && url.pathname.startsWith("/api/")))
+        && url.pathname !== "/logout" && !res.getHeader("Set-Cookie") && /sb_shared=1/.test(req.headers.cookie || "")) {
       const sid97 = readSession(req.headers.cookie);
-      if (sid97) res.setHeader("Set-Cookie", `sb_session=${makeSession(sid97, 30 * 60 * 1000)}; Path=/; HttpOnly; SameSite=Lax`);
+      if (sid97) res.setHeader("Set-Cookie", [
+        `sb_session=${makeSession(sid97, 10 * 60 * 1000)}; Path=/; HttpOnly; SameSite=Lax`,
+        "sb_shared_ui=1; Path=/; Max-Age=31536000; SameSite=Lax",   // the client watchdog's (non-secret) hint — self-heals tablets marked before Block 214
+      ]);
     }
     // Block 212 (v201 SPEED): gzip text responses when the browser accepts it
     // (every browser does) — a 150 KB page becomes ~20 KB on shop Wi-Fi.
@@ -7265,7 +7325,10 @@ http.createServer(async (req, res) => {
       // sliding session (30 min, renewed per page in send()); personal phones
       // keep the 12-hour day session.
       const shared97 = /sb_shared=1/.test(req.headers.cookie || "");
-      res.setHeader("Set-Cookie", `sb_session=${makeSession(id, shared97 ? 30 * 60 * 1000 : undefined)}; Path=/; HttpOnly; SameSite=Lax`);
+      res.setHeader("Set-Cookie", shared97
+        ? [`sb_session=${makeSession(id, 10 * 60 * 1000)}; Path=/; HttpOnly; SameSite=Lax`,   // Block 214: 10-min backstop; the 2-min walk-away logout is client-side
+           "sb_shared_ui=1; Path=/; Max-Age=31536000; SameSite=Lax"]
+        : `sb_session=${makeSession(id)}; Path=/; HttpOnly; SameSite=Lax`);
       // Q114: a temp-code login works — but goes straight to /change-pin.
       return json(200, { ok: true, change_required: Boolean(emp.must_change_pin) });
     }
@@ -7313,15 +7376,18 @@ http.createServer(async (req, res) => {
         // three questions, same claim-then-confirm, now on this surface too.
         const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
         const ahNowW = isAfterHoursDept(Date.now(), hrsW212, "Warehouse");   // Block 195: warehouse runs from 6
-        const [ahApprW, ahReasW, openAhWRows] = await Promise.all([
+        const [ahApprW, ahReasW, openAhWRows, lastAhWRows214] = await Promise.all([
           (ahNowW && !clockedInW106) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
           (ahNowW && !clockedInW106) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
           clockedInW106 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+          (ahNowW && !clockedInW106) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
         ]);
         const [openAhW] = openAhWRows;
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
-            { now: ahNowW, approvers: ahApprW.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW) }));
+            { now: ahNowW, approvers: ahApprW.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
+              lastAppr: (lastAhWRows214[0] && ahApprW.some((a) => a.id === lastAhWRows214[0].approved_by)) ? lastAhWRows214[0].approved_by : "",
+              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }));
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
@@ -7342,14 +7408,17 @@ http.createServer(async (req, res) => {
           // questionnaire and wrap-note the floor and warehouse get.
           const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
           const ahNow92 = isAfterHoursDept(Date.now(), hrs92, emp.department);   // Block 195: dept-aware open
-          const [ahAp92, ahRe92, openAh92Rows] = await Promise.all([
+          const [ahAp92, ahRe92, openAh92Rows, lastAh92Rows214] = await Promise.all([
             (ahNow92 && !in92) ? db(`employee?select=id,first_name,last_name&role=in.(manager,admin)&active=is.true&order=first_name`) : [],
             (ahNow92 && !in92) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
             in92 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+            (ahNow92 && !in92) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
           ]);
           const [openAh92] = openAh92Rows;
           clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department],
-            ah: { now: ahNow92, approvers: ahAp92.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) } };
+            ah: { now: ahNow92, approvers: ahAp92.map((a) => ({ id: a.id, name: `${a.first_name} ${(a.last_name || "")[0] || ""}.` })), reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
+              lastAppr: (lastAh92Rows214[0] && ahAp92.some((a) => a.id === lastAh92Rows214[0].approved_by)) ? lastAh92Rows214[0].approved_by : "",
+              lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
         return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
       }
@@ -7443,13 +7512,14 @@ http.createServer(async (req, res) => {
       // Block 212 (v201 SPEED): the clock screen's six reads in one round trip
       // (the time-off reason list is tiny — fetched alongside, applied only
       // when the toggle is on, same result as before).
-      const [ahApprRows212, ahReasonRows, openAhRows212, toTogRows212, toReasonRows213, toMineRows] = await Promise.all([
+      const [ahApprRows212, ahReasonRows, openAhRows212, toTogRows212, toReasonRows213, toMineRows, lastAhRows214] = await Promise.all([
         (ahNow && !clockedIn) ? db(`employee?select=id,first_name,last_name&active=is.true&role=in.(manager,admin)&order=first_name`) : [],
         (ahNow && !clockedIn) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
         clockedIn ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
         db(`feature_toggle?select=enabled&key=eq.time_off_requests`),
         db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false&order=sort_order`),
         db(`time_off_request?select=start_date,end_date,reason,status,decision_note&employee_id=eq.${empId}&or=(status.eq.pending,end_date.gte.${phxDate(Date.now())})&order=start_date.desc&limit=8`),
+        (ahNow && !clockedIn) ? db(`after_hours_session?select=approved_by,reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214: prefill last approver + reason
       ]);
       const ahApprovers = ahApprRows212.map((a) => ({ id: a.id, name: `${a.first_name} ${a.last_name}` }));
       const [openAh] = openAhRows212;
@@ -7479,7 +7549,9 @@ http.createServer(async (req, res) => {
       }
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
-          { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) },
+          { now: ahNow, approvers: ahApprovers, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh),
+            lastAppr: (lastAhRows214[0] && ahApprovers.some((a) => a.id === lastAhRows214[0].approved_by)) ? lastAhRows214[0].approved_by : "",
+            lastReason: (lastAhRows214[0] && ahReasonRows.some((r) => r.label === lastAhRows214[0].reason)) ? lastAhRows214[0].reason : "" },
           { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126 }));
     }
 
@@ -7598,8 +7670,12 @@ http.createServer(async (req, res) => {
       const hrsIn = await shopHours();
       const [meDep195] = await db(`employee?select=department&id=eq.${empId}`);   // Block 195: warehouse clocks in from 6
       if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)) {
-        if (!approved_by || !ah_reason || !String(ah_plan || "").trim())
-          return json(400, { ok: false, error: "After hours needs three things: who approved it, what it's for, and what you're here to do" });
+        // Block 214 (Daniel's ruling): the typed PLAN is now OPTIONAL — the
+        // approval claim + reason stay required (that's the governance), and
+        // the required wrap-up note at clock-out still says what got done.
+        if (!approved_by || !ah_reason)
+          return json(400, { ok: false, error: "After hours needs two things: who approved it and what it's for" });
+        const plan214 = String(ah_plan || "").trim();
         const [appr] = await db(`employee?select=id,first_name,role&id=eq.${approved_by}&active=is.true`);
         if (!appr || (appr.role !== "manager" && appr.role !== "admin"))
           return json(400, { ok: false, error: "The approver has to be a manager, admin or owner" });
@@ -7607,12 +7683,12 @@ http.createServer(async (req, res) => {
         const [lnA] = await db(`line?select=name&id=eq.${line_id}`);
         await db("after_hours_session", { method: "POST", body: JSON.stringify({
           employee_id: empId, line_id, approved_by, reason: String(ah_reason),
-          plan: String(ah_plan).trim(), started_at: new Date(inAtMs).toISOString() }) });
-        logEvent("afterhours.start", empId, { line_id, approved_by, reason: ah_reason, plan: String(ah_plan).trim() });
+          plan: plan214, started_at: new Date(inAtMs).toISOString() }) });
+        logEvent("afterhours.start", empId, { line_id, approved_by, reason: ah_reason, plan: plan214 });
         const adminsA = await db(`employee?select=id&active=is.true&role=eq.admin`);
         notify("afterhours.claimed", [...new Set([approved_by, ...adminsA.map((a) => a.id)])],
           `After hours: ${me2 ? me2.first_name + " " + ((me2.last_name || "")[0] || "") + "." : "someone"} clocked in`,
-          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved. Plan: ${String(ah_plan).trim()}. Confirm from the Manager console.`, "/manager");
+          `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason} — says ${appr.first_name} approved.${plan214 ? ` Plan: ${plan214}.` : ""} Confirm from the Manager console.`, "/manager");
       }
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
@@ -10400,8 +10476,8 @@ self.addEventListener("notificationclick", (e) => {
   ${navBar95(true)}
   <h2>This device</h2>
   <div style="text-align:center;margin:8px 0 18px;padding:16px;border-radius:14px;font-weight:800;font-size:1.15rem;${isShared97 ? "background:#3a2f10;color:#ffd60a;border:2px solid #7a5900" : "background:#1c1c1e;color:#8e8e93;border:2px solid #3a3a3c"}">
-    ${isShared97 ? "SHARED TABLET — everyone signs out after 30 quiet minutes" : "PERSONAL DEVICE — normal 12-hour sign-in"}</div>
-  <p style="text-align:center;opacity:.7;font-size:.95rem">Mark the shop's shared tablets so a walked-away screen signs itself out. Staff phones should stay unmarked.</p>
+    ${isShared97 ? "SHARED TABLET — signs out after 2 quiet minutes" : "PERSONAL DEVICE — normal 12-hour sign-in"}</div>
+  <p style="text-align:center;opacity:.7;font-size:.95rem">Mark the shop's shared tablets so a walked-away screen signs itself out — 2 minutes with no touches brings up the login screen for the next person (time in the camera doesn't count, so photo runs are safe). Staff phones should stay unmarked.</p>
   <p style="text-align:center;margin-top:16px">
     ${isShared97
       ? `<button class="name" style="display:inline-block;width:auto;padding:14px 26px" onclick="setT97(false,this)">Unmark — back to personal device</button>`
@@ -10423,8 +10499,9 @@ self.addEventListener("notificationclick", (e) => {
       const [adminT97, failT97] = await requireAdmin(); if (failT97) return failT97;
       const pT97 = await body(req);
       res.setHeader("Set-Cookie", pT97.shared
-        ? "sb_shared=1; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
-        : "sb_shared=; Path=/; Max-Age=0");
+        ? ["sb_shared=1; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax",
+           "sb_shared_ui=1; Path=/; Max-Age=31536000; SameSite=Lax"]   // Block 214: readable twin — the walk-away watchdog checks this one
+        : ["sb_shared=; Path=/; Max-Age=0", "sb_shared_ui=; Path=/; Max-Age=0"]);
       logEvent(pT97.shared ? "device.shared_marked" : "device.shared_unmarked", adminT97, {});
       return json(200, { ok: true });
     }
