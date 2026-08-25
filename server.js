@@ -2595,8 +2595,8 @@ const progressReportPage210 = (b, family, days) => {
     <h2>${fmt(d.ds)}</h2>
     ${d.milestones.map((m) => `<div class="mile">&#9733; ${escH(m)}</div>`).join("")}
     ${d.steps.length ? `<div class="steps"><b>Work completed</b><br>${d.steps.map((x) => escH(x)).join(" &middot; ")}</div>` : ""}
-    ${d.notes.map((n) => `<div class="${n.hidden ? "hiddenitem" : ""}"><div class="note">&ldquo;${escH(n.note)}&rdquo; &mdash; the build crew</div>
-      <div class="modrow noprint">${n.hidden ? `<span class="hidtag">HIDDEN — will not print</span> <button class="modbtn" onclick="modNote211('unhide','${n.id}')">Restore</button>` : `<button class="modbtn" onclick="modEdit211('${n.id}', this)">&#9998; Edit</button><button class="modbtn warn" onclick="modNote211('hide','${n.id}')">Hide from report</button>`}</div>
+    ${d.notes.map((n) => `<div class="${n.hidden ? "hiddenitem" : ""}"><div class="note">&ldquo;${escH(n.note)}&rdquo; &mdash; the build crew${n.step ? ` &middot; ${escH(n.step)}` : ""}</div>
+      <div class="modrow noprint">${n.hidden ? `<span class="hidtag">HIDDEN — will not print</span> <button class="modbtn" onclick="modNote211('unhide','${n.id}','${n.src || "build"}')">Restore</button>` : `<button class="modbtn" onclick="modEdit211('${n.id}', this, '${n.src || "build"}')">&#9998; Edit</button><button class="modbtn warn" onclick="modNote211('hide','${n.id}','${n.src || "build"}')">Hide from report</button>`}</div>
       ${n.hidden ? "" : `<div class="noprint" hidden data-orig="${escH(n.note)}"></div>`}</div>`).join("")}
     ${d.photos.length ? `<div class="shots">${d.photos.map((p) => `<div class="${p.hidden ? "hiddenitem" : ""}"><img src="/photo/${p.id}" alt="build photo">
       <div class="modrow noprint">${p.hidden ? `<span class="hidtag">HIDDEN</span> <button class="modbtn" onclick="modPhoto211('${p.id}', false)">Restore</button>` : `<button class="modbtn warn" onclick="modPhoto211('${p.id}', true)">Hide from report</button>`}</div></div>`).join("")}</div>` : ""}
@@ -2615,13 +2615,13 @@ const progressReportPage210 = (b, family, days) => {
       alert(out.error || "Something went wrong");
     } catch (e) { alert("Network hiccup — try again"); }
   }
-  function modNote211(action, id) { modCall211("/api/build/note-admin", { action: action, note_id: id }); }
-  function modEdit211(id, btn) {
+  function modNote211(action, id, src) { modCall211("/api/build/note-admin", { action: action, note_id: id, src: src || "build" }); }
+  function modEdit211(id, btn, src) {
     const orig = btn.parentElement.nextElementSibling ? btn.parentElement.nextElementSibling.dataset.orig : "";
     const txt = prompt("Edit this note (the customer may read it):", orig || "");
     if (txt === null) return;
     if (!txt.trim()) return alert("To remove it entirely, use Hide instead.");
-    modCall211("/api/build/note-admin", { action: "edit", note_id: id, note: txt.trim() });
+    modCall211("/api/build/note-admin", { action: "edit", note_id: id, note: txt.trim(), src: src || "build" });
   }
   function modAdd211() {
     const d = document.getElementById("addD211").value;
@@ -7544,7 +7544,7 @@ http.createServer(async (req, res) => {
           // Block 212 (v201 SPEED): the cab screen is the floor's whole day —
           // its nine build-dependent reads now land in ONE round trip.
           const mid209 = phxDayStart(phxDate(Date.now()));
-          const [tasks, notes, tphotos, folks, prodMinRows212, cShots, progTogRows212, ph209, nt209q212] = await Promise.all([
+          const [tasks, notes, tphotos, folks, prodMinRows212, cShots, progTogRows212, ph209, nt209q212, tn209q218] = await Promise.all([
             db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build.id}&order=day_no,sort_order`),
             // Per-task documentation (file 11) rides along with the task list.
             db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`),
@@ -7556,8 +7556,9 @@ http.createServer(async (req, res) => {
             db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`),
             db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`),
             db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
-            db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),
+            db(`build_photo?select=id&build_id=eq.${build.id}&kind=in.(progress,finish,task)&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),   // Block 218 (Daniel): STEP photos count as today's update too
             db(`build_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),
+            db(`task_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),   // Block 218: step notes count too
           ]);
           const people = {}; for (const p of folks) people[p.id] = p.first_name;
           // Q111: Shop time joins the switch picker — a tech can step off
@@ -7572,8 +7573,7 @@ http.createServer(async (req, res) => {
           // gate for the whole crew — the customer needs one update, not
           // one per tech.)
           const [progTog209] = progTogRows212;
-          const nt209 = ph209.length ? [] : nt209q212;
-          const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209.length) };
+          const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209q212.length || tn209q218.length) };   // Block 218: any photo or note today — progress, step or finish — satisfies the ask
           return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }, prog209));
         }
         // No active cab on this line -> fall through to the clock screen.
@@ -7825,10 +7825,14 @@ http.createServer(async (req, res) => {
             const [bG209] = await db(`build?select=id&line_id=eq.${lastOut107.line_id}&state=in.(active,rework,fix_job)&limit=1`);
             if (bG209) {
               const d0209 = phxDayStart(phxDate(Date.now()));
-              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=eq.progress&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
+              // Block 218 (Daniel): STEP photos and STEP notes satisfy the gate
+              // too — a tech who documented a step during the day already gave
+              // the customer their update.
+              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=in.(progress,finish,task)&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
               if (!phG.length) {
                 const ntG = await db(`build_note?select=id&build_id=eq.${bG209.id}&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
-                if (!ntG.length)
+                const tnG = ntG.length ? [{}] : await db(`task_note?select=id&build_id=eq.${bG209.id}&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
+                if (!ntG.length && !tnG.length)
                   return json(400, { ok: false, need_progress209: true, error: "The owner of this cab gets a progress update today — snap a photo (or add a note) on your line screen, then clock out." });
               }
             }
@@ -8101,11 +8105,13 @@ http.createServer(async (req, res) => {
       // photo/note batch runs over the on-line ids + candidate done ids (a
       // superset of the final doneB — mk211 filters per build, extras unused).
       const allIds = [...new Set([...onB.map((b2) => b2.id), ...doneIds])];
-      const [doneB, phAll, ntAll] = await Promise.all([
+      const [doneB, phAll, ntAllB, tnAll218] = await Promise.all([
         doneIds.length ? db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [],
-        allIds.length ? db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish)&limit=2000`) : [],
+        allIds.length ? db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish,task)&limit=2000`) : [],   // Block 218: step photos count
         allIds.length ? db(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [],
+        allIds.length ? db(`task_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [],   // Block 218: step notes count
       ]);
+      const ntAll = [...ntAllB, ...tnAll218];
       const famOf211 = Object.fromEntries(partsH.map((p2) => [p2.part_number, p2.family]));
       const midH = phxDayStart(phxDate(Date.now()));
       const mk211 = (b2, withToday) => {
@@ -8131,20 +8137,31 @@ http.createServer(async (req, res) => {
       if (!/^[\w.\- ]{1,40}$/.test(ordRep)) return send(404, "text/plain", "Not found");
       const [bRep] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ordRep)}&order=created_at.desc&limit=1`);
       if (!bRep) return send(404, "text/plain; charset=utf-8", "No build on record for that order.");
-      // Block 212 (v201 SPEED): the five reads only need bRep — one round trip.
-      const [prodRep, tasksRep, photosRep, notesRep, milesRep] = await Promise.all([
+      // Block 212 (v201 SPEED): the reads only need bRep — one round trip.
+      // Block 218 (Daniel): STEP photos + STEP notes join the report feed —
+      // "the individual task photos and notes NEEDS to be in the customer
+      // report" — so the under-every-step Add photo/note link now feeds the
+      // customer document (admin hides anything that shouldn't ship).
+      const [prodRep, tasksRep, photosRep, notesRep, milesRep, tnotesRep218, taskNamesRep218] = await Promise.all([
         db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`),
         db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`),
-        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish)&order=created_at.asc&limit=300`),
+        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish,task)&order=created_at.asc&limit=300`),
         db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
         db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`),
+        db(`task_note?select=id,task_id,note,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
+        db(`task?select=id,name&build_id=eq.${bRep.id}&limit=600`),
       ]);
       const dayMap210 = {};
       const dayOf210 = (ts) => { const ds = phxDate(new Date(ts).getTime()); return dayMap210[ds] = dayMap210[ds] || { ds, milestones: [], steps: [], notes: [], photos: [] }; };
       for (const t of tasksRep) if (t.completed_at) dayOf210(t.completed_at).steps.push(t.name);
       for (const p of photosRep) dayOf210(p.created_at).photos.push({ id: p.id, kind: p.kind, hidden: !!p.hidden });
       for (const n of notesRep) { const dsN = n.note_date || phxDate(new Date(n.created_at).getTime());
-        (dayMap210[dsN] = dayMap210[dsN] || { ds: dsN, milestones: [], steps: [], notes: [], photos: [] }).notes.push({ id: n.id, note: n.note, hidden: !!n.hidden }); }
+        (dayMap210[dsN] = dayMap210[dsN] || { ds: dsN, milestones: [], steps: [], notes: [], photos: [] }).notes.push({ id: n.id, note: n.note, hidden: !!n.hidden, src: "build" }); }
+      // Block 218: step notes ride under the day they were written, labeled
+      // with their step's name.
+      const stepName218 = {}; for (const tN of taskNamesRep218) stepName218[tN.id] = tN.name;
+      for (const tn of tnotesRep218) { const dsT = phxDate(new Date(tn.created_at).getTime());
+        (dayMap210[dsT] = dayMap210[dsT] || { ds: dsT, milestones: [], steps: [], notes: [], photos: [] }).notes.push({ id: tn.id, note: tn.note, hidden: !!tn.hidden, src: "task", step: stepName218[tn.task_id] || "" }); }
       const MLBL210 = { "build.manager_started": "Cab entered production", "build.start": "Cab entered production",
         "build.production_complete": "Metalwork complete — moved to the Body Shop", "build.self_passed": "Metalwork complete — moved to the Body Shop" };
       for (const m of milesRep) { const l = MLBL210[m.event_type]; if (l) dayOf210(m.at).milestones.push(l); }
@@ -11048,17 +11065,23 @@ self.addEventListener("notificationclick", (e) => {
         logEvent("build.note_admin", empA, { action: "add", build_id: pA.build_id, note: txtA, note_date: rowA.note_date || null });
         return json(200, { ok: true });
       }
-      if (!isUuid(pA.note_id)) return json(400, { ok: false, error: "That note reference isn't valid" });
+      // Block 218: STEP notes are moderatable too — src:"task" targets
+      // task_note (uuid ids), the default targets build_note. AUDIT FIX
+      // caught here: build_note ids are BIGINTs (migration 0053), so the old
+      // isUuid-only check would have refused every real crew-note edit/hide.
+      const src218 = pA.src === "task" ? "task_note" : "build_note";
+      const idOk218 = src218 === "task_note" ? isUuid(String(pA.note_id)) : /^\d{1,12}$/.test(String(pA.note_id));
+      if (!idOk218) return json(400, { ok: false, error: "That note reference isn't valid" });
       if (pA.action === "edit") {
         const txtE = String(pA.note || "").trim().slice(0, 500);
         if (!txtE) return json(400, { ok: false, error: "Write the note first" });
-        await db(`build_note?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ note: txtE, edited_by: empA, edited_at: new Date().toISOString() }) });
-        logEvent("build.note_admin", empA, { action: "edit", note_id: pA.note_id, note: txtE });
+        await db(`${src218}?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ note: txtE, edited_by: empA, edited_at: new Date().toISOString() }) });
+        logEvent("build.note_admin", empA, { action: "edit", note_id: pA.note_id, src: src218, note: txtE });
         return json(200, { ok: true });
       }
       if (pA.action === "hide" || pA.action === "unhide") {
-        await db(`build_note?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ hidden: pA.action === "hide", edited_by: empA, edited_at: new Date().toISOString() }) });
-        logEvent("build.note_admin", empA, { action: pA.action, note_id: pA.note_id });
+        await db(`${src218}?id=eq.${pA.note_id}`, { method: "PATCH", body: JSON.stringify({ hidden: pA.action === "hide", edited_by: empA, edited_at: new Date().toISOString() }) });
+        logEvent("build.note_admin", empA, { action: pA.action, note_id: pA.note_id, src: src218 });
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown action" });
