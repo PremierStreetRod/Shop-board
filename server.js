@@ -699,24 +699,33 @@ async function nudgeTimeFor(dow) {
 // Block 206 (owner ruling, Sat 8/22): LONG-DAY check — "if anyone is on the
 // clock from clock in to end of day in which they are working more than 8
 // hours, a notification should be sent to admin and accounting managers to
-// VERIFY if they did or did not take a lunch that day." No lunch-window
-// guessing (people eat at 10, 12, or 1) — the trigger is simply a day
-// totaling over 8h. Runs after any clock-out, including the sweeper's
-// auto-outs. Hourly people only (a salary/owner day is not a pay matter);
-// ONE notice per person per Phoenix day; a 3-minute cushion so an 8h01m
-// punch doesn't nag anybody.
+// VERIFY if they did or did not take a lunch that day." Block 219 (Daniel,
+// 8/25, after two end-of-days of alert floods): the trigger is over 8h AND
+// NO LUNCH PUNCH on the day. "it should only push when they work more than
+// 8 hours AND DIDNT clock out for lunch... thats a flag THAT they forgot to
+// clock out for lunch. i dont want to be notified any time anyone works
+// more than 8 and DID take a lunch legitimately." A lunch = any mid-day
+// off-clock gap of 15+ minutes between a clock-out and the next clock-in
+// (the 15-minute floor keeps accidental double-taps — out/in seconds apart,
+// Michael's 8/22 pattern — from masquerading as a lunch and muting a real
+// flag). Still: runs after any clock-out including the sweeper's auto-outs,
+// hourly people only, ONE notice per person per Phoenix day, 3-minute
+// cushion so an 8h01m punch doesn't nag anybody.
 async function longDayCheck206(empId, outIso) {
   try {
     const dayMs = new Date(outIso).getTime();
     const d0 = phxDayStart(phxDate(dayMs));
     const evs = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(d0).toISOString()}&claimed_at=lt.${new Date(d0 + 86400000).toISOString()}&order=claimed_at.asc`);
-    let open206 = null, mins = 0;
+    let open206 = null, mins = 0, lastOut219 = null, lunch219 = false;
     for (const ev of evs) {
       const t = new Date(ev.claimed_at).getTime();
-      if (ev.kind === "clock_in") open206 = t;
-      else if (open206 != null) { mins += (t - open206) / 60000; open206 = null; }
+      if (ev.kind === "clock_in") {
+        if (lastOut219 != null && t - lastOut219 >= 15 * 60000) lunch219 = true;
+        open206 = t;
+      } else if (open206 != null) { mins += (t - open206) / 60000; open206 = null; lastOut219 = t; }
     }
     if (mins <= 8 * 60 + 3) return;
+    if (lunch219) return;   // Block 219: they punched a real lunch — a long day WITH a lunch is not a flag
     const [who] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${empId}`);
     if (!who || ["salary", "na"].includes(who.pay_type)) return;
     const dup = await db(`event_log?select=id&event_type=eq.timecard.long_day&payload->>employee_id=eq.${empId}&at=gte.${new Date(d0).toISOString()}&limit=1`);
@@ -726,8 +735,8 @@ async function longDayCheck206(empId, outIso) {
     const acct206 = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
     const hrs206 = Math.round(mins / 6) / 10;
     notify("timecard.long_day", [...new Set([...admins206.map((a) => a.id), ...acct206.map((a) => a.id)])],
-      `${who.first_name} ${((who.last_name || "")[0] || "")}. logged ${hrs206}h today — over 8`,
-      `Did they take a lunch? Speak with them, then verify or correct the day in Edit timecards — an unpunched lunch reads as overtime.`,
+      `${who.first_name} ${((who.last_name || "")[0] || "")}. logged ${hrs206}h today — no lunch punch`,
+      `Over 8 hours with no lunch clock-out on the day. Speak with them, then verify or correct the day in Edit timecards — an unpunched lunch reads as overtime.`,
       `/manager?tc_emp=${empId}`);
   } catch (e) { console.error("long-day check failed:", e.message); }
 }
@@ -2833,7 +2842,19 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
       </div>
     </details>` : ""}
     <a href="/logout" style="color:#8e8e93;margin-left:16px">Sign out</a>
-  </div>`;
+  </div>
+  <script>if(!window.__t95w){window.__t95w=1;
+  // Block 110 fold-up, re-homed by Block 219 (Daniel, 8/25): the Block-196
+  // nav refactor stranded this close handler on the PLAIN-STAFF nav — the
+  // one nav with no menus — so admin/manager pages (which have Tools and
+  // Lines) never received it and the menu hung open in limbo on phones.
+  // It now ships WITH the menu bar itself, and listens on pointerdown
+  // because iOS Safari doesn't reliably fire document-level click for taps
+  // on non-interactive page areas. Any tap outside an open .t95 menu folds
+  // it up — Tools, Lines, and any future menu that reuses the class.
+  document.addEventListener("pointerdown",(e)=>{
+    document.querySelectorAll("details.t95[open]").forEach((d)=>{ if(!d.contains(e.target)) d.removeAttribute("open"); });
+  });}</script>`;
 };
 // Block 196 (owner directive, day 3): ONE navigation for EVERY signed-in
 // page — role- AND department-aware, always at the TOP. This replaces every
@@ -2850,12 +2871,7 @@ function nav196(emp, showReports = false) {
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </div>
-  <script>if(!window.__t95w){window.__t95w=1;document.addEventListener("click",(e)=>{
-    // Block 110 (owner-rep): the Tools menu folds up like a normal menu —
-    // any tap outside it closes it. One shared nav = fixed everywhere.
-    document.querySelectorAll("details.t95[open]").forEach((d)=>{ if(!d.contains(e.target)) d.removeAttribute("open"); });
-  });}</script>`;
+  </div>`;
 };
 
 // ⚙ MY SETTINGS (block 117, owner-approved spec + owner-rep add: "each of
