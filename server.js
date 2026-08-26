@@ -2359,8 +2359,10 @@ function bellLink234(n) {
   // Order-family notices (rulings, option flags, Coyote cab alerts, promise
   // conflicts) all name their order in the title — go straight to the order.
   if (/^(note\.|option\.|cab\.)/.test(ev) || ev === "build.promise_conflict") {
-    const m = /\border\s+([0-9]+(?:\.[0-9]+)?)/i.exec(String(n.title || ""));
-    if (m) return "/order/" + encodeURIComponent(m[1]);
+    // Order numbers aren't always digits — live rows carry "Order W115117"
+    // style too — so accept any digit-bearing token after the word "Order".
+    const m = /\border\s+([A-Za-z]*\d[A-Za-z0-9.\-]*)/i.exec(String(n.title || ""));
+    if (m) return "/order/" + encodeURIComponent(m[1].replace(/\.$/, ""));
   }
   return LINK_FALLBACK_234[ev] || null;   // null = informational: plain card, no tap hint
 }
