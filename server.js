@@ -1457,7 +1457,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
     added++;
   }
   if (added) {
-    const adm = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    const adm = await floorMgrIds220();
     notify("note.triage", adm, `Order ${orderNumber}: ${added} order-note item${added === 1 ? "" : "s"} need a ruling`,
       "The order note has lines a human should route — production hours, Body/Build push-along, or no action. Open the order to rule on them.", "/order/" + encodeURIComponent(orderNumber));
     logEvent("note.triage", null, { build_id: buildId, order_number: orderNumber, added });
@@ -5992,7 +5992,7 @@ async function syncRun(apply, actorId) {
       const k176 = "add|" + it.orderNo + "|" + p176.toUpperCase();
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
       try {
-        const adm176 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        const adm176 = await floorMgrIds220();
         await notify("sync.iface_add", adm176, `Order ${it.orderNo}: new Coyote cab part ${p176}`, `Coyote marks ${p176} as a tracked cab part, but it is not in the board's part library yet, so this cab cannot place itself. Add ${p176} under Admin -> Lines & Parts (family, line, build steps) and the order places automatically on the next sync.`, "/reconcile");
       } catch (eA176) { console.error("iface-add notify:", (eA176 && eA176.message) || eA176); }
       logEvent("sync.iface_add", actorId || null, { order_number: it.orderNo, part: p176 });
@@ -6002,7 +6002,7 @@ async function syncRun(apply, actorId) {
       const k176 = "drop|" + p176.toUpperCase();   // per PART: one unchecked box floods every order carrying it
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
       try {
-        const adm176 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        const adm176 = await floorMgrIds220();
         await notify("sync.iface_drop", adm176, `Coyote unchecked cab part ${p176}`, `Coyote now marks ${p176} as NOT part of the interface (its checkbox is off), so orders carrying it stop building cabs here. If that was intentional, retire it under Lines & Parts too; if not, re-check the box in Coyote and re-push.`, "/reconcile");
       } catch (eD176) { console.error("iface-drop notify:", (eD176 && eD176.message) || eD176); }
       logEvent("sync.iface_drop", actorId || null, { order_number: it.orderNo, part: p176 });
@@ -6151,7 +6151,7 @@ async function syncRun(apply, actorId) {
             if (have151.some((f) => f.flag_text === txt151)) continue;
             await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b151.id, kind: "count", flag_text: txt151 }) });
             await db(`build?id=eq.${b151.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
-            const adm151 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+            const adm151 = await floorMgrIds220();
             await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number));
             logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
           } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
@@ -6195,7 +6195,7 @@ async function flagCabAlert176(kind, b, text, root, actorId) {
   await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind, flag_text: txt }) });
   if (!b.note_flagged) await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
   try {
-    const adm = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    const adm = await floorMgrIds220();
     const title = kind === "stuck" ? `Order ${b.order_number}: Coyote dropped this cab's part — verify` : `Order ${b.order_number}: Coyote data needs a look`;
     await notify("cab." + kind, adm, title, txt, "/order/" + encodeURIComponent(root || b.coyote_root || String(b.order_number || "").split(".")[0]));
   } catch (eN) { console.error("cab-alert notify:", (eN && eN.message) || eN); }
@@ -6815,7 +6815,7 @@ async function freezeAndStart(b, empId, startedAt) {
           // Block 104 (owner-rep): custom add-ons and unknown options are
           // ACTION ITEMS the moment the cab reaches the line — the production
           // manager gets the push alongside the admins (Q106-sandboxed).
-          const adm94 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+          const adm94 = await floorMgrIds220();
           await notify("option.flagged", adm94, `Order ${b.order_number}: ${flagCount94} upgrade${flagCount94 === 1 ? "" : "s"} need hours`,
             "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number));
         }
@@ -6863,7 +6863,7 @@ async function freezeAndStart(b, empId, startedAt) {
         logEvent("build.promised", empId, { build_id: b.id, order_number: b.order_number, promised: promised103,
           ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103 });
         if (conflict103) {
-          const mg103 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e2) => e2.id);
+          const mg103 = await floorMgrIds220();
           await notify("build.promise_conflict", mg103, `ORDER ${b.order_number} — can't make the sold ship date`,
             `Standard hours put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
             "/order/" + encodeURIComponent(b.order_number));
@@ -7019,6 +7019,21 @@ async function sendSms116(to, bodyText) {
 // THE chokepoint — every notification the system ever sends passes here.
 // intendedIds = who SHOULD get it; the sandbox decides who DOES. Never
 // throws: a notification problem must never break a floor tap.
+// Block 220 (Daniel, 8/26): DEPARTMENT-SCOPED MANAGER NOTIFICATIONS.
+// "each departments manager role will be different. no reason for her to get
+// the bell notifications of anything happening on the production floor." The
+// ACCOUNTING manager's lane is PAY ONLY — the no-lunch-punch flag and the
+// system-clock-out notice (both target her explicitly beside the admins),
+// plus her own personal events. Every generic managers+admins notice —
+// inspection traffic, pace, line-frees, ship-risk, Coyote plumbing, order
+// rulings, the daily touches — routes through this helper, which drops
+// Accounting-department managers. Admins always ride along. A manager with
+// NO department set keeps receiving (undefined is not excluded) until
+// Daniel scopes that department's manager role too.
+async function floorMgrIds220() {
+  const rows = await db(`employee?select=id,role,department&active=is.true&role=in.(manager,admin)`);
+  return rows.filter((r) => r.role === "admin" || r.department !== "Accounting").map((r) => r.id);
+}
 async function notify(eventType, intendedIds, title, bodyText, link) {
   try {
     const intended = (Array.isArray(intendedIds) ? intendedIds : [intendedIds]).filter(Boolean);
@@ -7135,7 +7150,7 @@ async function pacePatrol() {
     const active = await db(`build?select=id,order_number,pace_alert_color&state=in.(active,rework)`);
     const idOf = {}, prevOf = {};
     for (const b of active) { idOf[b.order_number] = b.id; prevOf[b.order_number] = b.pace_alert_color; }
-    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    const recips = await floorMgrIds220();
     for (const l of s.lines) {
       const c = l.cab;
       if (!c || !c.order || !(c.order in idOf)) continue;
@@ -7181,7 +7196,7 @@ async function dayStartNudge() {
     const phxMidReal = new Date(today + "T00:00:00Z").getTime() + PHX_OFFSET_MS;
     const prior = await db(`notification_log?select=id&event_type=eq.nudge.daystart&created_at=gte.${new Date(phxMidReal).toISOString()}&limit=1`);
     if (prior.length) return;
-    const recips = (await db(`employee?select=id&role=in.(production,manager)&active=is.true`)).map((e) => e.id);
+    const recips = (await db(`employee?select=id,role,department&role=in.(production,manager)&active=is.true`)).filter((r) => r.role !== "manager" || r.department !== "Accounting").map((e) => e.id);
     if (!recips.length) return;
     await notify("nudge.daystart", recips, "Good morning — let's get started",
       "Clock in and pick up your line when you're ready.", "/home");
@@ -7217,7 +7232,7 @@ async function dailyTouch(eventType, toggleKey, timeHHMM, buildMsg) {
 // Morning pre-brief (~6:55): a one-line floor summary to managers before the day.
 async function morningPrebrief() {
   return dailyTouch("touch.prebrief", "morning_prebrief", "06:55", async () => {
-    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    const recips = await floorMgrIds220();
     if (!recips.length) return null;
     const live = await db(`build?select=state&state=in.(active,rework,awaiting_inspection)`);
     const inProg = live.filter((b) => b.state === "active" || b.state === "rework").length;
@@ -7237,7 +7252,7 @@ async function inspectBeforeClose() {
   return dailyTouch("touch.inspect", "inspect_before_close_nudge", "15:45", async () => {
     const waiting = await db(`build?select=id&state=eq.awaiting_inspection`);
     if (!waiting.length) return null;                     // nothing waiting -> no nudge
-    const recips = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+    const recips = await floorMgrIds220();
     if (!recips.length) return null;
     return { recips, title: "Sign off before close",
       body: `${waiting.length} cab${waiting.length === 1 ? "" : "s"} still awaiting inspection — clear ${waiting.length === 1 ? "it" : "them"} before the shop closes.`, link: "/manager",
@@ -9124,7 +9139,7 @@ http.createServer(async (req, res) => {
         notify("build.line_clear", await warehouseIds(),
           `${lnSP ? lnSP.name : "Line"} is CLEAR`,
           `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — rework done, crew sent it to Body. Deliver the next kit when it's ready.`, "/home");
-        const mgrsSP = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        const mgrsSP = await floorMgrIds220();
         if (mgrsSP.length) notify("build.self_passed", mgrsSP,
           `ORDER ${b.order_number} — rework done, sent to Body by the crew`,
           `Every rework item is checked off and production pushed the cab through (one-inspection system). If the fixes aren't right, Body sends it back with one tap on the Manager console.`, "/manager");
@@ -9162,7 +9177,7 @@ http.createServer(async (req, res) => {
       // Block 99 (owner-rep): the DIRECT review signal — a finished cab is the
       // manager's ACTION ITEM, not just planning info. Always on; delivery
       // obeys the Q106 sandbox until cutover like everything else.
-      const mgrsI99 = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+      const mgrsI99 = await floorMgrIds220();
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
         `ORDER ${b.order_number} — ready for inspection`,
         `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the Manager console: sign off, or send it back with a reason and hours.`, "/manager");
@@ -9171,7 +9186,7 @@ http.createServer(async (req, res) => {
       // by default; delivery still obeys the Q106 sandbox.
       const [lfsTog] = await db(`feature_toggle?select=enabled&key=eq.line_frees_soon_alert`);
       if (lfsTog && lfsTog.enabled === true) {
-        const mgrs = (await db(`employee?select=id&role=in.(manager,admin)&active=is.true`)).map((e) => e.id);
+        const mgrs = await floorMgrIds220();
         if (mgrs.length) notify("touch.linefrees", mgrs, `${lnF ? lnF.name : "A line"} frees up soon`,
           `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection — the line will be ready for the next cab shortly.`, "/manager");
       }
