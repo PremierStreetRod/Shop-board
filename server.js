@@ -3419,7 +3419,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
       ${d.off216 ? `
       <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="color:${/vacation/i.test(d.off216.reason) ? "#30d158" : "#5eaeff"};font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : /vacation/i.test(d.off216.reason) ? `&#127796; VACATION recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
+        <span style="color:${/vacation/i.test(d.off216.reason) ? "#5eaeff" : "#30d158"};font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : /vacation/i.test(d.off216.reason) ? `&#127796; VACATION recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
         <button class="b" style="padding:5px 12px" onclick="tccSickCancel216('${d.off216.id}','${d.ds}',this)">Remove</button>
       </div>` : `
       <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -6805,7 +6805,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   td{padding:5px 7px;border-bottom:1px solid var(--line)}
   td.c,th.c{text-align:center;font-variant-numeric:tabular-nums}
   .num{text-align:right;font-variant-numeric:tabular-nums}
-  .muted{opacity:.55}.ot{color:#ff9f0a;font-size:.82em}.sk{color:#5eaeff;font-weight:600}.vc{color:#30d158;font-weight:600}.up{color:#ff6b5e;font-weight:600}
+  .muted{opacity:.55}.ot{color:#ff9f0a;font-size:.82em}.sk{color:#30d158;font-weight:600}.vc{color:#5eaeff;font-weight:600}.up{color:#ff6b5e;font-weight:600}   /* Block 236 (Daniel): sick GREEN, vacation BLUE — matches the Excel file */
   .csv{float:right;font-size:.82rem;color:#8e8e93}
   .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
   @media print{ a,.per{display:none} }
@@ -6903,8 +6903,8 @@ function payrollCsv(d) {
   L.push(["", "Total", ...d.rows.map((r) => h1(r.total))].map(q).join(","));
   L.push(["", "Regular", ...d.rows.map((r) => h1(r.reg))].map(q).join(","));
   L.push(["", "Overtime", ...d.rows.map((r) => h1(r.ot))].map(q).join(","));
-  if (d.rows.some((r) => r.sick)) L.push(["", "Sick", ...d.rows.map((r) => h1(r.sick))].map(q).join(","));
-  if (d.rows.some((r) => r.vac)) L.push(["", "Vacation", ...d.rows.map((r) => h1(r.vac))].map(q).join(","));   // Block 235: vacation gets its own total line, just like sick
+  L.push(["", "Sick", ...d.rows.map((r) => h1(r.sick))].map(q).join(","));       // Block 236 (Daniel): Sick + Vacation lines ALWAYS print, zeros included
+  L.push(["", "Vacation", ...d.rows.map((r) => h1(r.vac))].map(q).join(","));
   if (d.rows.some((r) => r.unpaid)) L.push(["", "Unpaid", ...d.rows.map((r) => h1(r.unpaid))].map(q).join(","));
   const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
   if (pendAh.length) {
@@ -6973,8 +6973,9 @@ function payrollXlsx235(d) {
   // Styles (index into cellXfs below): 1 title · 2 header · 3 date/text ·
   // 4 hours number · 5 code text · 6 sick · 7 vacation · 8 unpaid ·
   // 9 totals label · 10 totals number · 11 red note · 12 section label
-  let rXml = "", rn = 0;
+  let rXml = "", rn = 0; const merges236 = [];   // Block 236: totals labels span Date+Day — no stray empty boxes
   const row = (cells, opts) => { rn++;
+    if (opts && opts.mergeAB) merges236.push(`A${rn}:B${rn}`);
     const cs = cells.map((c, i) => {
       if (c == null) return "";
       const ref = colL(i) + rn;
@@ -7001,12 +7002,13 @@ function payrollXlsx235(d) {
     if (cells.some((c) => typeof c === "number" || c.t !== "")) row([{ t: mdy(ds), s: 3 }, { t: dow(ds), s: 3 }, ...cells]);
   }
   row([]);
-  row([{ t: "", s: 10 }, { t: "Total", s: 9 }, ...d.rows.map((r) => ({ t: "", s: 10, n: r.total }))].map((c) => c.n != null ? c.n : c), { s: 10 });
-  row([{ t: "", s: 12 }, { t: "Regular", s: 12 }, ...d.rows.map((r) => roundQ(r.reg))]);
-  row([{ t: "", s: 12 }, { t: "Overtime", s: 12 }, ...d.rows.map((r) => roundQ(r.ot))]);
-  if (d.rows.some((r) => r.sick)) row([{ t: "", s: 12 }, { t: "Sick", s: 12 }, ...d.rows.map((r) => roundQ(r.sick))]);
-  if (d.rows.some((r) => r.vac)) row([{ t: "", s: 12 }, { t: "Vacation", s: 12 }, ...d.rows.map((r) => roundQ(r.vac))]);
-  if (d.rows.some((r) => r.unpaid)) row([{ t: "", s: 12 }, { t: "Unpaid", s: 12 }, ...d.rows.map((r) => roundQ(r.unpaid))]);
+  row([{ t: "Total", s: 9 }, { t: "", s: 9 }, ...d.rows.map((r) => ({ t: "", s: 10, n: r.total }))].map((c) => c.n != null ? c.n : c), { s: 10, mergeAB: true });
+  const lblRow236 = (label, get) => row([{ t: label, s: 12 }, { t: "", s: 12 }, ...d.rows.map(get)], { mergeAB: true });
+  lblRow236("Regular", (r) => roundQ(r.reg));
+  lblRow236("Overtime", (r) => roundQ(r.ot));
+  lblRow236("Sick", (r) => roundQ(r.sick));       // Block 236 (Daniel): Sick + Vacation lines ALWAYS print — a zero is information too
+  lblRow236("Vacation", (r) => roundQ(r.vac));
+  if (d.rows.some((r) => r.unpaid)) lblRow236("Unpaid", (r) => roundQ(r.unpaid));
   const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
   if (pendAh.length) { row([]);
     row([{ t: `NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`, s: 11 }], { ht: 30 });
@@ -7016,7 +7018,7 @@ function payrollXlsx235(d) {
 <sheetViews><sheetView workbookViewId="0" showGridLines="true"><pane xSplit="2" ySplit="${hdrRow}" topLeftCell="C${hdrRow + 1}" state="frozen"/></sheetView></sheetViews>
 <cols><col min="1" max="1" width="11" customWidth="1"/><col min="2" max="2" width="12" customWidth="1"/><col min="3" max="${nCols}" width="10.5" customWidth="1"/></cols>
 <sheetData>${rXml}</sheetData>
-<mergeCells count="1"><mergeCell ref="A1:${colL(nCols - 1)}1"/></mergeCells>
+<mergeCells count="${1 + merges236.length}"><mergeCell ref="A1:${colL(nCols - 1)}1"/>${merges236.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>
 </worksheet>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -7025,28 +7027,28 @@ function payrollXlsx235(d) {
 <font><sz val="11"/><name val="Calibri"/></font>
 <font><b/><sz val="11"/><name val="Calibri"/></font>
 <font><b/><sz val="14"/><name val="Calibri"/></font>
-<font><b/><sz val="11"/><color rgb="FF1F6FC5"/><name val="Calibri"/></font>
 <font><b/><sz val="11"/><color rgb="FF1E7E34"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><color rgb="FF1F6FC5"/><name val="Calibri"/></font>
 <font><b/><sz val="11"/><color rgb="FFC0392B"/><name val="Calibri"/></font>
 <font><sz val="11"/><color rgb="FF666666"/><name val="Calibri"/></font>
 </fonts>
 <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEDEDED"/><bgColor indexed="64"/></patternFill></fill></fills>
-<borders count="3"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top/><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left/><right/><top style="medium"><color rgb="FF333333"/></top><bottom/><diagonal/></border></borders>
+<borders count="4"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="medium"><color rgb="FF333333"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
 <cellXfs count="13">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="3" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="4" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="3"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="right"/></xf>
 <xf numFmtId="164" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
 <xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
-<xf numFmtId="164" fontId="6" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="6" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="right"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
