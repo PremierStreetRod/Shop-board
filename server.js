@@ -1592,7 +1592,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
   if (added) {
     const adm = await adminIds225();   // Block 225: admin-console ruling, not floor work
     notify("note.triage", adm, `Order ${orderNumber}: ${added} order-note item${added === 1 ? "" : "s"} need a ruling`,
-      "The order note has lines a human should route — production hours, Body/Build push-along, or no action. Open the order to rule on them.", "/order/" + encodeURIComponent(orderNumber));
+      "The order note has lines a human should route — production hours, Body/Build push-along, or no action. Open the order to rule on them.", "/order/" + encodeURIComponent(orderNumber), { urgent: await urgent226(buildId) });
     logEvent("note.triage", null, { build_id: buildId, order_number: orderNumber, added });
   }
   return added;
@@ -6284,7 +6284,7 @@ async function syncRun(apply, actorId) {
             await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b151.id, kind: "count", flag_text: txt151 }) });
             await db(`build?id=eq.${b151.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
             const adm151 = await adminIds225();   // Block 225: cab-count verification is an admin ruling
-            await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number));
+            await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number), { urgent: await urgent226(b151.id) });
             logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
           } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
         }
@@ -6329,7 +6329,7 @@ async function flagCabAlert176(kind, b, text, root, actorId) {
   try {
     const adm = await adminIds225();   // Block 225: cab-number rulings are admin work
     const title = kind === "stuck" ? `Order ${b.order_number}: Coyote dropped this cab's part — verify` : `Order ${b.order_number}: Coyote data needs a look`;
-    await notify("cab." + kind, adm, title, txt, "/order/" + encodeURIComponent(root || b.coyote_root || String(b.order_number || "").split(".")[0]));
+    await notify("cab." + kind, adm, title, txt, "/order/" + encodeURIComponent(root || b.coyote_root || String(b.order_number || "").split(".")[0]), { urgent: await urgent226(b.id) });
   } catch (eN) { console.error("cab-alert notify:", (eN && eN.message) || eN); }
   logEvent("sync." + kind + "_flag", actorId || null, { order_number: b.order_number, root: root || null });
   return true;
@@ -6951,7 +6951,7 @@ async function freezeAndStart(b, empId, startedAt) {
           // manager gets the push alongside the admins (Q106-sandboxed).
           const adm94 = await adminIds225();   // Block 225: upgrade-hours rulings are admin work
           await notify("option.flagged", adm94, `Order ${b.order_number}: ${flagCount94} upgrade${flagCount94 === 1 ? "" : "s"} need hours`,
-            "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number));
+            "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number), { urgent: await urgent226(b.id) });
         }
       }
     }
@@ -7176,6 +7176,15 @@ async function sendSms116(to, bodyText) {
 // note triage, check-the-standard, ship-date risk) are acted on in the
 // ADMIN console; a floor manager can't rule on any of them, so they no
 // longer reach his bell at all.
+// Block 226b (Daniel, 8/26): URGENCY CARVE-OUT — paperwork rulings are
+// bell-only UNLESS the order in question is LIVE on a production line
+// ("these questions from admin need to be answered immediately").
+async function urgent226(buildId) {
+  try {
+    const [u] = await db(`build?select=state&id=eq.${buildId}`);
+    return Boolean(u && (u.state === "active" || u.state === "rework"));
+  } catch (e) { return false; }
+}
 async function adminIds225() {
   return (await db(`employee?select=id&active=is.true&role=eq.admin`)).map((a) => a.id);
 }
@@ -7184,7 +7193,7 @@ async function floorMgrIds220(lane221) {
   const ok221 = lane221 === "inspect" ? ["Production", "Body Shop"] : ["Production"];
   return rows.filter((r) => r.role === "admin" || !r.department || ok221.includes(r.department)).map((r) => r.id);
 }
-async function notify(eventType, intendedIds, title, bodyText, link) {
+async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
   try {
     const intended = (Array.isArray(intendedIds) ? intendedIds : [intendedIds]).filter(Boolean);
     if (!intended.length) return;
@@ -7208,10 +7217,26 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // included). Today: line-frees planning info + the daily touches. This is
     // what makes "some of these should just be bell and some push" real —
     // flipping a person's push ON buzzes only the events not listed here.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart"];
-    const bellOnly225 = BELL_ONLY_225.includes(String(eventType));
+    // Block 226b (Daniel's admin-dive rulings): the OFFICE-PAPERWORK events
+    // join the bell-only list — sync flags, cab rulings, upgrade-hours and
+    // note triage wait at the desk. EXCEPTION: a caller passing
+    // {urgent:true} (the order is ACTIVE on a line) punches through and
+    // buzzes normally. pace.standards and option.changed stay pushable —
+    // they only ever fire about live cabs.
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged"];
+    const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
+    // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
+    // decide to turn on their push notifications." Owner-department admins
+    // get push/text/email ONLY for the big stuff (ship-date risk, short
+    // kits), their own personal time-off events, and self-tests; everything
+    // else stays complete-but-silent on their bell. Daniel (Marketing) and
+    // any future working admin are untouched.
+    const OWNER_PUSH_226 = ["build.promise_conflict", "kit.short"];
+    const ownerQuiet226 = (pp) => Boolean(pp && pp.role === "admin" && pp.department === "Owner")
+      && !OWNER_PUSH_226.includes(String(eventType))
+      && !["timeoff.", "test."].some((pre) => String(eventType).startsWith(pre));
     const prefs117 = {};
-    if (targets.length) for (const pp of await db(`employee?select=id,role,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
+    if (targets.length) for (const pp of await db(`employee?select=id,role,department,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
     // Block 184 (owner ruling, launch day 1): READY-FOR-INSPECTION is the
     // floor managers' job signal — it punches through the per-person mute on
     // PUSH ONLY. Text/email stay muted for everyone (his exact words: "keep
@@ -7228,7 +7253,7 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // have defeated tonight's quiet order the moment a cab hit inspection.
     // RESTORE LATER = delete the leading "false && ".
     const inspectPunch184 = false && eventType === "build.ready_inspection";
-    const wants117 = (id, ch) => { const pp = prefs117[id]; if (ch === "push" && inspectPunch184 && pp && pp.role === "manager") return true; return !pp || pp["notify_" + ch] !== false; };
+    const wants117 = (id, ch) => { const pp = prefs117[id]; if (ch === "push" && inspectPunch184 && pp && pp.role === "manager") return true; if (ownerQuiet226(pp)) return false; return !pp || pp["notify_" + ch] !== false; };
     const pushT117 = bellOnly225 ? [] : targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
     if (targets.length && !pushT117.length) status = "muted";
