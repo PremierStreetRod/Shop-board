@@ -7231,7 +7231,11 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // kits), their own personal time-off events, and self-tests; everything
     // else stays complete-but-silent on their bell. Daniel (Marketing) and
     // any future working admin are untouched.
-    const OWNER_PUSH_226 = ["build.promise_conflict", "kit.short"];
+    // Block 227 (Daniel, 8/26): pace.warn joins the owner push list — Rob's
+    // whole interest in this board is "when a line is running on time or
+    // behind"; the day pace warnings turn on, the owners buzz for a line
+    // needing help alongside ship-date risk and short kits.
+    const OWNER_PUSH_226 = ["build.promise_conflict", "kit.short", "pace.warn"];
     const ownerQuiet226 = (pp) => Boolean(pp && pp.role === "admin" && pp.department === "Owner")
       && !OWNER_PUSH_226.includes(String(eventType))
       && !["timeoff.", "test."].some((pre) => String(eventType).startsWith(pre));
