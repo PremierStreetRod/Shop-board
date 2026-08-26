@@ -1109,8 +1109,25 @@ const style = `<style>
       // (once answered, permission is no longer "default"). Denied = quiet;
       // the bell inbox catches every notice regardless.
       try {
+        // Block 224 (Daniel, 8/26): SHARED TABLETS NEVER CARRY PUSH — push
+        // pop-ups belong on someone's PERSONAL phone, never the shared iPad
+        // (whoever walks past would read them). A device marked shared
+        // (Tools -> Tablet setup) skips the subscribe entirely AND, if push
+        // was ever enabled on it before this rule, quietly unsubscribes and
+        // deactivates that subscription server-side. The bell inbox still
+        // works exactly the same on the tablet — this is push-only.
+        var shared224 = /(^|; )sb_shared_ui=1/.test(document.cookie || "");
+        if (shared224 && "serviceWorker" in navigator && "PushManager" in window) {
+          navigator.serviceWorker.getRegistration("/sw.js")
+            .then(function(reg){ return reg && reg.pushManager.getSubscription(); })
+            .then(function(sb){ if (!sb) return; var ep224 = sb.endpoint;
+              return sb.unsubscribe().then(function(){
+                return fetch("/api/push/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ endpoint: ep224 }) }); }); })
+            .catch(function(){});
+        }
         var NP154 = "${VAPID_PUB}";
-        if (NP154 && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window) {
+        if (!shared224 && NP154 && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window) {
           var sub154 = function(){
             var pad = "=".repeat((4 - NP154.length % 4) % 4);
             var raw = atob((NP154 + pad).replace(/-/g, "+").replace(/_/g, "/"));
@@ -1682,7 +1699,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
        sends the cab to AWAITING INSPECTION for RE-INSPECTION (never straight to
        complete). Fix hours are their own bucket (0 standard hours). -->
   <div class="note" style="background:#12233a;border-color:#4a90d9">
-    ⟲ RETURNED FOR FIX — ${build.fix_kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${build.fix_reason || "see note"}${build.fix_hours ? ` · within ${Number(build.fix_hours)} hrs` : ""}
+    ⟲ BACK FOR ONE MORE PASS — ${build.fix_reason || "see note"}${build.fix_hours ? ` · ${Number(build.fix_hours)} hrs set aside` : ""}
     ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
   </div>` : ""}
   ${inFix && fixLane.onFix ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
@@ -10280,12 +10297,29 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/push/subscribe" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      // Block 224: a SHARED tablet never registers for push — server-side
+      // backstop for the client-side skip, so no future screen can leak one.
+      if (/sb_shared=1/.test(req.headers.cookie || "")) return json(200, { ok: false, shared: true });
       const { endpoint, p256dh, auth } = await body(req);
       if (!endpoint || !p256dh || !auth) return json(400, { ok: false, error: "Incomplete subscription" });
       await db(`push_subscription?endpoint=eq.${encodeURIComponent(endpoint)}`, { method: "DELETE" });
       await db("push_subscription", { method: "POST", body: JSON.stringify({
         employee_id: empId, endpoint, p256dh, auth, user_agent: req.headers["user-agent"] || "" }) });
       logEvent("push.subscribed", empId, { endpoint_host: new URL(endpoint).host });
+      return json(200, { ok: true });
+    }
+
+    // Block 224: DEACTIVATE a push subscription by endpoint — used by the
+    // shared-tablet self-clean (a device marked shared unsubscribes itself
+    // on its next visit). Deactivate-not-delete, like everything else.
+    if (url.pathname === "/api/push/unsubscribe" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const { endpoint } = await body(req);
+      if (!endpoint || typeof endpoint !== "string") return json(400, { ok: false, error: "No endpoint" });
+      await db(`push_subscription?endpoint=eq.${encodeURIComponent(endpoint)}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
+      let host224 = ""; try { host224 = new URL(endpoint).host; } catch (e) {}
+      logEvent("push.unsubscribed", empId, { endpoint_host: host224, shared_device: /sb_shared=1/.test(req.headers.cookie || "") });
       return json(200, { ok: true });
     }
 
