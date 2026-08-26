@@ -4034,7 +4034,7 @@ function coveragePage(now, days, builderCount, cabs, isAdmin95 = false, emp196 =
 // hours, day, reorder, retire, add — template edits NEVER touch a started
 // cab, its task list froze at start) · FEATURES (the Q65 plain-language
 // switches; data keeps computing while OFF, flips are audit-logged).
-const DEPTS = ["Production", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "Marketing"]; // Block 158 (owner-rep E3): "Admin" removed — it is a ROLE (with Team Member, Manager), not a department. DB verified: zero employees carried it.
+const DEPTS = ["Production", "Warehouse", "Build", "Body Shop", "Accounting", "Owner", "General Manager", "Marketing"]; // Block 158 (owner-rep E3): "Admin" removed — it is a ROLE, not a department. Block 228 (Daniel, 8/26): "General Manager" ADDED — Ross keeps role=admin but moves OFF the "Owner" department so the owner-quiet notification rule stops muting him; the dropdown could not offer it before (the missed step in Block 227's instruction).
 const ROLES = ["production", "manager", "admin"];
 // Block 25 (owner-rep): "production" read wrong as a ROLE next to real
 // departments ("Body Shop / production"?). The everyday role now DISPLAYS
