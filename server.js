@@ -7245,6 +7245,38 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
 const warehouseIds = async () =>
   (await db("employee?select=id&department=eq.Warehouse&active=is.true")).map((e) => e.id);
 
+// Block 222 (Daniel, 8/26 — warehouse dive): VERIFY-THE-NEXT-KIT NUDGE.
+// "they should receive a push notification at some point deep into
+// production of a cab, and IF warehouse hasn't verified the cab on deck,
+// that they need to verify all parts are accounted for." His ruling: fire
+// at 75% of the current cab's production tasks; a kit already VERIFIED is
+// silent, and a kit marked SHORT is silent too (short IS verified — they
+// already know what's missing; the admins get their own kit.short notice).
+// Once per cab in production (event_log dedupe), rides every task-complete
+// tap, fire-and-forget so it never slows the floor.
+async function kitVerifyNudge222(buildId) {
+  try {
+    const [b] = await db(`build?select=id,line_id,order_number,cab_number,state&id=eq.${buildId}`);
+    if (!b || b.state !== "active" || b.line_id == null) return;
+    const tasks222 = await db(`task?select=state,is_background&build_id=eq.${buildId}`);
+    const real222 = tasks222.filter((t) => !t.is_background);
+    if (!real222.length) return;
+    const done222 = real222.filter((t) => t.state === "complete").length;
+    if (done222 / real222.length < 0.75) return;
+    const [next222] = await db(`build?select=id,order_number,cab_number,kit_status&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast&limit=1`);
+    if (!next222) return;                                                        // nothing on deck
+    if (next222.kit_status === "verified" || next222.kit_status === "short") return;
+    const dup222 = await db(`event_log?select=id&event_type=eq.warehouse.verify_kit&payload->>build_id=eq.${buildId}&limit=1`);
+    if (dup222.length) return;
+    const [ln222] = await db(`line?select=name&id=eq.${b.line_id}`);
+    logEvent("warehouse.verify_kit", null, { build_id: buildId, next_id: next222.id, order_number: b.order_number, next_order: next222.order_number, line: ln222 ? ln222.name : String(b.line_id) });
+    notify("warehouse.verify_kit", await warehouseIds(),
+      `${ln222 ? ln222.name : "Line"} — verify the next kit`,
+      `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is 75% done. On deck: order ${next222.order_number}${next222.cab_number ? ` (Cab #${next222.cab_number})` : ""} — its kit hasn't been verified yet. Make sure every part is accounted for before the line frees.`,
+      "/home");
+  } catch (e) { console.error("kit-verify nudge failed:", e.message); }
+}
+
 // Q116: PACE EARLY-WARNING. Turns the board's own red into a push so the
 // owner-rep hears about a cab that needs help without watching the TV.
 // EDGE-TRIGGERED: one push when a cab CROSSES into red, nothing while it
@@ -7854,6 +7886,7 @@ http.createServer(async (req, res) => {
       await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patch) });
       logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
+      if (to === "complete") void kitVerifyNudge222(t.build_id);   // Block 222: 75% checkpoint — nudge warehouse if the on-deck kit is unverified
       return json(200, { ok: true });
     }
 
@@ -9656,6 +9689,17 @@ http.createServer(async (req, res) => {
       if (status !== "verified") { patchK.kit_pull_started_at = null; patchK.kit_pull_started_by = null; }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchK) });
       logEvent("kit.status", whoId, { build_id, order_number: b.order_number, status, note: note || "" });
+      // Block 222 (Daniel, 8/26): a SHORT kit means parts are MISSING for an
+      // on-deck cab — until now nobody heard about it unless they happened to
+      // look at the queue screen. Admins get one notice per marking so
+      // ordering starts immediately.
+      if (status === "short") {
+        const adminsK222 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+        void notify("kit.short", adminsK222.map((a) => a.id),
+          `Kit SHORT — order ${b.order_number}`,
+          `Warehouse marked this on-deck kit short${note ? `: "${String(note).slice(0, 140)}"` : " (no note left)"}. Parts are missing — the sooner they're chased, the less the line waits.`,
+          "/reconcile");
+      }
       // Block 131 (L6): verifying a stuck pin can change who's on deck — revert any pull now stranded.
       await revertStrandedPull(b.line_id, whoId);
       return json(200, { ok: true });
