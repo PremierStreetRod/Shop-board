@@ -1585,7 +1585,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
     added++;
   }
   if (added) {
-    const adm = await floorMgrIds220();
+    const adm = await adminIds225();   // Block 225: admin-console ruling, not floor work
     notify("note.triage", adm, `Order ${orderNumber}: ${added} order-note item${added === 1 ? "" : "s"} need a ruling`,
       "The order note has lines a human should route — production hours, Body/Build push-along, or no action. Open the order to rule on them.", "/order/" + encodeURIComponent(orderNumber));
     logEvent("note.triage", null, { build_id: buildId, order_number: orderNumber, added });
@@ -4042,7 +4042,6 @@ const TOGGLE_INFO = {
   eod_progress_photo_required: ["End-of-day cab photos — REQUIRED (production)", "OFF = the end-of-day clock-out ASKS for cab progress photos & notes but lets people skip (the training phase). ON = production can't clock out End-of-day from a line until TODAY's cab has at least one progress photo or note — the customer build-report feed. Flip it when the crew is ready; no deploy needed."],
   sms_alerts: ["Text alerts", "Text messages for red lines and daily events. Stays OFF until we go live."],
   email_notifications: ["Email notifications", "System emails. Stays OFF until we go live."],
-  morning_prebrief: ["Morning pre-brief", "A short summary to the manager before the day starts."],
   line_frees_soon_alert: ["Line-frees-soon heads-up", "A nudge when a line looks like it will open up soon."],
   inspect_before_close_nudge: ["Inspect-before-close nudge", "A reminder to sign off finished cabs before day end."],
   early_red_standards_guard: ["Cab went red too early", "Points out a cab that hit red much sooner than it should — usually a sign the time target is off, not the crew."],
@@ -6120,7 +6119,7 @@ async function syncRun(apply, actorId) {
       const k176 = "add|" + it.orderNo + "|" + p176.toUpperCase();
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
       try {
-        const adm176 = await floorMgrIds220();
+        const adm176 = await adminIds225();   // Block 225: Coyote part-interface flags are admin plumbing
         await notify("sync.iface_add", adm176, `Order ${it.orderNo}: new Coyote cab part ${p176}`, `Coyote marks ${p176} as a tracked cab part, but it is not in the board's part library yet, so this cab cannot place itself. Add ${p176} under Admin -> Lines & Parts (family, line, build steps) and the order places automatically on the next sync.`, "/reconcile");
       } catch (eA176) { console.error("iface-add notify:", (eA176 && eA176.message) || eA176); }
       logEvent("sync.iface_add", actorId || null, { order_number: it.orderNo, part: p176 });
@@ -6130,7 +6129,7 @@ async function syncRun(apply, actorId) {
       const k176 = "drop|" + p176.toUpperCase();   // per PART: one unchecked box floods every order carrying it
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
       try {
-        const adm176 = await floorMgrIds220();
+        const adm176 = await adminIds225();   // Block 225: Coyote part-interface flags are admin plumbing
         await notify("sync.iface_drop", adm176, `Coyote unchecked cab part ${p176}`, `Coyote now marks ${p176} as NOT part of the interface (its checkbox is off), so orders carrying it stop building cabs here. If that was intentional, retire it under Lines & Parts too; if not, re-check the box in Coyote and re-push.`, "/reconcile");
       } catch (eD176) { console.error("iface-drop notify:", (eD176 && eD176.message) || eD176); }
       logEvent("sync.iface_drop", actorId || null, { order_number: it.orderNo, part: p176 });
@@ -6279,7 +6278,7 @@ async function syncRun(apply, actorId) {
             if (have151.some((f) => f.flag_text === txt151)) continue;
             await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b151.id, kind: "count", flag_text: txt151 }) });
             await db(`build?id=eq.${b151.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
-            const adm151 = await floorMgrIds220();
+            const adm151 = await adminIds225();   // Block 225: cab-count verification is an admin ruling
             await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number));
             logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
           } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
@@ -6323,7 +6322,7 @@ async function flagCabAlert176(kind, b, text, root, actorId) {
   await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind, flag_text: txt }) });
   if (!b.note_flagged) await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
   try {
-    const adm = await floorMgrIds220();
+    const adm = await adminIds225();   // Block 225: cab-number rulings are admin work
     const title = kind === "stuck" ? `Order ${b.order_number}: Coyote dropped this cab's part — verify` : `Order ${b.order_number}: Coyote data needs a look`;
     await notify("cab." + kind, adm, title, txt, "/order/" + encodeURIComponent(root || b.coyote_root || String(b.order_number || "").split(".")[0]));
   } catch (eN) { console.error("cab-alert notify:", (eN && eN.message) || eN); }
@@ -6945,7 +6944,7 @@ async function freezeAndStart(b, empId, startedAt) {
           // Block 104 (owner-rep): custom add-ons and unknown options are
           // ACTION ITEMS the moment the cab reaches the line — the production
           // manager gets the push alongside the admins (Q106-sandboxed).
-          const adm94 = await floorMgrIds220();
+          const adm94 = await adminIds225();   // Block 225: upgrade-hours rulings are admin work
           await notify("option.flagged", adm94, `Order ${b.order_number}: ${flagCount94} upgrade${flagCount94 === 1 ? "" : "s"} need hours`,
             "Upgrade work started without hours on the clock — open the order and set them so the timeline stays honest.", "/order/" + encodeURIComponent(b.order_number));
         }
@@ -6993,7 +6992,7 @@ async function freezeAndStart(b, empId, startedAt) {
         logEvent("build.promised", empId, { build_id: b.id, order_number: b.order_number, promised: promised103,
           ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103 });
         if (conflict103) {
-          const mg103 = await floorMgrIds220();
+          const mg103 = await adminIds225();   // Block 225 (Daniel): ship-date risk is admin-only — rare, high-value, off the floor manager's bell
           await notify("build.promise_conflict", mg103, `ORDER ${b.order_number} — can't make the sold ship date`,
             `Standard hours put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
             "/order/" + encodeURIComponent(b.order_number));
@@ -7167,6 +7166,14 @@ async function sendSms116(to, bodyText) {
 // inspection hand-off — Production AND Body Shop managers (Body Shop ARE
 // the inspectors). Admins always ride. A manager with NO department stays
 // on every lane until Daniel scopes that department (none exist today).
+// Block 225 (Daniel, 8/26): ADMIN-ONLY recipients — the order-pipeline and
+// ruling notices (Coyote sync flags, cab-count, cab rulings, upgrade hours,
+// note triage, check-the-standard, ship-date risk) are acted on in the
+// ADMIN console; a floor manager can't rule on any of them, so they no
+// longer reach his bell at all.
+async function adminIds225() {
+  return (await db(`employee?select=id&active=is.true&role=eq.admin`)).map((a) => a.id);
+}
 async function floorMgrIds220(lane221) {
   const rows = await db(`employee?select=id,role,department&active=is.true&role=in.(manager,admin)`);
   const ok221 = lane221 === "inspect" ? ["Production", "Body Shop"] : ["Production"];
@@ -7190,6 +7197,14 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // the front of wants117's return.
     const critical117 = ["afterhours.", "build.ready_inspection", "build.rework_assigned", "build.promise_conflict", "test.", "notify."].some((pre) => String(eventType).startsWith(pre));
     void critical117; // computed but intentionally unused while suspended — Block 180
+    // Block 225 (Daniel, 8/26): PER-EVENT CHANNEL POLICY — some notices
+    // inform but must never interrupt: they land on EVERY intended bell and
+    // never push, text, or email ANYBODY (his scope ruling: everyone, owners
+    // included). Today: line-frees planning info + the daily touches. This is
+    // what makes "some of these should just be bell and some push" real —
+    // flipping a person's push ON buzzes only the events not listed here.
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart"];
+    const bellOnly225 = BELL_ONLY_225.includes(String(eventType));
     const prefs117 = {};
     if (targets.length) for (const pp of await db(`employee?select=id,role,notify_push,notify_sms,notify_email&id=in.(${targets.join(",")})`)) prefs117[pp.id] = pp;
     // Block 184 (owner ruling, launch day 1): READY-FOR-INSPECTION is the
@@ -7209,7 +7224,7 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // RESTORE LATER = delete the leading "false && ".
     const inspectPunch184 = false && eventType === "build.ready_inspection";
     const wants117 = (id, ch) => { const pp = prefs117[id]; if (ch === "push" && inspectPunch184 && pp && pp.role === "manager") return true; return !pp || pp["notify_" + ch] !== false; };
-    const pushT117 = targets.filter((id) => wants117(id, "push"));
+    const pushT117 = bellOnly225 ? [] : targets.filter((id) => wants117(id, "push"));
     let status = "sandbox_no_target", sent = 0;
     if (targets.length && !pushT117.length) status = "muted";
     if (pushT117.length && VAPID_PUB && VAPID_PRIV) {
@@ -7224,7 +7239,7 @@ async function notify(eventType, intendedIds, title, bodyText, link) {
     // [TEST] stamp, gated by the Features switches (both OFF by default so
     // launch stays quiet). Deliberately NOT awaited: an SMTP round-trip must
     // never slow a floor tap. The channel block logs its own rows.
-    if (targets.length && (EMAIL_READY || SMS_READY)) {
+    if (!bellOnly225 && targets.length && (EMAIL_READY || SMS_READY)) {   // Block 225: bell-only events never text or email either
       (async () => {
         const togs116 = await db(`feature_toggle?select=key,enabled&key=in.(notify_email,notify_sms)`);
         const emailOn = togs116.some((t) => t.key === "notify_email" && t.enabled === true);
@@ -7328,7 +7343,7 @@ async function pacePatrol() {
       if (cur === "red" && prev !== "red") {              // crossed INTO red -> one push
         const early = Number(c.pct) < 30;                 // red with <30% of the build done -> suspect the STANDARD
         if (early && earlyRedOn) {
-          await notify("pace.standards", recips, `${l.name}: check the standard on ${c.order}`,
+          await notify("pace.standards", await adminIds225(), `${l.name}: check the standard on ${c.order}`,   // Block 225: a wrong hour TARGET is an admin fix
             `${c.order} hit red at only ${Number(c.pct) || 0}% done (day ${c.day || "?"}). That usually means the hour target is off, not the crew.`, "/board");
           logEvent("pace.standards", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, pct: c.pct, day: c.day });
         } else if (paceWarnOn) {
@@ -7399,23 +7414,9 @@ async function dailyTouch(eventType, toggleKey, timeHHMM, buildMsg) {
     logEvent(eventType, null, msg.log || {});
   } catch (e) { console.error(`${eventType} failed (will retry):`, e.message); }
 }
-// Morning pre-brief (~6:55): a one-line floor summary to managers before the day.
-async function morningPrebrief() {
-  return dailyTouch("touch.prebrief", "morning_prebrief", "06:55", async () => {
-    const recips = await floorMgrIds220();
-    if (!recips.length) return null;
-    const live = await db(`build?select=state&state=in.(active,rework,awaiting_inspection)`);
-    const inProg = live.filter((b) => b.state === "active" || b.state === "rework").length;
-    const waiting = live.filter((b) => b.state === "awaiting_inspection").length;
-    const today = phxDate(Date.now());
-    const off = await db(`time_off_request?select=id&status=eq.approved&start_date=lte.${today}&end_date=gte.${today}`).catch(() => []);
-    const bits = [`${inProg} cab${inProg === 1 ? "" : "s"} in progress`];
-    if (waiting) bits.push(`${waiting} awaiting inspection`);
-    if (off.length) bits.push(`${off.length} out today`);
-    return { recips, title: "Morning pre-brief", body: bits.join(" · ") + ".", link: "/manager",
-      log: { in_progress: inProg, waiting, off: off.length } };
-  });
-}
+// Block 225 (Daniel, 8/26): the Morning pre-brief is REMOVED — planned early,
+// never enabled, never fired once; its content is the top of the manager
+// console + the Meeting Pack. dailyTouch stays (the 3:45 inspect nudge uses it).
 // Inspect-before-close (~3:45): clear any awaiting-inspection cab before the
 // shop closes so none sleeps overnight. Silent if none is waiting.
 async function inspectBeforeClose() {
@@ -7429,7 +7430,6 @@ async function inspectBeforeClose() {
       log: { waiting: waiting.length } };
   });
 }
-setInterval(morningPrebrief, 5 * 60 * 1000);
 setInterval(inspectBeforeClose, 5 * 60 * 1000);
 
 // Q117: LIVE BOARD via server-sent events. Screens hold an EventSource; this
