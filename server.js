@@ -3453,9 +3453,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         OUT <input type="time" id="tccao-${d.ds}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <button class="btn" style="background:#1d5a2d;padding:8px 16px;margin-top:0" onclick="tccAdd('${d.ds}',this)">Add</button>
       </div>
+      ${d.stints.length ? "" : `
+      <!-- Block 238 (Daniel): WHOLE DAY in one tap — for Scott, who never
+           clocks. Writes a real IN/OUT pair (default 7:00 AM start), so the
+           worksheet and exports see plain worked hours, no special code. -->
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="opacity:.75">&#128337; Whole day:</span>
+        <input id="tccdh-${d.ds}" type="number" value="8" min="0.25" max="12" step="0.25" style="width:4.5em;font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <span style="opacity:.75">hrs from</span>
+        <input id="tccds-${d.ds}" type="time" value="07:00" step="900" style="font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccDay238('${d.ds}',this)">Add day</button>
+      </div>`}
     </div>`).join("")}
-    <div style="opacity:.55;font-size:.9rem">Times are Phoenix. A day with lunch is two rows — add 07:00–11:00, then 12:00–16:00. Every change lands on the timecard with your reason. Days older than 14 days need Daniel.</div>
-    ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see their last 14 days of hours.</div>`}
+    <div style="opacity:.55;font-size:.9rem">Times are Phoenix. A day with lunch is two rows — add 07:00–11:00, then 12:00–16:00. <b>Whole day</b> is for anyone who doesn't punch a clock (Scott): one tap enters the day as normal worked hours from the start time you set. Every change lands on the timecard with your reason. You can reach back through all of LAST pay period; anything older needs Daniel.</div>
+    ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see this pay period and last pay period of hours.</div>`}
   </div>` : ""}
   ${!insp188 && tc ? `
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
@@ -3485,7 +3496,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
         <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
       <p>Why: <input id="tc-note" style="min-width:280px" placeholder="required — e.g. forgot to clock out"></p>
-      <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days; older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
+      <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days (accounting: through all of last pay period); older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
     ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
   </div>` : ""}
   <!-- Q85 FIX JOB: a signed-off cab came back (Body Shop kickback / customer
@@ -3593,6 +3604,27 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     const hEl = document.getElementById("tccvh-" + ds);
     const hrs = hEl && hEl.value !== "" ? Number(hEl.value) : 8;
     tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Vacation", hours: hrs }, btn);
+  }
+  // Block 238 (Daniel — Scott, grandfathered off the clock): a WHOLE DAY in
+  // one tap. Computes an IN/OUT pair from the start time + hours and writes
+  // it through the SAME audited correction path as a hand-entered stint, so
+  // the worksheet, weekly-OT math, and both exports see plain worked hours —
+  // no special code or flag anywhere, exactly as ruled.
+  async function tccDay238(ds, btn) {
+    const m = document.getElementById("tccmsg-" + ds);
+    const hEl = document.getElementById("tccdh-" + ds), sEl = document.getElementById("tccds-" + ds);
+    const hrs = hEl && hEl.value !== "" ? Number(hEl.value) : 8;
+    if (!(hrs > 0) || hrs > 12) { if (m) m.textContent = "Hours must be between 0.25 and 12"; return; }
+    const st = (sEl && sEl.value) || "07:00";
+    const [sh, sm] = st.split(":").map(Number);
+    const endMin = sh * 60 + sm + Math.round(hrs * 60);
+    if (endMin >= 24 * 60) { if (m) m.textContent = "That day runs past midnight — use an earlier start"; return; }
+    const out = String(Math.floor(endMin / 60)).padStart(2, "0") + ":" + String(endMin % 60).padStart(2, "0");
+    btn.disabled = true;
+    const p = { action: "add", employee_id: TCC_EMP, line_id: TCC_LINE, in_at: tccIso(ds, st), out_at: tccIso(ds, out),
+      note: "office-entered day (no clock-in — grandfathered)" };
+    if (await tccCall(ds, p)) return location.reload();
+    btn.disabled = false;
   }
   function tccSickCancel216(id, ds, btn) { tccOff216(ds, "/api/timeoff/cancel", { request_id: id }, btn); }
   function tccIso(ds, hhmm) { return new Date(ds + "T" + hhmm + ":00-07:00").toISOString(); }
@@ -9012,6 +9044,16 @@ http.createServer(async (req, res) => {
       const tcEmpRaw = url.searchParams.get("tc_emp");
       const tcEmpSel = (tcEmpRaw && isUuid(tcEmpRaw)) ? tcEmpRaw : null;   // Block 172 (break-pass): isUuid-guard before the filter
       const tcDate = url.searchParams.get("tc_date") || phxDate(Date.now());
+      // Block 238: the accounting timecard editor covers today back through
+      // the FIRST day of the PREVIOUS pay period (15–31 days depending on
+      // where the calendar sits) — the rolling 14 days cut Kailey off from
+      // the first days of last period right when she runs payroll.
+      const tcT238 = phxDate(Date.now());
+      const tcCur238 = periodFor221(+tcT238.slice(0, 4), +tcT238.slice(5, 7), +tcT238.slice(8, 10));
+      const tcPd238 = phxDate(phxDayStart(tcCur238.f) - 86400000);
+      const tcPrev238 = periodFor221(+tcPd238.slice(0, 4), +tcPd238.slice(5, 7), +tcPd238.slice(8, 10));
+      const tcFloor238 = phxDayStart(tcPrev238.f);
+      const tcDays238 = Math.floor((phxDayStart(tcT238) - tcFloor238) / 86400000) + 1;
       const [lines, linesAll189, builds, reworkReasons, recentCk, empNames, open159,
              repTogRows212, ahRows, togLineRows212, downReasonRows212, tcEmps, allNames,
              toPendRows, toUpRows, toReasonRows212, fxOpenRows, fxCompleted, fxReasons,
@@ -9042,10 +9084,10 @@ http.createServer(async (req, res) => {
         db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=15`),
         fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null),
         tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
-        (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc`) : [],
+        (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(tcFloor238).toISOString()}&order=claimed_at.asc`) : [],   // Block 238: back through the whole previous period
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
         acct189 ? db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
-        (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason,hours&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(Date.now() - 13 * 86400000)}&order=start_date`) : [],   // Block 216/217: the selected person's recorded time off (hours = partial day) — shows + cancels from the editor
+        (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason,hours&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(tcFloor238)}&order=start_date`) : [],   // Block 238: back through the whole previous period   // Block 216/217: the selected person's recorded time off (hours = partial day) — shows + cancels from the editor
       ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
       // WAVE 2 — everything that needed wave-1 ids, still ONE round trip.
@@ -9220,7 +9262,7 @@ http.createServer(async (req, res) => {
           // evs191 rode the Block-212 wave-1 fetch above.
           const byDay191 = {};
           for (const ev of evs191) { const dsE = phxDate(new Date(ev.claimed_at).getTime()); (byDay191[dsE] = byDay191[dsE] || []).push(ev); }
-          for (let i191 = 0; i191 < 14; i191++) {
+          for (let i191 = 0; i191 < tcDays238; i191++) {   // Block 238: today back through the first day of LAST pay period
             const ds = phxDate(Date.now() - i191 * 86400000);
             const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T12:00:00Z").getUTCDay()];
             const stints = [], orphans = [];
@@ -10420,7 +10462,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/punch/correct" && req.method === "POST") {
       const meId = await liveSession(req);
       if (!meId) return json(401, { ok: false, error: "Signed out" });
-      const [meP] = await db(`employee?select=role&id=eq.${meId}`);
+      const [meP] = await db(`employee?select=role,department&id=eq.${meId}`);   // Block 238: department feeds the accounting reach-back
       if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
       const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id, ids } = await body(req);   // Block 192: in_id/out_id feed void_pair · Block 199: ids feeds void_run
@@ -10434,7 +10476,18 @@ http.createServer(async (req, res) => {
       if (action === "add" && !Number.isInteger(Number(line_id)))
         return json(400, { ok: false, error: "Pick a valid line" });
       const nowP = Date.now();
-      const tooOld = (ms) => meP.role !== "admin" && ms < nowP - 14 * 86400000;
+      // Block 238 (Daniel — Kailey couldn't reach the first days of last
+      // period): the ACCOUNTING manager reaches back through the WHOLE
+      // previous pay period — that span IS her working set (she hand-enters
+      // Scott's days and fixes punches before every pay run). Other managers
+      // keep the 14-day window; admins reach anytime, as always.
+      let floorP238 = nowP - 14 * 86400000;
+      if (meP.role === "manager" && meP.department === "Accounting") {
+        const tP = phxDate(nowP), cP = periodFor221(+tP.slice(0, 4), +tP.slice(5, 7), +tP.slice(8, 10));
+        const pdP = phxDate(phxDayStart(cP.f) - 86400000), pvP = periodFor221(+pdP.slice(0, 4), +pdP.slice(5, 7), +pdP.slice(8, 10));
+        floorP238 = phxDayStart(pvP.f);
+      }
+      const tooOld = (ms) => meP.role !== "admin" && ms < floorP238;
       // Simulate the person's Phoenix day around `ms` with a change applied,
       // and ask: do the punches still alternate?
       // Block 199 (Kailey's lockout, 8/20): a day that ALREADY had a tangle
