@@ -2495,6 +2495,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
+            \${l.cab.steps_total ? \`<div style="opacity:.55;font-size:.95rem;margin-top:2px">\${l.cab.steps_done} of \${l.cab.steps_total} steps done\${l.cab.steps_open ? \` · \${l.cab.steps_open} going right now\` : ""}</div>\` : ""}
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today" : "Idle line"}</div>\`}
@@ -2776,7 +2777,7 @@ const progressReportPage210 = (b, family, days) => {
 </body></html>`;
 };
 
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null) => {
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
   // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
   const note138 = (x) => canFull ? String(x == null ? "" : x) : scrubMoney138(x);
@@ -2883,6 +2884,17 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       <div style="opacity:.55;font-weight:700;margin-top:10px">${Number(d) === 0 ? "REWORK / FIX" : `DAY ${escH(d)}`}</div>
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)${t.day_end && t.day_end > t.day_no ? ` &middot; runs Days ${escH(t.day_no)}&ndash;${escH(t.day_end)}` : ""}</span></div>`).join("")}`).join("")}
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
+  ${activity230 ? `<div class="lane" style="border-color:#5ac8fa">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:2px">DAILY ACTIVITY — internal</div>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Admin view only. Everything the crew logged on this cab — steps, notes, photos — day by day. Items hidden from the customer report show struck through / dimmed.</div>
+    ${activity230.length ? activity230.map((dA) => `
+      <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
+        <div style="font-weight:700">${escH(dA.ds)}</div>
+        ${dA.steps.map((sA) => `<div style="font-size:.92rem;opacity:.85;padding:2px 0">&#10003; ${escH(sA.label)} <span style="opacity:.55">&middot; ${escH(sA.who)} &middot; ${escH(sA.at)}</span></div>`).join("")}
+        ${dA.notes.map((nA) => `<div style="font-size:.92rem;padding:2px 0;${nA.hidden ? "text-decoration:line-through;opacity:.4" : "opacity:.92"}">&#128221; ${escH(nA.note)} <span style="opacity:.55">&middot; ${escH(nA.who)}${nA.step ? ` &middot; ${escH(nA.step)}` : ""} &middot; ${escH(nA.at)}${nA.hidden ? " &middot; hidden from customer" : ""}</span></div>`).join("")}
+        ${dA.photos.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${dA.photos.map((pA) => `<a href="/photo-view/${pA.id}" target="_blank"><img src="/photo/${pA.id}" loading="lazy" style="height:72px;border-radius:8px;${pA.hidden ? "opacity:.3" : ""}" title="${escH(pA.who)}${pA.step ? ` · ${escH(pA.step)}` : ""}${pA.hidden ? " · hidden from customer" : ""}"></a>`).join("")}</div>` : ""}
+      </div>`).join("") : `<div style="opacity:.6">Nothing logged yet — steps, notes, and photos will collect here day by day.</div>`}
+  </div>` : ""}
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p>
   <script>
   async function unstart97(bid, btn){
@@ -6449,7 +6461,7 @@ async function reconcileData() {
   }));
   return shaped;
 }
-function reconcilePage(d, role) {
+function reconcilePage(d, role, wh230 = null) {
   const admin = role === "admin";
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
@@ -6465,6 +6477,23 @@ function reconcilePage(d, role) {
   const groups = d.groups.map((g) => `<div class="lane"><h3 style="margin:0 0 8px">${esc(g.line)} <span class="muted" style="font-weight:400;font-size:.8em">— ${g.cabs.length} cab${g.cabs.length === 1 ? "" : "s"}</span></h3>
     <table><tr><th style="width:74px"></th><th>Order #</th><th>Customer</th><th>Family</th><th>State</th><th>Cab #</th><th></th></tr>
     ${g.cabs.map(row).join("")}</table></div>`).join("");
+  // Block 230: the admin-only warehouse-activity lane (empty for everyone else).
+  const whLane230 = !wh230 ? "" : `<div class="lane" style="border-color:#5ac8fa">
+    <h3 style="margin:0 0 2px">Warehouse activity</h3>
+    <div class="muted" style="font-size:.85rem;margin-bottom:8px">On-deck kits by line, and the last 20 kit actions — who did what, when. Admin view only.</div>
+    <table><tr><th>Line</th><th>On deck</th><th>Kit</th><th>In queue</th></tr>
+    ${wh230.onDeck.map((o2) => o2.none ? `<tr><td>${esc(o2.line)}</td><td class="muted" colspan="3">— nothing queued</td></tr>` : `<tr>
+      <td>${esc(o2.line)}</td>
+      <td><b><a href="/order/${encodeURIComponent(o2.order)}" style="color:inherit">${esc(o2.order)}</a></b>${o2.cabno ? ` <span class="muted">· Cab #${esc(o2.cabno)}</span>` : ""}</td>
+      <td>${o2.status === "verified" ? `<span style="color:#5edb84;font-weight:700">&#10003; VERIFIED</span><span class="muted"> ${esc(o2.vby)}${o2.vat ? ` · ${esc(o2.vat)}` : ""}</span>`
+          : o2.status === "short" ? `<span style="color:#ff9f0a;font-weight:700">SHORT</span>${o2.note ? `<span class="muted"> — ${esc(o2.note)}</span>` : ""}`
+          : `<span style="color:#ff8fa3;font-weight:700">NOT VERIFIED</span>`}</td>
+      <td class="muted">${o2.age} day${o2.age === 1 ? "" : "s"}${o2.status !== "verified" && o2.age >= 3 ? ` <span style="color:#ff9f0a">&#9888;</span>` : ""}</td>
+    </tr>`).join("")}</table>
+    <div style="margin-top:10px;font-weight:700;font-size:.9rem;opacity:.75">Latest kit actions</div>
+    ${wh230.feed.length ? wh230.feed.map((f2) => `<div style="font-size:.9rem;padding:3px 0;border-top:1px solid var(--line)"><b>${esc(f2.who)}</b> ${esc(f2.what)}${f2.order ? ` <span class="muted">· order ${esc(f2.order)}</span>` : ""} <span class="muted" style="float:right">${esc(f2.at)}</span></div>`).join("")
+      : `<div class="muted" style="padding:4px 0">No kit actions logged yet — this fills in as warehouse verifies, pulls, and delivers.</div>`}
+  </div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -6505,6 +6534,7 @@ function reconcilePage(d, role) {
     ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
   </div>
   ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
+  ${whLane230}
   ${(d.setAside && d.setAside.length) ? `<div class="lane" style="border-color:#5a2a3a">
     <h3 style="margin:0 0 6px">Set aside <span class="muted" style="font-weight:400;font-size:.8em">&mdash; Coyote hold / cancel, before production (${d.setAside.length})</span></h3>
     <p class="muted" style="margin:-2px 0 10px;font-size:.85rem">These were pulled from the line-up by a Coyote status change before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.</p>
@@ -8321,7 +8351,31 @@ http.createServer(async (req, res) => {
         const fmF127 = fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc&limit=20000`));
         fixHrs127 = fmF127[bO.id] || 0;
       }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196));
+      // Block 230 (Daniel): ADMIN-ONLY internal activity feed — the customer
+      // report's raw material, unfiltered: every step check-off, every note
+      // (hidden ones struck through), every photo, day by day. Punch-level
+      // detail deliberately EXCLUDED (his ruling — that stays with the full
+      // order report / timecard tools).
+      let act230 = null;
+      if (isAdmin97r) {
+        const [phA230, bnA230, tnA230, tkA230, empsA230] = await Promise.all([
+          db(`build_photo?select=id,kind,task_id,uploaded_by,hidden,created_at&build_id=eq.${bO.id}&order=created_at.asc&limit=400`),
+          db(`build_note?select=id,note,author_id,hidden,created_at&build_id=eq.${bO.id}&order=created_at.asc&limit=400`),
+          db(`task_note?select=id,task_id,note,author_id,hidden,created_at&build_id=eq.${bO.id}&order=created_at.asc&limit=400`),
+          db(`task?select=id,name,display_no,completed_at,completed_by,state&build_id=eq.${bO.id}&limit=600`),
+          db(`employee?select=id,first_name,last_name`),
+        ]);
+        const nm230 = Object.fromEntries(empsA230.map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`]));
+        const tn230 = Object.fromEntries(tkA230.map((t2) => [t2.id, t2.display_no ? `${t2.display_no}. ${t2.name}` : t2.name]));
+        const days230 = {};
+        const D230 = (iso) => { const ds = phxDate(new Date(iso).getTime()); return days230[ds] = days230[ds] || { ds, steps: [], notes: [], photos: [] }; };
+        for (const t2 of tkA230) if (t2.state === "complete" && t2.completed_at) D230(t2.completed_at).steps.push({ label: tn230[t2.id] || t2.name, who: nm230[t2.completed_by] || "", at: phxHHMM(t2.completed_at) });
+        for (const n2 of bnA230) D230(n2.created_at).notes.push({ note: n2.note, who: nm230[n2.author_id] || "", hidden: !!n2.hidden, step: "", at: phxHHMM(n2.created_at) });
+        for (const n2 of tnA230) D230(n2.created_at).notes.push({ note: n2.note, who: nm230[n2.author_id] || "", hidden: !!n2.hidden, step: tn230[n2.task_id] || "", at: phxHHMM(n2.created_at) });
+        for (const p2 of phA230) D230(p2.created_at).photos.push({ id: p2.id, hidden: !!p2.hidden, who: nm230[p2.uploaded_by] || "", step: p2.task_id ? (tn230[p2.task_id] || "step") : (p2.kind === "progress" ? "end of day" : p2.kind || "") });
+        act230 = Object.values(days230).sort((a2, z2) => (a2.ds < z2.ds ? 1 : a2.ds > z2.ds ? -1 : 0));
+      }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -8476,7 +8530,15 @@ http.createServer(async (req, res) => {
       const liveStarts = builds.filter((b) => b.state === "active" || b.state === "rework")
         .map((b) => new Date(b.started_at).getTime()).filter((n) => !isNaN(n));
       const windowStart = new Date((liveStarts.length ? Math.min(...liveStarts) : Date.now() - 7 * 86400000) - 86400000).toISOString();
-      const events = await db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`);
+      // Block 230 (Daniel): the tile carries the cab's STEP counts — "14 of 34
+      // steps done · 3 going right now" — the owner-walk-in activity number.
+      const arIds230 = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
+      const [events, tasksB230] = await Promise.all([
+        db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`),
+        arIds230.length ? db(`task?select=build_id,state,is_background&build_id=in.(${arIds230.join(",")})&limit=4000`) : [],
+      ]);
+      const tcnt230 = {};
+      for (const t of tasksB230) { if (t.is_background) continue; const o = tcnt230[t.build_id] = tcnt230[t.build_id] || { total: 0, done: 0, open: 0 }; o.total++; if (t.state === "complete") o.done++; else if (t.state === "in_progress") o.open++; }
       const tmplMh104 = {}; for (const st of stepRows104) tmplMh104[st.template_id] = (tmplMh104[st.template_id] || 0) + Number(st.man_hours || 0);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
       const daysOfTmpl = Object.fromEntries(tmpls.map((t) => [t.id, t.total_days]));
@@ -8647,6 +8709,7 @@ http.createServer(async (req, res) => {
             // man-hours is the honest v1 "how much is left" figure.
             promised: b.promised_finish || null,
             remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
+            steps_total: (tcnt230[b.id] || {}).total || 0, steps_done: (tcnt230[b.id] || {}).done || 0, steps_open: (tcnt230[b.id] || {}).open || 0,
             color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays } };
       }) });
     }
@@ -9266,7 +9329,36 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await reconcileData();
       const vaR90 = String(url.searchParams.get("viewas") || "").toLowerCase();
-      return send(200, "text/html; charset=utf-8", reconcilePage(data, (vaR90 && me.role === "admin") ? "viewer-preview" : me.role));
+      // Block 230 (Daniel): WAREHOUSE ACTIVITY — the admin's window on kit
+      // work. Part 1: every line's ON-DECK cab with its kit status and how
+      // long it has sat unverified (the adoption tell). Part 2: the last 20
+      // kit actions with names and Phoenix times (the pulse). Admins only —
+      // managers/warehouse see the queue exactly as before.
+      let wh230 = null;
+      if (me.role === "admin" && !vaR90) {
+        const [deck230, ev230, emps230, lines230] = await Promise.all([
+          db(`build?select=id,order_number,cab_number,line_id,kit_status,kit_note,kit_verified_at,kit_verified_by,created_at,queue_pos&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc&limit=200`),
+          db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(kit.status,kit.pull_started,kit.pull_undone,kit.pull_reverted,kit.delivered,kit.delivered_held,kit.note)&order=at.desc&limit=20`),
+          db(`employee?select=id,first_name,last_name`),
+          db(`line?select=id,name&enabled=is.true&order=id`),
+        ]);
+        const nm230b = Object.fromEntries(emps230.map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`]));
+        const firstUp230 = {};
+        for (const b2 of deck230) if (b2.line_id != null && !firstUp230[b2.line_id]) firstUp230[b2.line_id] = b2;
+        const onDeck230 = lines230.map((l2) => { const b2 = firstUp230[l2.id]; if (!b2) return { line: l2.name, none: true };
+          const ageD = Math.max(0, Math.floor((Date.now() - new Date(b2.created_at).getTime()) / 86400000));
+          return { line: l2.name, order: b2.order_number, cabno: b2.cab_number || "", status: b2.kit_status || "unverified",
+            note: b2.kit_note || "", vby: b2.kit_verified_by ? (nm230b[b2.kit_verified_by] || "") : "",
+            vat: b2.kit_verified_at ? phxDate(new Date(b2.kit_verified_at).getTime()) : "", age: ageD }; });
+        const phrase230 = { "kit.status": (p2) => p2.status === "verified" ? "verified the kit" : p2.status === "short" ? `marked the kit SHORT${p2.note ? ` — "${String(p2.note).slice(0, 60)}"` : ""}` : "set the kit back to unverified",
+          "kit.pull_started": () => "started pulling the kit", "kit.pull_undone": () => "un-pulled the kit", "kit.pull_reverted": () => "pull auto-reverted (no longer on deck)",
+          "kit.delivered": (p2) => `delivered the kit${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": () => "delivered the kit (line still held)", "kit.note": () => "left a kit note" };
+        const feed230 = ev230.map((e2) => ({ who: e2.actor_id ? (nm230b[e2.actor_id] || "someone") : "system",
+          what: (phrase230[e2.event_type] || (() => e2.event_type))(e2.payload || {}),
+          order: (e2.payload || {}).order_number || "", at: `${phxDate(new Date(e2.at).getTime()).slice(5)} ${phxHHMM(e2.at)}` }));
+        wh230 = { onDeck: onDeck230, feed: feed230 };
+      }
+      return send(200, "text/html; charset=utf-8", reconcilePage(data, (vaR90 && me.role === "admin") ? "viewer-preview" : me.role, wh230));
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
