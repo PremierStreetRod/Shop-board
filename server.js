@@ -1141,11 +1141,16 @@ const style = `<style>
           };
           if (Notification.permission === "granted") sub154();
           else if (Notification.permission === "default" && !sessionStorage.getItem("push154later")) {
+            // Block 226 (Daniel, 8/26): the enable bar stays on every home
+            // screen but QUIETER — bottom of the page, muted colors, smaller
+            // type. It only ever shows on a personal device that has never
+            // answered the permission question (shared tablets never see it,
+            // Block 224); "Not now" hides it for the visit.
             var bar = document.createElement("div");
-            bar.style.cssText = "position:fixed;bottom:0;left:0;right:0;z-index:70;background:#12233a;border-top:1px solid #4a90d9;padding:10px 14px;text-align:center;color:#fff;font-size:.95rem";
+            bar.style.cssText = "position:fixed;bottom:0;left:0;right:0;z-index:70;background:#161618;border-top:1px solid #2c2c2e;padding:7px 12px;text-align:center;color:#8e8e93;font-size:.85rem";
             var go = document.createElement("button");
-            go.textContent = "\uD83D\uDD14 Turn on notifications on this device";
-            go.style.cssText = "background:#0a6cff;border:none;border-radius:10px;color:#fff;padding:10px 16px;font-weight:700;cursor:pointer";
+            go.textContent = "\uD83D\uDD14 Turn on notifications";
+            go.style.cssText = "background:#2c2c2e;border:1px solid #3a3a3c;border-radius:9px;color:#e8e8ed;padding:7px 13px;font-weight:600;cursor:pointer;font-size:.85rem";
             var no = document.createElement("button");
             no.textContent = "Not now";
             no.style.cssText = "background:none;border:none;color:#8e8e93;padding:10px 12px;cursor:pointer;margin-left:8px";
@@ -9350,9 +9355,11 @@ http.createServer(async (req, res) => {
       // manager's ACTION ITEM, not just planning info. Always on; delivery
       // obeys the Q106 sandbox until cutover like everything else.
       const mgrsI99 = await floorMgrIds220("inspect");
+      // Block 226 (Daniel, 8/26): LINE-FIRST title — inspectors know which
+      // LINE to walk to, not which cab number. Order stays in the body.
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
-        `ORDER ${b.order_number} — ready for inspection`,
-        `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the Manager console: sign off, or send it back with a reason and hours.`, "/manager");
+        `${lnF ? lnF.name : "A line"} — ready for inspection`,
+        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — production finished. Sign off on the Manager console, or send it back with a reason and hours.`, "/manager");
       // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
