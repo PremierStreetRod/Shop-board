@@ -3419,7 +3419,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
       ${d.off216 ? `
       <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="color:#5eaeff;font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
+        <span style="color:${/vacation/i.test(d.off216.reason) ? "#30d158" : "#5eaeff"};font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : /vacation/i.test(d.off216.reason) ? `&#127796; VACATION recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
         <button class="b" style="padding:5px 12px" onclick="tccSickCancel216('${d.off216.id}','${d.ds}',this)">Remove</button>
       </div>` : `
       <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -3427,6 +3427,10 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <input id="tccsh-${d.ds}" type="number" value="8" min="0.25" max="8" step="0.25" style="width:4.5em;font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <span style="opacity:.75">hrs</span>
         <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccSick216('${d.ds}',this)">Add sick time</button>
+        <span style="opacity:.75;margin-left:12px">&#127796; Vacation:</span>
+        <input id="tccvh-${d.ds}" type="number" value="8" min="0.25" max="8" step="0.25" style="width:4.5em;font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <span style="opacity:.75">hrs</span>
+        <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccVac235('${d.ds}',this)">Add vacation</button>
       </div>`}
       ${d.stints.map((s) => `
       <div style="margin-top:10px">
@@ -3582,6 +3586,13 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     const hEl = document.getElementById("tccsh-" + ds);
     const hrs = hEl && hEl.value !== "" ? Number(hEl.value) : 8;   // Block 217: partial sick hours (2, 4, ...) — default a full 8
     tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Sick", hours: hrs }, btn);
+  }
+  // Block 235 (Daniel): VACATION rides the same rail as sick — one tap
+  // records it, it lands as "8.0 V" on the worksheet with its own total.
+  function tccVac235(ds, btn) {
+    const hEl = document.getElementById("tccvh-" + ds);
+    const hrs = hEl && hEl.value !== "" ? Number(hEl.value) : 8;
+    tccOff216(ds, "/api/timeoff/add", { employee_id: TCC_EMP, start_date: ds, end_date: ds, reason: "Vacation", hours: hrs }, btn);
   }
   function tccSickCancel216(id, ds, btn) { tccOff216(ds, "/api/timeoff/cancel", { request_id: id }, btn); }
   function tccIso(ds, hhmm) { return new Date(ds + "T" + hhmm + ":00-07:00").toISOString(); }
@@ -4911,7 +4922,10 @@ async function reportData(startMs, endMs) {
   return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime, trend };
 }
 
-const h1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
+// Block 235: hours display keeps QUARTER precision — "8.25"/"7.75" stay
+// intact (they used to collapse to one decimal, 8.25 -> "8.3"); clean halves
+// and wholes still read short ("8.5", "8.0").
+const h1 = (n) => { const s = (Math.round(n * 100) / 100).toFixed(2); return s.endsWith("0") ? s.slice(0, -1) : s; };
 const reportsPage = (d, isAdmin = false, emp196 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -6630,6 +6644,23 @@ function reconcilePage(d, role, wh230 = null) {
 // the nearest quarter-hour · semi-monthly, paid the 1st & 15th · both per-day
 // detail and per-period totals. Admin-only (payroll is sensitive; file 12).
 const roundQ = (h) => Math.round(h * 4) / 4;   // nearest quarter-hour (owner-rep)
+// Block 235 (Daniel, 8/26 — after Kailey's cross-check): QUARTER-HOUR PUNCH
+// ROUNDING on the pay worksheet. Every punch lands on :00/:15/:30/:45 —
+// minute 0–6 within the quarter rounds DOWN, minute 7+ rounds UP (Daniel's
+// exact spec: "at 6 min it gets clocked at 0, at 7 min it gets the .25").
+// This matches the federal quarter-hour rounding rule (29 CFR 785.48(b) —
+// the "7-minute rule"; Daniel's 6/7 split rounds up a minute EARLIER than
+// the DOL example, which only ever favors the employee side of the split,
+// and Arizona follows the federal rule). It applies ONLY where pay is
+// figured — payrollData, so the worksheet page, CSV, and Excel all agree —
+// the stored punches and the timecard editor stay exact-to-the-minute, so
+// the raw record can always prove the rounding washes out fairly.
+function roundPunch235(iso) {
+  const t = new Date(iso);
+  const rem = t.getUTCMinutes() % 15;                     // whole minutes into the quarter (seconds ride along, ignored)
+  const base = t.getTime() - rem * 60000 - t.getUTCSeconds() * 1000 - t.getUTCMilliseconds();
+  return new Date(rem <= 6 ? base : base + 15 * 60000).toISOString();
+}
 const PAY_STD_DAY = 8;                          // a full sick/unpaid day = 8 h
 // Two periods a month: 11th–25th (paid the 1st of next month) and 26th–10th
 // (paid the 15th). Cutoffs = owner-rep's best recollection; custom overrides.
@@ -6670,7 +6701,9 @@ async function payrollData(startMs, endMs) {
     db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`),
   ]);
   const emps = empsAll215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches payroll
-  const ivs = workIntervals(events, nowMs);
+  // Block 235: each punch rounds to the quarter hour (6-down/7-up) BEFORE
+  // pairing into work intervals — so every day naturally lands on .0/.25/.5/.75.
+  const ivs = workIntervals(events.map((ev) => ({ ...ev, claimed_at: roundPunch235(ev.claimed_at) })), nowMs);
   const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
   // worked hours per emp per day (dayed by interval start, clipped to window)
   const worked = {};
@@ -6711,20 +6744,20 @@ async function payrollData(startMs, endMs) {
   const off = {};
   // (offRows fetched in the Block-212 wave above.)
   for (const r of offRows) {
-    const rl = (r.reason || "").toLowerCase(), type = rl.includes("sick") ? "sick" : rl.includes("unpaid") ? "unpaid" : "other";
+    const rl = (r.reason || "").toLowerCase(), type = rl.includes("sick") ? "sick" : rl.includes("vacation") ? "vacation" : rl.includes("unpaid") ? "unpaid" : "other";   // Block 235 (Daniel): vacation is its OWN paid bucket, right beside sick
     let ms = Math.max(phxDayStart(r.start_date), startMs); const end = Math.min(phxDayStart(r.end_date) + 86400000, endMs);
     for (; ms < end; ms += 86400000) { const d = phxDate(ms); if (!workday[d]) continue; (off[r.employee_id] = off[r.employee_id] || {}); off[r.employee_id][d] = { type, reason: r.reason || "", hours: r.hours != null ? roundQ(Number(r.hours)) : null }; }   // Block 217: hours=null means a full standard day
   }
   const rows = emps.map((e) => {
-    const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, unpaid = 0, ahx = 0; const byDay = {};
+    const wk = worked[e.id] || {}, of = off[e.id] || {}; let reg = 0, ot = 0, sick = 0, vac = 0, unpaid = 0, ahx = 0; const byDay = {};
     for (const d of dates) {
       const ax = roundQ((ahCut[e.id] || {})[d] || 0); ahx += ax;
       const h = roundQ(wk[d] || 0);
-      let s = 0, u = 0, otherOff = null;
+      let s = 0, v = 0, u = 0, otherOff = null;
       if (of[d]) { const offH217 = of[d].hours != null ? of[d].hours : PAY_STD_DAY;   // Block 217 (Daniel): partial sick time — "sometimes they just take 2 hours or 4 hours"
-        if (of[d].type === "sick") s = offH217; else if (of[d].type === "unpaid") u = offH217; else otherOff = of[d].reason; }
-      sick += s; unpaid += u;
-      if (h > 0 || s || u || otherOff || ax) byDay[d] = { worked: h, reg: h, ot: 0, sick: s, unpaid: u, otherOff, ahx: ax };
+        if (of[d].type === "sick") s = offH217; else if (of[d].type === "vacation") v = offH217; else if (of[d].type === "unpaid") u = offH217; else otherOff = of[d].reason; }   // Block 235: vacation rides exactly like sick
+      sick += s; vac += v; unpaid += u;
+      if (h > 0 || s || v || u || otherOff || ax) byDay[d] = { worked: h, reg: h, ot: 0, sick: s, vac: v, unpaid: u, otherOff, ahx: ax };
     }
     // Block 216 (Daniel: "we are in arizona... overtime is paid ONLY when they
     // work more than 40 hours in a one week period"): WEEKLY overtime, the
@@ -6737,8 +6770,8 @@ async function payrollData(startMs, endMs) {
     dates.forEach((d216, i216) => { const w216 = Math.floor(i216 / 7);
       wkSum216[w216] = roundQ((wkSum216[w216] || 0) + roundQ(wk[d216] || 0)); });
     for (const wS of wkSum216) { const wOt = Math.max(0, roundQ(wS) - 40); ot = roundQ(ot + wOt); reg = roundQ(reg + (roundQ(wS) - wOt)); }
-    return { id: e.id, name: `${e.first_name} ${e.last_name}`, payType: e.pay_type || "hourly", reg, ot, sick, unpaid, ahx, total: roundQ(reg + ot + sick + unpaid), byDay };
-  }).filter((r) => r.reg || r.ot || r.sick || r.unpaid || r.ahx || Object.keys(r.byDay).length);
+    return { id: e.id, name: `${e.first_name} ${e.last_name}`, payType: e.pay_type || "hourly", reg, ot, sick, vac, unpaid, ahx, total: roundQ(reg + ot + sick + vac + unpaid), byDay };
+  }).filter((r) => r.reg || r.ot || r.sick || r.vac || r.unpaid || r.ahx || Object.keys(r.byDay).length);
   // Block 200 (owner, day 4): SALARY and OWNER (n/a) people are NOT hourly
   // payroll — "she's seeing only the hours of true numbers of the hourly
   // employees." They come OUT of the tables and totals; anyone of them who
@@ -6747,7 +6780,7 @@ async function payrollData(startMs, endMs) {
   const salNotes = rows.filter((r) => r.payType === "salary" || r.payType === "na")
     .map((r) => ({ name: r.name, label: r.payType === "salary" ? "salary" : "owner", hrs: roundQ(r.reg + r.ot) }));
   const hourlyRows = rows.filter((r) => r.payType !== "salary" && r.payType !== "na");
-  const totals = hourlyRows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, unpaid: 0, ahx: 0, total: 0 });
+  const totals = hourlyRows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, vac: a.vac + r.vac, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, vac: 0, unpaid: 0, ahx: 0, total: 0 });
   // v148 (owner-rep): every SYSTEM clock-out in the window gets a named note on
   // payroll's sheet — the machine closed someone's day, a human should glance
   // at it before the pay run (and can fix the punches in one tap).
@@ -6761,7 +6794,7 @@ async function payrollData(startMs, endMs) {
 function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers open this too — their nav must not carry admin links
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const wd = d.workdays, dow = (ds) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T00:00:00Z").getUTCDay()];
-  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">' + h1(day.sick) + ' S</span>'); if (day.unpaid) marks.push('<span class="up">' + h1(day.unpaid) + ' U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.unpaid)) t = day.sick ? '<span class="sk">' + h1(day.sick) + ' S</span>' : '<span class="up">' + h1(day.unpaid) + ' U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };   // Block 217: sick/unpaid marks carry their HOURS (partial sick days)
+  const cell = (day) => { if (!day) return '<td class="c muted">·</td>'; let t = h1(day.worked); const marks = []; if (day.ot) marks.push('<span class="ot">' + h1(day.ot) + ' OT</span>'); if (day.sick) marks.push('<span class="sk">' + h1(day.sick) + ' S</span>'); if (day.vac) marks.push('<span class="vc">' + h1(day.vac) + ' V</span>'); if (day.unpaid) marks.push('<span class="up">' + h1(day.unpaid) + ' U</span>'); if (day.otherOff) marks.push('<span class="muted">' + esc(day.otherOff) + '</span>'); if (day.ahx) marks.push('<span class="up">&minus;' + h1(day.ahx) + ' AH</span>'); if (!day.worked && (day.sick || day.vac || day.unpaid)) t = day.sick ? '<span class="sk">' + h1(day.sick) + ' S</span>' : day.vac ? '<span class="vc">' + h1(day.vac) + ' V</span>' : '<span class="up">' + h1(day.unpaid) + ' U</span>'; else if (!day.worked && day.ahx) t = '<span class="up">0.0</span>'; return `<td class="c">${t}${marks.length && (day.worked || day.ahx) ? ' ' + marks.join(' ') : ''}</td>`; };   // Block 217: sick/unpaid marks carry their HOURS · Block 235: V = vacation
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Pay Worksheet</title>${style}
@@ -6772,7 +6805,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   td{padding:5px 7px;border-bottom:1px solid var(--line)}
   td.c,th.c{text-align:center;font-variant-numeric:tabular-nums}
   .num{text-align:right;font-variant-numeric:tabular-nums}
-  .muted{opacity:.55}.ot{color:#ff9f0a;font-size:.82em}.sk{color:#5eaeff;font-weight:600}.up{color:#ff6b5e;font-weight:600}
+  .muted{opacity:.55}.ot{color:#ff9f0a;font-size:.82em}.sk{color:#5eaeff;font-weight:600}.vc{color:#30d158;font-weight:600}.up{color:#ff6b5e;font-weight:600}
   .csv{float:right;font-size:.82rem;color:#8e8e93}
   .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
   @media print{ a,.per{display:none} }
@@ -6781,7 +6814,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
-  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick and Unpaid from approved time off, rounded to the quarter-hour. Paid leave never counts toward the 40. Download the CSV and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
     <span style="opacity:.55">Pay period:</span>
     <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
@@ -6794,15 +6827,15 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   </div>
   <script>function ppGo(){var f=document.getElementById("pp-from").value,t=document.getElementById("pp-to").value;if(!f||!t)return;location.href="/payroll?from="+f+"&to="+t;}</script>
   <div class="lane">
-    <a class="csv" href="/payroll.csv?${d.qs}">⬇ CSV for payroll</a>
+    <a class="csv" href="/payroll.xlsx?${d.qs}" style="color:#30d158;font-weight:700">⬇ Excel for payroll</a><a class="csv" href="/payroll.csv?${d.qs}" style="margin-right:14px">CSV</a>
     <h3>Totals for the period</h3>
-    ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Unpaid</th><th class="num">AH not counted</th><th class="num">Total</th></tr>
-      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num ${r.ahx ? "up" : "muted"}">${r.ahx ? h1(r.ahx) : "·"}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
-      <tr style="border-top:2px solid var(--line)"><td><b>All (${d.rows.length})</b></td><td class="num"><b>${h1(d.totals.reg)}</b></td><td class="num"><b>${h1(d.totals.ot)}</b></td><td class="num"><b>${h1(d.totals.sick)}</b></td><td class="num"><b>${h1(d.totals.unpaid)}</b></td><td class="num ${d.totals.ahx ? "up" : "muted"}"><b>${d.totals.ahx ? h1(d.totals.ahx) : "·"}</b></td><td class="num"><b>${h1(d.totals.total)}</b></td></tr></table>`
+    ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Vacation</th><th class="num">Unpaid</th><th class="num">AH not counted</th><th class="num">Total</th></tr>
+      ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.vac ? "vc" : ""}">${h1(r.vac)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num ${r.ahx ? "up" : "muted"}">${r.ahx ? h1(r.ahx) : "·"}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
+      <tr style="border-top:2px solid var(--line)"><td><b>All (${d.rows.length})</b></td><td class="num"><b>${h1(d.totals.reg)}</b></td><td class="num"><b>${h1(d.totals.ot)}</b></td><td class="num"><b>${h1(d.totals.sick)}</b></td><td class="num"><b>${h1(d.totals.vac)}</b></td><td class="num"><b>${h1(d.totals.unpaid)}</b></td><td class="num ${d.totals.ahx ? "up" : "muted"}"><b>${d.totals.ahx ? h1(d.totals.ahx) : "·"}</b></td><td class="num"><b>${h1(d.totals.total)}</b></td></tr></table>`
     : `<div class="muted">No hours in this pay period.</div>`}
   </div>
   ${d.rows.length ? `<div class="lane" style="overflow-x:auto">
-    <h3>Day by day <span class="muted" style="font-weight:400;font-size:.85rem">(work days only · OT = over 8h · S = sick · U = unpaid)</span></h3>
+    <h3>Day by day <span class="muted" style="font-weight:400;font-size:.85rem">(work days only · OT = weekly overtime · S = sick · V = vacation · U = unpaid)</span></h3>
     <table><tr><th>Employee</th>${wd.map((ds) => `<th class="c">${dow(ds)}<br><span class="muted" style="font-weight:400">${ds.slice(5)}</span></th>`).join("")}<th class="num">Total</th></tr>
       ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td>${wd.map((ds) => cell(r.byDay[ds])).join("")}<td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
     </table>
@@ -6819,7 +6852,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
     <h3>Salaried &amp; owners <span class="muted" style="font-weight:400;font-size:.85rem">(not on hourly payroll — their punches are informational only and are NOT in the totals above)</span></h3>
     ${d.salNotes.map((n) => `<div style="padding:5px 0;border-top:1px solid var(--line)"><b>${esc(n.name)}</b> · ${n.label}${n.hrs ? ` · punched ${h1(n.hrs)}h this period` : ""}</div>`).join("")}
   </div>` : ""}
-  <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Unpaid come from approved time-off days; other approved absences are noted but not totaled here. Hourly people only — salaried &amp; owners never count in the totals (set who's who under People in the Admin console).</p>
+  <p class="muted" style="font-size:.85rem;text-align:center">Semi-monthly, paid the 1st & 15th (cutoffs adjustable — use Custom for an exact range). Sick/Vacation/Unpaid come from recorded time-off days; other approved absences are noted but not totaled here. Hourly people only — salaried &amp; owners never count in the totals (set who's who under People in the Admin console).</p>
 </div></body></html>`;
 }
 function payrollCsv(d) {
@@ -6856,10 +6889,12 @@ function payrollCsv(d) {
   for (const ds of d.dates) {
     const cells = d.rows.map((r) => { const c = r.byDay[ds];
       if (!c) return "";
-      const hrs = c.worked || 0, s = c.sick || 0, u = c.unpaid || 0;
+      const hrs = c.worked || 0, s = c.sick || 0, v = c.vac || 0, u = c.unpaid || 0;
       if (!hrs && s) return h1(s) + " S";      // sick day — marked like their "8 ST"
+      if (!hrs && v) return h1(v) + " V";      // Block 235: vacation day, same shape as sick
       if (!hrs && u) return h1(u) + " U";      // unpaid day
       if (hrs && s) return h1(hrs) + " +" + h1(s) + "S";   // Block 217: worked part of the day + partial sick hours
+      if (hrs && v) return h1(hrs) + " +" + h1(v) + "V";
       if (hrs && u) return h1(hrs) + " +" + h1(u) + "U";
       return hrs ? h1(hrs) : ""; });
     if (cells.some((c) => c !== "")) L.push([ds, dow(ds), ...cells].map(q).join(","));
@@ -6869,6 +6904,7 @@ function payrollCsv(d) {
   L.push(["", "Regular", ...d.rows.map((r) => h1(r.reg))].map(q).join(","));
   L.push(["", "Overtime", ...d.rows.map((r) => h1(r.ot))].map(q).join(","));
   if (d.rows.some((r) => r.sick)) L.push(["", "Sick", ...d.rows.map((r) => h1(r.sick))].map(q).join(","));
+  if (d.rows.some((r) => r.vac)) L.push(["", "Vacation", ...d.rows.map((r) => h1(r.vac))].map(q).join(","));   // Block 235: vacation gets its own total line, just like sick
   if (d.rows.some((r) => r.unpaid)) L.push(["", "Unpaid", ...d.rows.map((r) => h1(r.unpaid))].map(q).join(","));
   const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
   if (pendAh.length) {
@@ -6876,6 +6912,160 @@ function payrollCsv(d) {
     L.push(q(`NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`));
   }
   return L.join("\n");
+}
+
+// ---------- Block 235 (Daniel): THE FORMATTED EXCEL EXPORT ----------
+// "ARE you able to configure a downloadable and pre-formatted excel file
+// instead of the csv?" — yes, with zero dependencies. An .xlsx is a ZIP of
+// XML parts; Node's crypto/zlib-free path below writes STORED zip entries
+// with a hand-rolled CRC32, and the sheet XML carries real formatting:
+// bold merged title, shaded header row, frozen panes (dates+header stay put
+// while you scroll), quarter-hour numbers that read "8.25"/"8.5"/"9",
+// colored S / V / U codes, and a bold ruled totals block. Same layout as
+// the CSV (which stays available), so the accountant sees a finished sheet
+// instead of raw commas.
+function crc32_235(buf) {
+  let c, crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    c = (crc ^ buf[i]) & 0xFF;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    crc = (crc >>> 8) ^ c;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function zip235(files) {   // files: [{name, data(Buffer|string)}] -> Buffer (STORED entries; tiny files, no compression needed)
+  const parts = [], cd = []; let off = 0;
+  const dosTime = (10 << 11) | (30 << 5);          // 10:30:00 — fixed, deploys are stateless
+  const dosDate = ((2026 - 1980) << 9) | (8 << 5) | 26;
+  for (const f of files) {
+    const nm = Buffer.from(f.name), dt = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data);
+    const crc = crc32_235(dt);
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0, 6); lh.writeUInt16LE(0, 8);
+    lh.writeUInt16LE(dosTime, 10); lh.writeUInt16LE(dosDate, 12); lh.writeUInt32LE(crc, 14);
+    lh.writeUInt32LE(dt.length, 18); lh.writeUInt32LE(dt.length, 22); lh.writeUInt16LE(nm.length, 26); lh.writeUInt16LE(0, 28);
+    parts.push(lh, nm, dt);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0, 8); ch.writeUInt16LE(0, 10);
+    ch.writeUInt16LE(dosTime, 12); ch.writeUInt16LE(dosDate, 14); ch.writeUInt32LE(crc, 16);
+    ch.writeUInt32LE(dt.length, 20); ch.writeUInt32LE(dt.length, 24); ch.writeUInt16LE(nm.length, 28);
+    ch.writeUInt32LE(off, 42);
+    cd.push(Buffer.concat([ch, nm]));
+    off += 30 + nm.length + dt.length;
+  }
+  const cdBuf = Buffer.concat(cd);
+  const eo = Buffer.alloc(22);
+  eo.writeUInt32LE(0x06054b50, 0); eo.writeUInt16LE(files.length, 8); eo.writeUInt16LE(files.length, 10);
+  eo.writeUInt32LE(cdBuf.length, 12); eo.writeUInt32LE(off, 16);
+  return Buffer.concat([...parts, cdBuf, eo]);
+}
+function payrollXlsx235(d) {
+  const xe = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const dow = (ds) => ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(ds + "T00:00:00Z").getUTCDay()];
+  const first = (name) => String(name || "").split(" ")[0];
+  const seen = {}; d.rows.forEach((r) => { const f = first(r.name); seen[f] = (seen[f] || 0) + 1; });
+  const colName = (r) => { const f = first(r.name); return seen[f] > 1 ? `${f} ${(String(r.name).split(" ")[1] || "")[0] || ""}` : f; };
+  const isoDs = String(d.rangeText || "").match(/\d{4}-\d{2}-\d{2}/g) || [];
+  const mdy = (ds) => ds ? `${ds.slice(5, 7)}/${ds.slice(8, 10)}/${ds.slice(2, 4)}` : "";
+  const fromDs = isoDs[0] || d.dates[0], toDs = isoDs[1] || d.dates[d.dates.length - 1];
+  const nCols = d.rows.length + 2;
+  const colL = (i) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : "") + String.fromCharCode(65 + (i % 26));
+  // Styles (index into cellXfs below): 1 title · 2 header · 3 date/text ·
+  // 4 hours number · 5 code text · 6 sick · 7 vacation · 8 unpaid ·
+  // 9 totals label · 10 totals number · 11 red note · 12 section label
+  let rXml = "", rn = 0;
+  const row = (cells, opts) => { rn++;
+    const cs = cells.map((c, i) => {
+      if (c == null) return "";
+      const ref = colL(i) + rn;
+      if (typeof c === "number") return `<c r="${ref}" s="${(opts && opts.s) || 4}"><v>${c}</v></c>`;
+      return `<c r="${ref}" t="inlineStr" s="${(c && c.s) != null ? c.s : (opts && opts.s) || 3}"><is><t xml:space="preserve">${xe(c && c.t != null ? c.t : c)}</t></is></c>`;
+    }).join("");
+    rXml += `<row r="${rn}"${opts && opts.ht ? ` ht="${opts.ht}" customHeight="1"` : ""}>${cs}</row>`;
+  };
+  row([{ t: `Employee Pay Worksheet  (${mdy(fromDs)} - ${mdy(toDs)})`, s: 1 }], { ht: 24 });
+  row([]);
+  row([{ t: "Date", s: 2 }, { t: "Day", s: 2 }, ...d.rows.map((r) => ({ t: colName(r), s: 2 }))]);
+  const hdrRow = rn;
+  for (const ds of d.dates) {
+    const cells = d.rows.map((r) => { const c = r.byDay[ds];
+      if (!c) return { t: "", s: 5 };
+      const hrs = c.worked || 0, s = c.sick || 0, v = c.vac || 0, u = c.unpaid || 0;
+      if (!hrs && s) return { t: h1(s) + " S", s: 6 };
+      if (!hrs && v) return { t: h1(v) + " V", s: 7 };
+      if (!hrs && u) return { t: h1(u) + " U", s: 8 };
+      if (hrs && s) return { t: h1(hrs) + " +" + h1(s) + "S", s: 6 };
+      if (hrs && v) return { t: h1(hrs) + " +" + h1(v) + "V", s: 7 };
+      if (hrs && u) return { t: h1(hrs) + " +" + h1(u) + "U", s: 8 };
+      return hrs ? roundQ(hrs) : { t: "", s: 5 }; });
+    if (cells.some((c) => typeof c === "number" || c.t !== "")) row([{ t: mdy(ds), s: 3 }, { t: dow(ds), s: 3 }, ...cells]);
+  }
+  row([]);
+  row([{ t: "", s: 10 }, { t: "Total", s: 9 }, ...d.rows.map((r) => ({ t: "", s: 10, n: r.total }))].map((c) => c.n != null ? c.n : c), { s: 10 });
+  row([{ t: "", s: 12 }, { t: "Regular", s: 12 }, ...d.rows.map((r) => roundQ(r.reg))]);
+  row([{ t: "", s: 12 }, { t: "Overtime", s: 12 }, ...d.rows.map((r) => roundQ(r.ot))]);
+  if (d.rows.some((r) => r.sick)) row([{ t: "", s: 12 }, { t: "Sick", s: 12 }, ...d.rows.map((r) => roundQ(r.sick))]);
+  if (d.rows.some((r) => r.vac)) row([{ t: "", s: 12 }, { t: "Vacation", s: 12 }, ...d.rows.map((r) => roundQ(r.vac))]);
+  if (d.rows.some((r) => r.unpaid)) row([{ t: "", s: 12 }, { t: "Unpaid", s: 12 }, ...d.rows.map((r) => roundQ(r.unpaid))]);
+  const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
+  if (pendAh.length) { row([]);
+    row([{ t: `NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`, s: 11 }], { ht: 30 });
+  }
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0" showGridLines="true"><pane xSplit="2" ySplit="${hdrRow}" topLeftCell="C${hdrRow + 1}" state="frozen"/></sheetView></sheetViews>
+<cols><col min="1" max="1" width="11" customWidth="1"/><col min="2" max="2" width="12" customWidth="1"/><col min="3" max="${nCols}" width="10.5" customWidth="1"/></cols>
+<sheetData>${rXml}</sheetData>
+<mergeCells count="1"><mergeCell ref="A1:${colL(nCols - 1)}1"/></mergeCells>
+</worksheet>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="0.##"/></numFmts>
+<fonts count="7">
+<font><sz val="11"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/></font>
+<font><b/><sz val="14"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><color rgb="FF1F6FC5"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><color rgb="FF1E7E34"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><color rgb="FFC0392B"/><name val="Calibri"/></font>
+<font><sz val="11"/><color rgb="FF666666"/><name val="Calibri"/></font>
+</fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEDEDED"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="3"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top/><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left/><right/><top style="medium"><color rgb="FF333333"/></top><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="13">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="164" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
+<xf numFmtId="164" fontId="6" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Pay Worksheet" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  const wbRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const types = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  return zip235([
+    { name: "[Content_Types].xml", data: types },
+    { name: "_rels/.rels", data: rootRels },
+    { name: "xl/workbook.xml", data: workbook },
+    { name: "xl/_rels/workbook.xml.rels", data: wbRels },
+    { name: "xl/styles.xml", data: styles },
+    { name: "xl/worksheets/sheet1.xml", data: sheet },
+  ]);
 }
 
 // Block 131 (logic audit L6): the ON-DECK cab of a line's upcoming queue — the
@@ -9231,7 +9421,7 @@ http.createServer(async (req, res) => {
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
     // Staff-level numbers never reach the floor (file 12 privacy rule).
     // PAY WORKSHEET (payroll hours export) — admin-only (payroll is sensitive).
-    if (url.pathname === "/payroll" || url.pathname === "/payroll.csv") {
+    if (url.pathname === "/payroll" || url.pathname === "/payroll.csv" || url.pathname === "/payroll.xlsx") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=role,department,must_change_pin&id=eq.${empId}`);
@@ -9247,6 +9437,12 @@ http.createServer(async (req, res) => {
         const tag = period.preset === "custom" ? `${period.from}_to_${period.to}` : (period.to || period.preset);
         res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="shopboard-payroll-${tag}.csv"` });
         return res.end(payrollCsv(data));
+      }
+      if (url.pathname === "/payroll.xlsx") {   // Block 235: the FORMATTED sheet — what actually gets emailed to payroll now
+        const tag = period.preset === "custom" ? `${period.from}_to_${period.to}` : (period.to || period.preset);
+        res.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-disposition": `attachment; filename="shopboard-payroll-${tag}.xlsx"` });
+        return res.end(payrollXlsx235(data));
       }
       return send(200, "text/html; charset=utf-8", payrollPage(data, me.role === "admin"));
     }
@@ -10170,7 +10366,7 @@ http.createServer(async (req, res) => {
       const okR = await db(`pick_list_item?select=label&list_key=eq.time_off_reason&retired=is.false`);
       // Block 216: "Sick" / "Unpaid" always work even if the pick list drifts —
       // payroll math keys on those words, not the list.
-      const rsn = reason && (okR.some((r) => r.label === reason) || /^(sick|unpaid)$/i.test(String(reason))) ? reason : null;
+      const rsn = reason && (okR.some((r) => r.label === reason) || /^(sick|unpaid|vacation)$/i.test(String(reason))) ? reason : null;   // Block 235: "Vacation" always works, like Sick — payroll keys on the word
       const [row] = await db(`time_off_request`, { method: "POST",
         body: JSON.stringify({ employee_id, start_date, end_date: end, reason: rsn, hours: hours217, requested_by: empId,
           added_by_manager: true, status: "approved", decided_by: empId, decided_at: new Date().toISOString() }) });
