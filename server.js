@@ -740,6 +740,116 @@ async function longDayCheck206(empId, outIso) {
       `/manager?tc_emp=${empId}`);
   } catch (e) { console.error("long-day check failed:", e.message); }
 }
+// Block 221 (Daniel, 8/26 — accounting notifications, all three approved):
+// #1 PAY-PERIOD-END REMINDER — the morning a new period begins (the 11th and
+// the 26th), the accounting managers get one notice: the ended period's
+// range, how many punch-oddity days are still flagged, and any after-hours
+// sessions awaiting admin sign-off (those hold hours out of the export).
+// Edge-triggered per period via event_log; fires any time after 6:30 AM
+// Phoenix on the first day, so a server nap can't swallow it.
+async function periodEndCheck221() {
+  try {
+    if (!DB_READY) return;
+    const now = Date.now();
+    const phx = new Date(now - PHX_OFFSET_MS);
+    if (phx.getUTCHours() * 60 + phx.getUTCMinutes() < 390) return;   // before 6:30 AM Phoenix
+    const today = phxDate(now);
+    const cur = periodFor221(+today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10));
+    if (cur.f !== today) return;                                      // only a period's FIRST day
+    const pd = phxDate(phxDayStart(cur.f) - 86400000);
+    const prev = periodFor221(+pd.slice(0, 4), +pd.slice(5, 7), +pd.slice(8, 10));
+    const dup = await db(`event_log?select=id&event_type=eq.payroll.period_end&payload->>period=eq.${prev.f}&limit=1`);
+    if (dup.length) return;
+    const acct221 = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
+    const startMs = phxDayStart(prev.f), endMs = phxDayStart(prev.t) + 86400000;
+    const d221 = await payrollData(startMs, endMs);
+    const pend221 = (d221.ahNotes || []).filter((n) => !n.declined).length;
+    // Oddity count over the ended period — the same flags as the console lane.
+    const emps221 = await db(`employee?select=id,first_name,last_name,pay_type&active=is.true`);
+    const evs221 = await db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc&limit=20000`);
+    const byED221 = {};
+    for (const ev of evs221) { const dsO = phxDate(new Date(ev.claimed_at).getTime());
+      ((byED221[ev.employee_id] = byED221[ev.employee_id] || {})[dsO] = byED221[ev.employee_id][dsO] || []).push(ev); }
+    let oddN221 = 0;
+    for (const eO of emps221) {
+      if (isTestAcct215(eO) || ["salary", "na"].includes(eO.pay_type)) continue;
+      const daysO = byED221[eO.id] || {};
+      for (const dsO in daysO) {
+        let openP = null, flag = false;
+        for (const pO of daysO[dsO]) {
+          if (pO.kind === "clock_in") { if (openP) flag = true; openP = pO; }
+          else { if (pO.kind === "clock_out_auto" && !pO.corrected_by && !pO.added_by) flag = true; if (!openP) flag = true; openP = null; }
+        }
+        if (openP && dsO !== today) flag = true;
+        if (flag) oddN221++;
+      }
+    }
+    logEvent("payroll.period_end", null, { period: prev.f, to: prev.t, oddities: oddN221, pending_ah: pend221 });
+    if (acct221.length) notify("payroll.period_end", acct221.map((a) => a.id),
+      "Pay period ended — worksheet ready",
+      `${prev.f} → ${prev.t} closed yesterday.` +
+      (oddN221 ? ` ${oddN221} punch day${oddN221 === 1 ? "" : "s"} still flagged in the oddities lane.` : " No open punch oddities.") +
+      (pend221 ? ` ${pend221} after-hours session${pend221 === 1 ? "" : "s"} awaiting admin sign-off — those hours are held out until ruled on.` : "") +
+      " Review and export when ready.",
+      "/payroll?preset=last");
+  } catch (e) { console.error("period-end check failed:", e.message); }
+}
+setInterval(periodEndCheck221, 10 * 60 * 1000);
+
+// #2 CROSSED-40-HOURS HEADS-UP — Arizona weekly OT means the moment someone's
+// WORKED hours pass 40 inside a period-aligned week, overtime starts
+// accruing. Runs after any clock-out (sweeper auto-outs included), hourly
+// people only, one notice per person per week. Sick/vacation never count
+// (worked punches only — same rule as the worksheet's weekly-OT math).
+async function week40Check221(empId, outIso) {
+  try {
+    const dayMs = new Date(outIso).getTime();
+    const ds = phxDate(dayMs);
+    const cur = periodFor221(+ds.slice(0, 4), +ds.slice(5, 7), +ds.slice(8, 10));
+    const pStart = phxDayStart(cur.f);
+    const wk = Math.floor((phxDayStart(ds) - pStart) / (7 * 86400000));
+    const wStart = pStart + wk * 7 * 86400000;
+    const wEnd = Math.min(wStart + 7 * 86400000, phxDayStart(cur.t) + 86400000);
+    const evs = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(wStart).toISOString()}&claimed_at=lt.${new Date(wEnd).toISOString()}&order=claimed_at.asc`);
+    let open221 = null, mins = 0;
+    for (const ev of evs) {
+      const t = new Date(ev.claimed_at).getTime();
+      if (ev.kind === "clock_in") open221 = t;
+      else if (open221 != null) { mins += (t - open221) / 60000; open221 = null; }
+    }
+    if (mins < 40 * 60) return;
+    const [who] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${empId}`);
+    if (!who || isTestAcct215(who) || ["salary", "na"].includes(who.pay_type)) return;
+    const wkKey = phxDate(wStart);
+    const dup = await db(`event_log?select=id&event_type=eq.payroll.week40&payload->>employee_id=eq.${empId}&payload->>week=eq.${wkKey}&limit=1`);
+    if (dup.length) return;
+    logEvent("payroll.week40", null, { employee_id: empId, week: wkKey, minutes: Math.round(mins) });
+    const adminsW = await db(`employee?select=id&active=is.true&role=eq.admin`);
+    const acctW = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
+    notify("payroll.week40", [...new Set([...adminsW.map((a) => a.id), ...acctW.map((a) => a.id)])],
+      `${who.first_name} ${((who.last_name || "")[0] || "")}. crossed 40h this week`,
+      `Worked hours passed 40 for the week starting ${wkKey} — overtime accrues from here (Arizona weekly rule). The Pay Worksheet handles the math automatically.`,
+      "/payroll");
+  } catch (e) { console.error("week-40 check failed:", e.message); }
+}
+
+// #3 PAY DATA CHANGED BY SOMEONE ELSE — whenever anyone who is NOT an
+// accounting manager touches pay-bearing data (adds/cancels sick or vacation
+// time, corrects punches), the accounting managers get a one-line heads-up
+// so the numbers never move under them silently. The actor is excluded, so
+// Kailey's own edits stay quiet — today this fires only when an admin does it.
+async function acctEditNotice221(actorId, what221, whoId221, day221, link221) {
+  try {
+    const acctE = (await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`)).map((a) => a.id).filter((id) => id !== actorId);
+    if (!acctE.length) return;
+    const ids221 = [...new Set([actorId, whoId221].filter(Boolean))];
+    const ppl = await db(`employee?select=id,first_name,last_name&id=in.(${ids221.join(",")})`);
+    const nm = (id) => { const p = ppl.find((x) => x.id === id); return p ? `${p.first_name} ${((p.last_name || "")[0] || "")}.` : "someone"; };
+    notify("payroll.edited", acctE, `Pay data changed — ${nm(whoId221)}`,
+      `${nm(actorId)} ${what221} for ${nm(whoId221)}${day221 ? ` (${day221})` : ""}. Already on the timecard and worksheet — worth a glance if it changes pay.`,
+      link221 || "/manager#timecorrections");
+  } catch (e) { console.error("acct-edit notice failed:", e.message); }
+}
 async function sweepForgottenClockOuts() {
   if (!DB_READY) return;
   try {
@@ -778,6 +888,7 @@ async function sweepForgottenClockOuts() {
       logEvent("clock.auto_out", null, { employee_id: ev.employee_id, line_id: ev.line_id,
         opened_at: ev.claimed_at, closed_at: new Date(closeAt).toISOString() });
       await longDayCheck206(ev.employee_id, new Date(closeAt).toISOString());   // Block 206: an auto-closed long day still gets the lunch-verify notice
+      void week40Check221(ev.employee_id, new Date(closeAt).toISOString());   // Block 221: the auto-close can be the punch that crosses 40
       // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
       // SESSION open forever — close it honestly so the cockpit lane and the
       // timecards tell the truth about forgetful nights.
@@ -6403,6 +6514,17 @@ function reconcilePage(d, role) {
 // detail and per-period totals. Admin-only (payroll is sensitive; file 12).
 const roundQ = (h) => Math.round(h * 4) / 4;   // nearest quarter-hour (owner-rep)
 const PAY_STD_DAY = 8;                          // a full sick/unpaid day = 8 h
+// Two periods a month: 11th–25th (paid the 1st of next month) and 26th–10th
+// (paid the 15th). Cutoffs = owner-rep's best recollection; custom overrides.
+// Block 221: extracted from payPeriod so the period-end reminder and the
+// crossed-40h check share the exact same calendar.
+const pad221 = (n) => String(n).padStart(2, "0"), mk221 = (y, m, d) => `${y}-${pad221(m)}-${pad221(d)}`;
+const shift221 = (y, m, dl) => { let mm = m + dl, yy = y; while (mm < 1) { mm += 12; yy--; } while (mm > 12) { mm -= 12; yy++; } return [yy, mm]; };
+const periodFor221 = (y, m, d) => {
+  if (d >= 11 && d <= 25) { const [ny, nm] = shift221(y, m, 1); return { f: mk221(y, m, 11), t: mk221(y, m, 25), pay: mk221(ny, nm, 1) }; }
+  if (d >= 26) { const [ny, nm] = shift221(y, m, 1); return { f: mk221(y, m, 26), t: mk221(ny, nm, 10), pay: mk221(ny, nm, 15) }; }
+  const [py, pm] = shift221(y, m, -1); return { f: mk221(py, pm, 26), t: mk221(y, m, 10), pay: mk221(y, m, 15) };
+};
 function payPeriod(params) {
   const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
   const from = params.get("from"), to = params.get("to");
@@ -6411,19 +6533,10 @@ function payPeriod(params) {
     return { startMs: phxDayStart(f), endMs: phxDayStart(t) + 86400000, preset: "custom",
       from: f, to: t, pay: "", label: "Custom range", rangeText: `${f} → ${t}`, qs: `from=${f}&to=${t}` };
   }
-  const pad = (n) => String(n).padStart(2, "0"), mk = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
-  const shift = (y, m, dl) => { let mm = m + dl, yy = y; while (mm < 1) { mm += 12; yy--; } while (mm > 12) { mm -= 12; yy++; } return [yy, mm]; };
-  // Two periods a month: 11th–25th (paid the 1st of next month) and 26th–10th
-  // (paid the 15th). Cutoffs = owner-rep's best recollection; custom overrides.
-  const periodFor = (y, m, d) => {
-    if (d >= 11 && d <= 25) { const [ny, nm] = shift(y, m, 1); return { f: mk(y, m, 11), t: mk(y, m, 25), pay: mk(ny, nm, 1) }; }
-    if (d >= 26) { const [ny, nm] = shift(y, m, 1); return { f: mk(y, m, 26), t: mk(ny, nm, 10), pay: mk(ny, nm, 15) }; }
-    const [py, pm] = shift(y, m, -1); return { f: mk(py, pm, 26), t: mk(y, m, 10), pay: mk(y, m, 15) };
-  };
   const today = phxDate(Date.now());
-  let cur = periodFor(+today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10));
+  let cur = periodFor221(+today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10));
   const preset = params.get("preset") === "last" ? "last" : "this";
-  if (preset === "last") { const pd = phxDate(phxDayStart(cur.f) - 86400000); cur = periodFor(+pd.slice(0, 4), +pd.slice(5, 7), +pd.slice(8, 10)); }
+  if (preset === "last") { const pd = phxDate(phxDayStart(cur.f) - 86400000); cur = periodFor221(+pd.slice(0, 4), +pd.slice(5, 7), +pd.slice(8, 10)); }
   return { startMs: phxDayStart(cur.f), endMs: phxDayStart(cur.t) + 86400000, preset, from: cur.f, to: cur.t, pay: cur.pay,
     label: preset === "last" ? "Last pay period" : "Current pay period", rangeText: `${cur.f} → ${cur.t} · paid ${cur.pay}`, qs: `preset=${preset}` };
 }
@@ -7030,9 +7143,17 @@ async function sendSms116(to, bodyText) {
 // Accounting-department managers. Admins always ride along. A manager with
 // NO department set keeps receiving (undefined is not excluded) until
 // Daniel scopes that department's manager role too.
-async function floorMgrIds220() {
+// Block 221 (Daniel, 8/26): "body shop managers get different notifications
+// than production managers." Lanes: default "floor" = Production-floor
+// traffic (pace, line-frees, ship-risk, Coyote plumbing, order rulings,
+// daily touches) — PRODUCTION-dept managers only; "inspect" = the
+// inspection hand-off — Production AND Body Shop managers (Body Shop ARE
+// the inspectors). Admins always ride. A manager with NO department stays
+// on every lane until Daniel scopes that department (none exist today).
+async function floorMgrIds220(lane221) {
   const rows = await db(`employee?select=id,role,department&active=is.true&role=in.(manager,admin)`);
-  return rows.filter((r) => r.role === "admin" || r.department !== "Accounting").map((r) => r.id);
+  const ok221 = lane221 === "inspect" ? ["Production", "Body Shop"] : ["Production"];
+  return rows.filter((r) => r.role === "admin" || !r.department || ok221.includes(r.department)).map((r) => r.id);
 }
 async function notify(eventType, intendedIds, title, bodyText, link) {
   try {
@@ -7196,7 +7317,7 @@ async function dayStartNudge() {
     const phxMidReal = new Date(today + "T00:00:00Z").getTime() + PHX_OFFSET_MS;
     const prior = await db(`notification_log?select=id&event_type=eq.nudge.daystart&created_at=gte.${new Date(phxMidReal).toISOString()}&limit=1`);
     if (prior.length) return;
-    const recips = (await db(`employee?select=id,role,department&role=in.(production,manager)&active=is.true`)).filter((r) => r.role !== "manager" || r.department !== "Accounting").map((e) => e.id);
+    const recips = (await db(`employee?select=id,role,department&role=in.(production,manager)&active=is.true`)).filter((r) => r.role !== "manager" || !r.department || r.department === "Production").map((e) => e.id);
     if (!recips.length) return;
     await notify("nudge.daystart", recips, "Good morning — let's get started",
       "Clock in and pick up your line when you're ready.", "/home");
@@ -7252,7 +7373,7 @@ async function inspectBeforeClose() {
   return dailyTouch("touch.inspect", "inspect_before_close_nudge", "15:45", async () => {
     const waiting = await db(`build?select=id&state=eq.awaiting_inspection`);
     if (!waiting.length) return null;                     // nothing waiting -> no nudge
-    const recips = await floorMgrIds220();
+    const recips = await floorMgrIds220("inspect");
     if (!recips.length) return null;
     return { recips, title: "Sign off before close",
       body: `${waiting.length} cab${waiting.length === 1 ? "" : "s"} still awaiting inspection — clear ${waiting.length === 1 ? "it" : "them"} before the shop closes.`, link: "/manager",
@@ -7904,6 +8025,7 @@ http.createServer(async (req, res) => {
         employee_id: empId, kind, reason: reason97 || null, claimed_at: claimed_at || new Date().toISOString() }) });
       logEvent("clock.out", empId, { reason: reason97, kind });
       void longDayCheck206(empId, claimed_at || new Date().toISOString());   // Block 206: fire-and-forget — never slows the tap; guarded inside
+      void week40Check221(empId, claimed_at || new Date().toISOString());   // Block 221: crossed-40h check rides the same clock-out, same fire-and-forget
       return json(200, { ok: true });
     }
 
@@ -9139,7 +9261,7 @@ http.createServer(async (req, res) => {
         notify("build.line_clear", await warehouseIds(),
           `${lnSP ? lnSP.name : "Line"} is CLEAR`,
           `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — rework done, crew sent it to Body. Deliver the next kit when it's ready.`, "/home");
-        const mgrsSP = await floorMgrIds220();
+        const mgrsSP = await floorMgrIds220("inspect");
         if (mgrsSP.length) notify("build.self_passed", mgrsSP,
           `ORDER ${b.order_number} — rework done, sent to Body by the crew`,
           `Every rework item is checked off and production pushed the cab through (one-inspection system). If the fixes aren't right, Body sends it back with one tap on the Manager console.`, "/manager");
@@ -9177,7 +9299,7 @@ http.createServer(async (req, res) => {
       // Block 99 (owner-rep): the DIRECT review signal — a finished cab is the
       // manager's ACTION ITEM, not just planning info. Always on; delivery
       // obeys the Q106 sandbox until cutover like everything else.
-      const mgrsI99 = await floorMgrIds220();
+      const mgrsI99 = await floorMgrIds220("inspect");
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
         `ORDER ${b.order_number} — ready for inspection`,
         `Production finished${b.cab_number ? ` Cab #${b.cab_number}` : ""} on ${lnF ? lnF.name : "its line"}. Review on the Manager console: sign off, or send it back with a reason and hours.`, "/manager");
@@ -9790,6 +9912,7 @@ http.createServer(async (req, res) => {
         body: JSON.stringify({ employee_id, start_date, end_date: end, reason: rsn, hours: hours217, requested_by: empId,
           added_by_manager: true, status: "approved", decided_by: empId, decided_at: new Date().toISOString() }) });
       logEvent("timeoff.added", empId, { request_id: row && row.id, employee_id, start_date, end_date: end, reason: rsn, hours: hours217 });
+      void acctEditNotice221(empId, `added ${hours217 ? hours217 + "h of" : "a day of"} ${rsn || "time off"}`, employee_id, start_date === end ? start_date : `${start_date} → ${end}`, `/manager?tc_emp=${employee_id}#timecorrections`);
       await notify("timeoff.added", [employee_id], "Time off added",
         `Time off was recorded for you: ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.`, "/home");
       return json(200, { ok: true });
@@ -9814,6 +9937,7 @@ http.createServer(async (req, res) => {
       await db(`time_off_request?id=eq.${request_id}`, { method: "PATCH", body: JSON.stringify({
         status: "denied", decided_by: empId, decided_at: new Date().toISOString(), decision_note: "cancelled by the office" }) });
       logEvent("timeoff.cancelled", empId, { request_id, employee_id: rowC.employee_id, start_date: rowC.start_date, end_date: rowC.end_date });
+      void acctEditNotice221(empId, "removed a time-off entry", rowC.employee_id, rowC.start_date, `/manager?tc_emp=${rowC.employee_id}#timecorrections`);
       return json(200, { ok: true });
     }
 
@@ -9881,6 +10005,7 @@ http.createServer(async (req, res) => {
           claimed_at: new Date(toMs).toISOString(), original_claimed_at: p.original_claimed_at || p.claimed_at,
           corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.moved", meId, { punch_id: p.id, employee_id: p.employee_id, from: p.claimed_at, to: new Date(toMs).toISOString(), note });
+        void acctEditNotice221(meId, "moved a punch", p.employee_id, phxDate(toMs), `/manager?tc_emp=${p.employee_id}&tc_date=${phxDate(toMs)}#timecorrections`);
         return json(200, { ok: true });
       }
       // Block 192: VOID_PAIR — the timecard editor's Remove erases a whole
@@ -9909,6 +10034,7 @@ http.createServer(async (req, res) => {
             voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.pair_voided", meId, { in_id, out_id, employee_id: alive[0].employee_id,
           at: alive.map((p2) => p2.claimed_at), note });
+        void acctEditNotice221(meId, "removed a punch pair", alive[0].employee_id, phxDate(new Date(alive[0].claimed_at).getTime()), `/manager?tc_emp=${alive[0].employee_id}&tc_date=${phxDate(new Date(alive[0].claimed_at).getTime())}#timecorrections`);
         return json(200, { ok: true });
       }
       // Block 199: VOID_RUN — the shop-level Remove. In the accounting
@@ -9937,6 +10063,7 @@ http.createServer(async (req, res) => {
             voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.run_voided", meId, { ids: rowsR.map((p2) => p2.id), employee_id: rowsR[0].employee_id,
           at: rowsR.map((p2) => p2.claimed_at), note });
+        void acctEditNotice221(meId, "removed a stint of punches", rowsR[0].employee_id, phxDate(new Date(rowsR[0].claimed_at).getTime()), `/manager?tc_emp=${rowsR[0].employee_id}&tc_date=${phxDate(new Date(rowsR[0].claimed_at).getTime())}#timecorrections`);
         return json(200, { ok: true });
       }
       if (action === "void") {
@@ -9969,6 +10096,7 @@ http.createServer(async (req, res) => {
         await db(`clock_event?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({
           voided: true, corrected_by: meId, corrected_at: new Date(nowP).toISOString(), correction_note: note }) });
         logEvent("punch.voided", meId, { punch_id: p.id, employee_id: p.employee_id, at: p.claimed_at, note });
+        void acctEditNotice221(meId, "removed a punch", p.employee_id, phxDate(new Date(p.claimed_at).getTime()), `/manager?tc_emp=${p.employee_id}&tc_date=${phxDate(new Date(p.claimed_at).getTime())}#timecorrections`);
         return json(200, { ok: true });
       }
       if (action === "add") {
@@ -9999,6 +10127,7 @@ http.createServer(async (req, res) => {
           claimed_at: new Date(outMs).toISOString(), added_by: meId, correction_note: note }) });
         logEvent("punch.added", meId, { employee_id, line_id, in_at: new Date(inMs).toISOString(),
           out_at: outMs ? new Date(outMs).toISOString() : null, note });
+        void acctEditNotice221(meId, "added punches", employee_id, phxDate(inMs), `/manager?tc_emp=${employee_id}&tc_date=${phxDate(inMs)}#timecorrections`);
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown action" });
