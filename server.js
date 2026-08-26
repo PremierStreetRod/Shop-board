@@ -9447,9 +9447,13 @@ http.createServer(async (req, res) => {
       // File 16: the line's usual techs hear it the moment it's assigned —
       // no walking to the board to discover the cab came back. Q106 sandbox.
       const techsR = await db(`employee?select=id&active=is.true&lines=cs.{${b.line_id}}`);
+      // Block 223 (Daniel, 8/26): KID-GLOVES COPY — the crew's bell should
+      // never read like a verdict. Facts stay (reason, note, hours, where);
+      // the failure reason moves out of the HEADLINE, "sent back" becomes
+      // "one more pass", "hrs given" becomes "hrs set aside".
       notify("build.rework_assigned", techsR.map((t) => t.id),
-        `Order ${b.order_number} sent back — ${reason}`,
-        `${note ? note + " — " : ""}${Number(hours) || "?"} hrs given. The fix step is on the cab screen.`, "/home");
+        `Order ${b.order_number} — one more pass`,
+        `A fix step is on the cab screen: ${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs set aside for it. Grab it when you're ready.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -9495,9 +9499,13 @@ http.createServer(async (req, res) => {
         kind, reason, note: note || "", hours: Number(hours) || null, line_id: lineId, was_signed_off: true, at: when });
       // The chosen line's techs hear it (Q106 sandbox holds delivery to owner-rep).
       const techsFx = await db(`employee?select=id&active=is.true&lines=cs.{${lineId}}`);
+      // Block 223 (Daniel, 8/26): KID-GLOVES COPY — "kickback" is scoreboard
+      // language; the crew's version is neutral. kind stays in the event log
+      // and the manager lanes where it belongs.
+      const [lnFx223] = await db(`line?select=name&id=eq.${lineId}`);
       notify("build.fixjob_opened", techsFx.map((t) => t.id),
-        `Order ${b.order_number} came back — ${kind === "kickback" ? "Body Shop kickback" : "customer return"}`,
-        `${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs given. The fix step is on the cab screen.`, "/home");
+        `Order ${b.order_number} is back${lnFx223 ? ` on ${lnFx223.name}` : ""}`,
+        `It needs a fix after sign-off: ${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs set aside. The fix step is on the cab screen.`, "/home");
       return json(200, { ok: true });
     }
 
