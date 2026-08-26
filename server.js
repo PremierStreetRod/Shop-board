@@ -6974,13 +6974,19 @@ function payrollXlsx235(d) {
   // 4 hours number · 5 code text · 6 sick · 7 vacation · 8 unpaid ·
   // 9 totals label · 10 totals number · 11 red note · 12 section label
   let rXml = "", rn = 0; const merges236 = [];   // Block 236: totals labels span Date+Day — no stray empty boxes
+  // Block 237 (Daniel's print): every cell draws only its RIGHT+BOTTOM edge
+  // (neighbors were each drawing full boxes -> a doubled line on paper);
+  // column A swaps to a left-edge variant so the table's outer line survives.
+  const LEFT237 = { 2: 13, 3: 14, 9: 15, 12: 16 };
   const row = (cells, opts) => { rn++;
     if (opts && opts.mergeAB) merges236.push(`A${rn}:B${rn}`);
     const cs = cells.map((c, i) => {
       if (c == null) return "";
       const ref = colL(i) + rn;
       if (typeof c === "number") return `<c r="${ref}" s="${(opts && opts.s) || 4}"><v>${c}</v></c>`;
-      return `<c r="${ref}" t="inlineStr" s="${(c && c.s) != null ? c.s : (opts && opts.s) || 3}"><is><t xml:space="preserve">${xe(c && c.t != null ? c.t : c)}</t></is></c>`;
+      let s237 = (c && c.s) != null ? c.s : (opts && opts.s) || 3;
+      if (i === 0 && LEFT237[s237]) s237 = LEFT237[s237];
+      return `<c r="${ref}" t="inlineStr" s="${s237}"><is><t xml:space="preserve">${xe(c && c.t != null ? c.t : c)}</t></is></c>`;
     }).join("");
     rXml += `<row r="${rn}"${opts && opts.ht ? ` ht="${opts.ht}" customHeight="1"` : ""}>${cs}</row>`;
   };
@@ -7033,22 +7039,26 @@ function payrollXlsx235(d) {
 <font><sz val="11"/><color rgb="FF666666"/><name val="Calibri"/></font>
 </fonts>
 <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEDEDED"/><bgColor indexed="64"/></patternFill></fill></fills>
-<borders count="4"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="medium"><color rgb="FF333333"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border></borders>
+<borders count="7"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left/><right style="thin"><color rgb="FFBFBFBF"/></right><top/><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border><border><left/><right style="thin"><color rgb="FFBFBFBF"/></right><top style="medium"><color rgb="FF333333"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top/><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="medium"><color rgb="FF333333"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="13">
+<cellXfs count="17">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="3"/>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="3" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="4" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="5" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
-<xf numFmtId="0" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="right"/></xf>
-<xf numFmtId="164" fontId="1" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="2"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="164" fontId="1" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="center"/></xf>
 <xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
-<xf numFmtId="0" fontId="6" fillId="0" borderId="3" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="0" fontId="6" fillId="0" borderId="2" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="4" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="5"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="6" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="0" fontId="6" fillId="0" borderId="5" applyAlignment="1"><alignment horizontal="right"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
