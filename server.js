@@ -2343,13 +2343,17 @@ const inboxPage = (emp, notes) => `<!doctype html>
   ${notes.length ? notes.map((n) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
     const unread = !n.read_at;
-    return `<div style="background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px">
+    // Block 233 (Ross): the WHOLE CARD is a link — tap a notification and land
+    // where the action is (the link every notice already carries; older rows
+    // without one just open /home).
+    return `<a href="${String(n.link || "/home").replace(/"/g, "&quot;")}" style="display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
         <b>${unread ? "\uD83D\uDD34 " : ""}${String(n.title).replace(/</g, "&lt;")}</b>
         <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
       </div>
       <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
-    </div>`; }).join("")
+      <div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>
+    </a>`; }).join("")
   : `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`}
   <p style="text-align:center;margin-top:20px">
     <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
@@ -2965,7 +2969,7 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
   const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
-  const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];
+  const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/changes", "Order changes"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];   // Block 233 (Ross/Daniel): "Changes" (the Coyote push-to-push diff) is PLUMBING — off the top nav row, into the Tools drawer where the other pipeline pages live
   const tools = tools95 === "time"
     ? [["/payroll", "Pay Worksheet"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed
     : isAdmin
@@ -2977,7 +2981,6 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>   <!-- Block 157 (owner-rep E2): Manager cockpit -> Manager console, matching "Admin console" -->
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
-    ${isAdmin ? `<a href="/changes" style="color:#8e8e93;margin-right:16px">Changes</a>` : ""}
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
     ${tools95 ? `<details class="t95" style="display:inline-block;position:relative">
       <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
@@ -3059,11 +3062,15 @@ const settingsPage117 = (me) => `<!doctype html>
          the bell inbox always keeps a copy no matter what; these switches
          only decide whether the phone gets tapped on the shoulder. -->
     <p style="opacity:.6;font-size:.9rem;margin:6px 0 4px">Your role decides WHICH notices you get; these decide HOW they arrive. Everything ALWAYS lands in your \uD83D\uDD14 inbox no matter what you turn off here.</p>
+    <!-- Block 233 (Ross's catch, day one of his push setup): the old row put a
+         BIG GREEN "Turn ON" button next to a dim OFF — green read as "already
+         on". Now the COLOR IS THE STATE: a green ON chip or a red OFF chip
+         says where you stand, and the action button is plain gray. -->
     ${[["push", "Phone / web push", "Pops up on your phone like any app. This device also has to allow notifications — the \uD83D\uDD14 button appears below if it hasn't yet."], ["sms", "Text message", "Sent to the mobile number above."]].map(([ch, label, note]) => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)">
       <div style="flex:1"><b>${label}</b><br><small style="opacity:.55">${note}</small></div>
-      <b id="st-${ch}" style="opacity:.7">${me["notify_" + ch] === false ? "OFF" : "ON"}</b>
-      <button style="background:${me["notify_" + ch] === false ? "#1d5a2d" : "#3a3a3c"};border:none;border-radius:9px;color:#fff;padding:9px 14px;cursor:pointer" onclick="flip117('${ch}',this)">Turn ${me["notify_" + ch] === false ? "ON" : "OFF"}</button>
+      <b id="st-${ch}" style="display:inline-block;min-width:96px;text-align:center;padding:9px 0;border-radius:9px;font-size:.95rem;${me["notify_" + ch] === false ? "background:#3a1520;color:#ff8fa3" : "background:#1d5a2d;color:#7ee79a"}">${me["notify_" + ch] === false ? "\uD83D\uDD15 OFF" : "\uD83D\uDD14 ON"}</b>
+      <button id="bt-${ch}" style="background:#2c2c2e;border:1px solid #3a3a3c;border-radius:9px;color:#e8e8ed;padding:9px 14px;cursor:pointer" onclick="flip117('${ch}',this)">Turn ${me["notify_" + ch] === false ? "on" : "off"}</button>
     </div>`).join("")}
   </div>
   <p style="text-align:center;margin-top:16px"><a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -3075,9 +3082,11 @@ const settingsPage117 = (me) => `<!doctype html>
       const r = await fetch("/api/settings/channels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: ch, enabled: !cur117[ch] }) });
       const out = await r.json();
       if (out.ok) { cur117[ch] = !cur117[ch];
-        document.getElementById("st-" + ch).textContent = cur117[ch] ? "ON" : "OFF";
-        btn.textContent = "Turn " + (cur117[ch] ? "OFF" : "ON");
-        btn.style.background = cur117[ch] ? "#3a3a3c" : "#1d5a2d";
+        var stE = document.getElementById("st-" + ch);
+        stE.textContent = cur117[ch] ? "\uD83D\uDD14 ON" : "\uD83D\uDD15 OFF";
+        stE.style.background = cur117[ch] ? "#1d5a2d" : "#3a1520";
+        stE.style.color = cur117[ch] ? "#7ee79a" : "#ff8fa3";
+        btn.textContent = "Turn " + (cur117[ch] ? "off" : "on");
       }
     } catch(e) {}
     btn.disabled = false;
@@ -6439,7 +6448,7 @@ function reconcileShape(open, famOf, lineName, hi) {
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
 async function reconcileData() {
-  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000");
+  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&limit=100000");   // Block 233: fix_job joined the list — a returned cab on a line was falling off the queue page entirely
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
   const lines = await db("line?select=id,name&order=id");
@@ -6459,6 +6468,20 @@ async function reconcileData() {
     why: (b.coyote_status === "Cancel" || b.state === "cancelled") ? "Cancelled" : "On hold",
     when: String(b.created_at || "").slice(0, 10),
   }));
+  // Block 233 (Daniel: "once a cab leaves production... it is gone from the
+  // board" — no way to reach its order page or progress report). MOVED ON:
+  // every cab past production, still one click from its order page. Until the
+  // Body Shop / shipping build-outs exist, production_complete reads "At Body
+  // Shop" — richer stages arrive with those departments.
+  const gone233 = await db("build?select=id,order_number,part_number,cab_number,state,customer_name,created_at&state=in.(production_complete,complete)&order=created_at.desc&limit=150");
+  const leftEv233 = await db("event_log?select=build_id,at&event_type=eq.build.production_complete&order=at.desc&limit=400");
+  const leftAt233 = {}; for (const e of leftEv233) if (e.build_id && !leftAt233[e.build_id]) leftAt233[e.build_id] = e.at;
+  shaped.movedOn = gone233.map((b) => ({
+    order: b.order_number || "—", family: famOf[String(b.part_number || "").toUpperCase()] || b.part_number || "",
+    cab: b.cab_number || "", customer: b.customer_name || "",
+    stage: b.state === "complete" ? "Complete" : "At Body Shop",
+    left: leftAt233[b.id] ? String(leftAt233[b.id]).slice(0, 10) : String(b.created_at || "").slice(0, 10),
+  })).sort((a, z) => (a.left < z.left ? 1 : -1));
   return shaped;
 }
 function reconcilePage(d, role, wh230 = null) {
@@ -6535,6 +6558,12 @@ function reconcilePage(d, role, wh230 = null) {
   </div>
   ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
   ${whLane230}
+  ${(d.movedOn && d.movedOn.length && role !== "warehouse-view") ? `<div class="lane" style="border-color:#2d5a46">
+    <h3 style="margin:0 0 2px">Moved on <span class="muted" style="font-weight:400;font-size:.8em">&mdash; past production, still one click away (${d.movedOn.length})</span></h3>
+    <div class="muted" style="font-size:.85rem;margin-bottom:6px">Tap any order for its page and progress report. Stages beyond Body Shop (paint, shipping) get their own tracking when those departments are built out.</div>
+    <table><tr><th>Order #</th><th>Cab #</th><th>Customer</th><th>Family</th><th>Stage</th><th>Left production</th></tr>
+    ${d.movedOn.map((m) => `<tr><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td><td><span class="flag" style="background:#173a2b;color:#5edb84">${esc(m.stage)}</span></td><td class="muted">${esc(m.left)}</td></tr>`).join("")}</table>
+  </div>` : ""}
   ${(d.setAside && d.setAside.length) ? `<div class="lane" style="border-color:#5a2a3a">
     <h3 style="margin:0 0 6px">Set aside <span class="muted" style="font-weight:400;font-size:.8em">&mdash; Coyote hold / cancel, before production (${d.setAside.length})</span></h3>
     <p class="muted" style="margin:-2px 0 10px;font-size:.85rem">These were pulled from the line-up by a Coyote status change before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.</p>
@@ -7327,14 +7356,14 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
         if (emailOn && EMAIL_READY && !emailStatus) emailStatus = "no_address";
         if (smsOn && SMS_READY && !smsStatus) smsStatus = "no_number";
         const rows116 = [];
-        if (emailStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "email", title, body: bodyText, sandboxed: sandbox, status: emailStatus })));
-        if (smsStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "sms", title, body: bodyText, sandboxed: sandbox, status: smsStatus })));
+        if (emailStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "email", title, body: bodyText, link: link || null, sandboxed: sandbox, status: emailStatus })));
+        if (smsStatus) rows116.push(...intended.map((id) => ({ event_type: eventType, intended_employee_id: id, channel: "sms", title, body: bodyText, link: link || null, sandboxed: sandbox, status: smsStatus })));
         if (rows116.length) await db("notification_log", { method: "POST", body: JSON.stringify(rows116) });
       })().catch(() => { /* channel trouble never breaks the floor */ });
     }
     await db("notification_log", { method: "POST", body: JSON.stringify(intended.map((id) => ({
       event_type: eventType, intended_employee_id: id, channel: "push", title, body: bodyText,
-      sandboxed: sandbox, status }))) });
+      link: link || null, sandboxed: sandbox, status }))) });   // Block 233: link stored -> the bell card is tappable (migration 0056)
   } catch (e) { /* never break the floor over a notification */ }
 }
 // The warehouse crew, resolved fresh each event (roster changes stick).
@@ -8270,7 +8299,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/inbox/unread") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false });
-      const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&limit=200`);
+      const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&channel=eq.push&limit=200`);   // Block 233 (Ross): count ONLY the push-channel row — one per notice; the sms/email rows are delivery bookkeeping, not separate notifications
       return json(200, { ok: true, count: un.length });
     }
 
@@ -8281,7 +8310,7 @@ http.createServer(async (req, res) => {
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const notes = await db(`notification_log?select=id,title,body,created_at,read_at&intended_employee_id=eq.${empId}&order=created_at.desc&limit=100`);
+      const notes = await db(`notification_log?select=id,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=100`);   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056)
       const html = inboxPage(emp, notes);
       const unreadIds = notes.filter((n) => !n.read_at).map((n) => n.id);
       if (unreadIds.length)
