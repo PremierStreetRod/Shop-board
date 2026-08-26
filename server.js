@@ -2041,7 +2041,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 // see every line's state + what's on deck, verify kits (the three-state
 // gate), reorder the upcoming queue, and run the two-step pull task whose
 // "Delivered" tap starts the cab's clock on production's side.
-const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }) => `<!doctype html>
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "") => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
@@ -2075,7 +2075,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
          ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
          <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
       : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button>
-         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — one quick tap, then a normal shift.` : "Morning, back from lunch — same habit as the floor."}</span>
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — one quick tap, then a normal shift.` : hint239}</span>   <!-- Block 239: the hint reads the person's own last punch — never frozen copy -->
          ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
            <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — one quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
            <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
@@ -7989,7 +7989,7 @@ http.createServer(async (req, res) => {
         // Q109: warehouse gets its own board — the handoff INTO production.
         // Block 212 (v201 SPEED): independent reads fired together.
         const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212] = await Promise.all([
-          db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+          db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
           db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
           db(`line?select=id,name&enabled=is.true&order=id`),
           db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),
@@ -8024,10 +8024,19 @@ http.createServer(async (req, res) => {
           (ahNowW && !clockedInW106) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
         ]);
         const [openAhW] = openAhWRows;
+        // Block 239 (Eric's screenshot, via Daniel): the clock-in hint was
+        // FROZEN planning copy — "Morning, back from lunch — same habit as
+        // the floor" rendered identically at 6 AM and after lunch, and Eric
+        // rightly called it out. Now it reads his own LAST punch: a clock-out
+        // earlier TODAY means he's coming back (lunch named when that was the
+        // reason); anything else means this tap starts his day.
+        let hint239 = "First punch of the day — this starts your hours.";
+        if (lastW && lastW.kind !== "clock_in" && lastW.claimed_at && phxDate(new Date(lastW.claimed_at).getTime()) === phxDate(Date.now()))
+          hint239 = /lunch/i.test(lastW.reason || "") ? "Back from lunch — this picks your day back up." : "Welcome back — this picks your day back up.";
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
             { now: ahNowW, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
-              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }));
+              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239));
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
