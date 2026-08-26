@@ -2332,6 +2332,38 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 // Q120: the per-person NOTIFICATION INBOX — their own notification history,
 // newest first, unread ones ringed red. Opening it marks them read. This is
 // how notifications reach someone in-app regardless of push/text/email.
+// Block 234 (Daniel, 8/26): SMART bell links. Rows written before migration
+// 0056 carry no stored link — Daniel tapped a pre-0056 "needs a ruling" card
+// and landed on the HOME page. Instead of that dead end, derive the SAME
+// destination a fresh notice of that type would carry today: order-family
+// notices parse the order number straight out of their own title; everything
+// else maps by event type. And a notice whose only destination is /home is
+// INFORMATIONAL — it renders as a plain card with no "Tap to open" at all
+// (Daniel: "SOME may not need clicks because they are informational"), so
+// the tap hint only ever appears when it actually goes somewhere useful.
+const LINK_FALLBACK_234 = {
+  "timecard.long_day": "/manager#timecorrections",   // deep tc_emp link is lost on old rows; the corrections lane still is the action surface
+  "clock.auto_out": "/manager#timecorrections",
+  "payroll.period_end": "/payroll?preset=last", "payroll.week40": "/payroll",
+  "payroll.edited": "/manager#timecorrections",
+  "sync.iface_add": "/reconcile", "sync.iface_drop": "/reconcile", "kit.short": "/reconcile",
+  "pace.warn": "/board", "pace.standards": "/board",
+  "build.ready_inspection": "/manager", "build.self_passed": "/manager",
+  "touch.linefrees": "/manager", "timeoff.requested": "/manager",
+  "afterhours.wrapped": "/manager", "afterhours.claimed": "/admin",
+};
+function bellLink234(n) {
+  const stored = n.link && n.link !== "/home" ? String(n.link) : null;
+  if (stored) return stored;
+  const ev = String(n.event_type || "");
+  // Order-family notices (rulings, option flags, Coyote cab alerts, promise
+  // conflicts) all name their order in the title — go straight to the order.
+  if (/^(note\.|option\.|cab\.)/.test(ev) || ev === "build.promise_conflict") {
+    const m = /\border\s+([0-9]+(?:\.[0-9]+)?)/i.exec(String(n.title || ""));
+    if (m) return "/order/" + encodeURIComponent(m[1]);
+  }
+  return LINK_FALLBACK_234[ev] || null;   // null = informational: plain card, no tap hint
+}
 const inboxPage = (emp, notes) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -2344,16 +2376,19 @@ const inboxPage = (emp, notes) => `<!doctype html>
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
     const unread = !n.read_at;
     // Block 233 (Ross): the WHOLE CARD is a link — tap a notification and land
-    // where the action is (the link every notice already carries; older rows
-    // without one just open /home).
-    return `<a href="${String(n.link || "/home").replace(/"/g, "&quot;")}" style="display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px">
+    // where the action is. Block 234 (Daniel): the destination comes from
+    // bellLink234 (stored link, or derived for pre-0056 rows); a notice with
+    // no real destination renders as a PLAIN card — no dead "Tap to open".
+    const go234 = bellLink234(n);
+    const card234 = `style="display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px"`;
+    return `<${go234 ? `a href="${String(go234).replace(/"/g, "&quot;")}"` : "div"} ${card234}>
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
         <b>${unread ? "\uD83D\uDD34 " : ""}${String(n.title).replace(/</g, "&lt;")}</b>
         <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
       </div>
       <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
-      <div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>
-    </a>`; }).join("")
+      ${go234 ? `<div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>` : ""}
+    </${go234 ? "a" : "div"}>`; }).join("")
   : `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`}
   <p style="text-align:center;margin-top:20px">
     <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
@@ -8310,7 +8345,7 @@ http.createServer(async (req, res) => {
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const notes = await db(`notification_log?select=id,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=100`);   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056)
+      const notes = await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=100`);   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056). Block 234: event_type feeds bellLink234's fallback for pre-0056 rows
       const html = inboxPage(emp, notes);
       const unreadIds = notes.filter((n) => !n.read_at).map((n) => n.id);
       if (unreadIds.length)
