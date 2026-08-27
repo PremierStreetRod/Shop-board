@@ -2746,7 +2746,8 @@ const progressReportPage210 = (b, family, days) => {
   .note{font-size:13.5px;font-style:italic;color:#444;background:#faf7f2;border-left:3px solid #d9c9a3;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
   .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}
   .shots img{width:100%;height:2.1in;object-fit:cover;border-radius:6px;border:1px solid #ddd}
-  .ft{font-family:system-ui,sans-serif;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:10px;margin-top:26px;display:flex;justify-content:space-between}
+  .thanks{font-size:13px;font-style:italic;color:#555;margin-top:24px;border-top:3px solid #C8102E;padding-top:12px}
+  .ft{font-family:system-ui,sans-serif;font-size:10.5px;color:#999;border-top:1px solid #eee;padding-top:10px;margin-top:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
   .printfab{position:fixed;top:14px;right:14px;z-index:5}
   .printfab button{background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 24px;font-family:system-ui,sans-serif;font-weight:800;font-size:15px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}
   .printfab a{display:block;text-align:center;margin-top:6px;font-family:system-ui,sans-serif;font-size:12px;color:#666}
@@ -2765,10 +2766,10 @@ const progressReportPage210 = (b, family, days) => {
 <div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
 <div class="wm">PREMIER STREET ROD</div>
 <div class="sheet"><div class="inner">
-  <div class="lh"><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Peoria, Arizona</div></div>
+  <div class="lh"><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Lake Havasu City, Arizona</div></div>
   <h1>Cab Build Progress Report</h1>
-  <div class="meta"><b>Order ${escH(b.order_number)}</b>${family ? ` &middot; ${escH(family)}` : ""}${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""}${b.started_at ? ` &middot; Production started ${escH(String(b.started_at).slice(0, 10))}` : ""} &middot; Report date ${genLbl}</div>
-  <div class="intro">A day-by-day look at your cab as it moves through our shop — the work completed, our builders' notes, and photos straight from the production floor. Every panel is fit, hung and finished by hand right here in our facility.</div>
+  <div class="meta"><b>Order ${escH(b.order_number)}</b>${family ? ` &middot; ${escH(family)}` : ""}${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""}${b.started_at ? ` &middot; Production started ${(() => { const sd = new Date(String(b.started_at).slice(0, 10) + "T12:00:00Z"); return `${MON[sd.getUTCMonth()]} ${sd.getUTCDate()}, ${sd.getUTCFullYear()}`; })()}` : ""} &middot; Report date ${genLbl}</div>
+  <div class="intro">A day-by-day look at your cab as it takes shape in our shop — the work completed, our builders' own notes, and photos straight from the floor. Every panel is fit, hung, and finished by hand right here in Lake Havasu City, Arizona.</div>
   <div class="addbar noprint"><b>Front office:</b> add a note onto any day &nbsp;
     <input type="date" id="addD211"> <input type="text" id="addN211" maxlength="500" placeholder="e.g. Paint samples approved by the owner today">
     <button onclick="modAdd211()">Add note</button>
@@ -2785,7 +2786,8 @@ const progressReportPage210 = (b, family, days) => {
     ${d.photos.length ? `<div class="shots">${d.photos.map((p) => `<div class="${p.hidden ? "hiddenitem" : ""}"><img src="/photo/${p.id}" alt="build photo">
       <div class="modrow noprint">${p.hidden ? `<span class="hidtag">HIDDEN</span> <button class="modbtn" onclick="modPhoto211('${p.id}', false)">Restore</button>` : `<button class="modbtn warn" onclick="modPhoto211('${p.id}', true)">Hide from report</button>`}</div></div>`).join("")}</div>` : ""}
   </div>`).join("") : `<div class="steps">Production is just getting underway — check back soon for the first day's progress.</div>`}
-  <div class="ft"><span>Premier Street Rod &middot; PremierStreetRod.com</span><span>Order ${escH(b.order_number)} &middot; generated ${genLbl}</span></div>
+  <div class="thanks">Thank you for trusting us with your build. Questions about your cab? We're happy to talk &mdash; <b>800-447-5000</b> or <b>info@premierstreetrod.com</b>.</div>
+  <div class="ft"><span>Premier Street Rod &middot; 1100 N Lake Havasu Ave, Lake Havasu City, AZ 86403 &middot; PremierStreetRod.com</span><span>Order ${escH(b.order_number)} &middot; ${genLbl}</span></div>
 </div></div>
 <script>
   // Block 211: front-office moderation — every change round-trips the
