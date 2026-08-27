@@ -7112,6 +7112,74 @@ function payrollXlsx235(d) {
   ]);
 }
 
+// ---------- Block 241 (Daniel, 8/26): STEP ACTUALS — the attribution ENGINE ----------
+// BUILDING BLOCK ONLY — deliberately called by NOTHING yet. The future
+// "actual median time beside each step's hour standard" feature (admin/GM,
+// behind a step_actuals toggle) rides on this math; shipping it now, proven
+// by tests/t241_test.js, means build day is just plumbing + rendering.
+// Full spec: Playbooks/60_Step_Actuals_Design.md in the project folder.
+//
+// THE RULE (answers every edge Daniel raised): a step accrues time only from
+// CLOCKED-IN labor of the person who has it open, split EVENLY across that
+// person's concurrently open steps. Clocked in with none open -> the time is
+// "unattributed" (real labor, reported separately, never forced onto steps).
+// Clocked out (lunch, overnight, gone home) -> nothing accrues, period.
+// So: two steps open = 1/2 each; lunch never inflates a step; an overnight
+// open task earns zero; a line nobody's clocked into earns zero; Michael's
+// chained punches (always exactly one open) attribute fully and correctly.
+//
+// stepLabor241(taskEvents, clockIvs, opts)
+//   taskEvents: [{ at(ms), type: "start"|"complete"|"undo"|"unstart", task_id, actor_id }]
+//     — replayed from the append-only event_log, NOT the task columns
+//     (unstart wipes columns; the log keeps the truth). start opens a window
+//     owned by the actor; unstart DISCARDS the open window (mis-tap = zero);
+//     complete closes it; undo REOPENS it owned by the undo's actor.
+//   clockIvs: [{ emp, start(ms), end(ms) }] — voided=false punches, paired.
+//   opts.nowMs — cap for still-open windows (default Date.now()).
+//   returns { perTask: { task_id: { hours, byPerson: {emp: hours} } },
+//             unattributed: { emp: hours } }   (hours rounded to 0.01)
+function stepLabor241(taskEvents, clockIvs, opts = {}) {
+  const nowMs = opts.nowMs || Date.now();
+  // 1) replay events -> closed ownership windows per task
+  const open241 = {};            // task_id -> { owner, from }
+  const wins241 = [];            // { task, owner, from, to }
+  for (const ev of [...taskEvents].sort((a, b) => a.at - b.at)) {
+    if (ev.type === "start") open241[ev.task_id] = { owner: ev.actor_id, from: ev.at };
+    else if (ev.type === "unstart") delete open241[ev.task_id];                       // mis-tap: window discarded
+    else if (ev.type === "complete") { const o = open241[ev.task_id];
+      if (o) { wins241.push({ task: ev.task_id, owner: o.owner, from: o.from, to: ev.at }); delete open241[ev.task_id]; } }
+    else if (ev.type === "undo") open241[ev.task_id] = { owner: ev.actor_id, from: ev.at };   // reopened by whoever's working it again
+  }
+  for (const tid in open241) wins241.push({ task: tid, owner: open241[tid].owner, from: open241[tid].from, to: nowMs });
+  // 2) per person: slice time at every boundary (their windows + their clock
+  //    intervals); inside each slice the person is either off the clock
+  //    (nothing accrues) or on it with k open windows (each gets slice/k;
+  //    k=0 -> unattributed).
+  const perTask = {}, unattributed = {};
+  const people = [...new Set([...wins241.map((w) => w.owner), ...clockIvs.map((c) => c.emp)])];   // clocked people with no windows still report as unattributed
+  for (const emp of people) {
+    const wins = wins241.filter((w) => w.owner === emp);
+    const ivs = clockIvs.filter((c) => c.emp === emp);
+    const cuts = [...new Set([...wins.flatMap((w) => [w.from, w.to]), ...ivs.flatMap((c) => [c.start, c.end])])].sort((a, b) => a - b);
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const a = cuts[i], b = cuts[i + 1]; if (b <= a) continue;
+      if (!ivs.some((c) => c.start <= a && c.end >= b)) continue;      // off the clock: lunch / overnight / gone — zero
+      const openNow = wins.filter((w) => w.from <= a && w.to >= b);
+      if (!openNow.length) { unattributed[emp] = (unattributed[emp] || 0) + (b - a); continue; }
+      for (const w of openNow) {
+        const t = (perTask[w.task] = perTask[w.task] || { hours: 0, byPerson: {} });
+        t.hours += (b - a) / openNow.length;
+        t.byPerson[emp] = (t.byPerson[emp] || 0) + (b - a) / openNow.length;
+      }
+    }
+  }
+  const r241 = (ms) => Math.round((ms / 3600000) * 100) / 100;
+  for (const tid in perTask) { perTask[tid].hours = r241(perTask[tid].hours);
+    for (const e in perTask[tid].byPerson) perTask[tid].byPerson[e] = r241(perTask[tid].byPerson[e]); }
+  for (const e in unattributed) unattributed[e] = r241(unattributed[e]);
+  return { perTask, unattributed };
+}
+
 // Block 131 (logic audit L6): the ON-DECK cab of a line's upcoming queue — the
 // front cab, or (L5) the first fully-kitted cab past a stuck pin. This is the ONE
 // cab that may start a kit pull; a pull can't live anywhere else.
