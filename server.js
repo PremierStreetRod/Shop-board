@@ -850,6 +850,43 @@ async function acctEditNotice221(actorId, what221, whoId221, day221, link221) {
       link221 || "/manager#timecorrections");
   } catch (e) { console.error("acct-edit notice failed:", e.message); }
 }
+// Block 245 (Daniel, 8/28 — Eric's early morning): AFTER-HOURS ROLLOVER.
+// Someone who clocks in during after-hours and simply keeps working used to
+// stay inside the after-hours envelope ALL DAY — wrap-up demanded at
+// clock-out, every hour (including the perfectly normal ones) held from
+// payroll pending sign-off. Now, the moment the normal-punch window opens
+// (open − 5-min grace − the Block-205 early hour = 5:55 on a 7:00 shop),
+// any still-open after-hours session ENDS ITSELF at that exact minute:
+// punches untouched, the person stays on the clock straight through, only
+// the pre-bell slice awaits admin sign-off, and they get one bell/push
+// notice saying so. Evening/weekend sessions are NOT touched (the day-end
+// sweeper owns those); the same isAfterHours formula decides both sides, so
+// the two rules can never disagree.
+async function ahRolloverCheck245() {
+  try {
+    if (!DB_READY) return;
+    const nowMs = Date.now();
+    const hrs = await shopHours();
+    if (isAfterHours(nowMs, hrs)) return;   // still before the bell, after close, or a weekend — nothing to roll
+    const openAh = await db(`after_hours_session?select=id,employee_id,started_at&ended_at=is.null&limit=50`);
+    if (!openAh.length) return;
+    const phxNow = new Date(nowMs - PHX_OFFSET_MS);
+    const dayStartMs = Date.UTC(phxNow.getUTCFullYear(), phxNow.getUTCMonth(), phxNow.getUTCDate()) + PHX_OFFSET_MS;
+    const bellMs = dayStartMs + (hrs.open * 60 - OPEN_GRACE_MIN_187 - EARLY_MIN_205) * 60000;   // 5:55 on the standard clock
+    for (const s of openAh) {
+      if (new Date(s.started_at).getTime() >= bellMs) continue;   // tonight's session — the day-end sweeper owns it
+      const bellIso = new Date(bellMs).toISOString();
+      await db(`after_hours_session?id=eq.${s.id}`, { method: "PATCH", body: JSON.stringify({
+        ended_at: bellIso, wrap_note: "(rolled into regular hours at shop open)" }) });
+      logEvent("afterhours.rolled", null, { session_id: s.id, employee_id: s.employee_id, at: bellIso });
+      void notify("afterhours.rolled", [s.employee_id], "You're on regular hours now",
+        `Your after-hours time ended on its own when the shop's morning window opened at ${phxHHMM(bellIso)} — no need to clock out or back in, just keep working. The early stretch (${phxHHMM(s.started_at)}–${phxHHMM(bellIso)}) goes to the office for approval like any after-hours time.`,
+        "/home");
+    }
+  } catch (e) { console.error("ah rollover check failed:", e.message); }
+}
+setInterval(ahRolloverCheck245, 5 * 60 * 1000);   // rides the same cadence as the other morning checks
+
 async function sweepForgottenClockOuts() {
   if (!DB_READY) return;
   try {
