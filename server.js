@@ -999,6 +999,32 @@ function body(req) {
   });
 }
 
+// Block 246 (Daniel, Fri 8/28): store ONE tiny preview (a client-made JPEG,
+// 320 px long edge) for a build photo and remember it on the row. The browser
+// does the image work — this server never decodes pixels (zero-dep rule).
+// Shared by the signed-in route and the no-login hand-off route; both fix the
+// storage path themselves (thumbs/<photo id>.jpg), so nothing client-supplied
+// ever names a file. x-upsert makes re-runs (the admin backfill) idempotent.
+async function storeThumb246(req, photo_id) {
+  const ctype = String(req.headers["content-type"] || "");
+  if (!ctype.startsWith("image/")) return { status: 400, body: { ok: false, error: "Photos only" } };
+  if (/hei[cf]/.test(ctype)) return { status: 415, body: { ok: false, error: "Previews are plain JPEGs" } };
+  const chunks = []; let size = 0, over = false;
+  await new Promise((resolve) => {
+    req.on("data", (c) => { size += c.length; if (size > 400000) { over = true; req.destroy(); } else chunks.push(c); });
+    req.on("end", resolve); req.on("close", resolve);
+  });
+  if (over) return { status: 413, body: { ok: false, error: "That's no preview — previews are tiny (400 KB max)" } };
+  const buf = Buffer.concat(chunks);
+  if (!buf.length) return { status: 400, body: { ok: false, error: "Empty preview" } };
+  const path = `thumbs/${photo_id}.jpg`;
+  const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
+    method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" }, body: buf });
+  if (!up.ok) { console.error("thumb store failed:", up.status, await up.text()); return { status: 500, body: { ok: false, error: "Could not store the preview" } }; }
+  await db(`build_photo?id=eq.${photo_id}`, { method: "PATCH", body: JSON.stringify({ thumb_path: path }) });
+  return { status: 200, body: { ok: true } };
+}
+
 // ---------- shared floor-network resilience (risk sweep 2026-07-28) ----------
 // A metal building full of welders is Wi-Fi's natural enemy. Every floor
 // tap posts through sbPost: network drops and 5xx retry automatically with
@@ -1027,13 +1053,32 @@ const netJs = `
       try {
         const r = await fetch(url, { method: "POST", headers: { "Content-Type": ctype }, body: blob });
         if (r.status >= 500) throw new Error("server " + r.status);
-        return await r.json();
+        const o = await r.json();
+        // Block 246 (Daniel, Fri 8/28): a tiny preview copy rides up after every
+        // successful photo — lists then load ~20 KB previews instead of the
+        // megabyte originals (Mike's "white boxes"). Fire-and-forget.
+        if (o && o.ok && o.id && url.indexOf("/api/photo/upload") === 0) { try { thumb246(o.id, blob); } catch (e2) {} }
+        return o;
       } catch (e) {
         if (i === 2) return { ok: false, error: "Photo didn't make it — check Wi-Fi and try again" };
         if (onStatus) onStatus("Wi-Fi hiccup — retrying the photo…");
         await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
       }
     }
+  }
+  // Block 246: redraw the just-sent photo small (320 px long edge, ~20 KB) and
+  // send it as the photo's preview. A missing preview is harmless — every
+  // list falls back to the original, exactly as before this block.
+  async function thumb246(photoId, blob) {
+    try {
+      const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+      const s = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * s)); c.height = Math.max(1, Math.round(bmp.height * s));
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      const t = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.7));
+      if (t) await fetch("/api/photo/thumb?photo_id=" + photoId, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: t });
+    } catch (e) {}
   }
 `;
 
@@ -1771,7 +1816,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         <div id="att-${t.id}" hidden style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px">
           ${(notesOf[t.id] || []).map((n) => `<div style="opacity:.85;padding:3px 0;border-bottom:1px solid var(--line)">${String(n.note).replace(/</g, "&lt;")}</div>`).join("")}
           ${(photosOf[t.id] || []).length ? `<div style="margin-top:6px">${(photosOf[t.id] || []).map((p) =>
-            `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:56px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>` : ""}
+            `<a href="/photo-view/${p.id}" target="_blank"><img src="/pthumb/${p.id}" loading="lazy" style="height:56px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>` : ""}
           <textarea id="an-${t.id}" placeholder="Note about this step"
             style="width:100%;min-height:44px;margin-top:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-family:inherit"></textarea>
           <input type="file" id="ap-${t.id}" accept="image/*" multiple style="color:#8e8e93;margin-top:6px">
@@ -2459,7 +2504,10 @@ function handoffPage(info) {
     '<div id="hsent" style="display:none;text-align:center;margin:14px auto 0;max-width:420px;background:#1d5a2d;border:2px solid #30d158;border-radius:14px;padding:16px;font-size:1.35rem;font-weight:800">&#10003; <span id="hc">0</span> SENT &mdash; ON THE CAB</div>' +
     '<div id="hthumbs" style="text-align:center;margin-top:10px"></div>' +
     '<p style="text-align:center;margin-top:20px"><button class="name" id="hcl" style="display:inline-block;width:auto;padding:14px 30px;background:#3a3a3c">Done &mdash; close this tab</button></p>' +
-    '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;document.getElementById("hsent").style.display="block";var im=document.createElement("img");im.src=URL.createObjectURL(files[i]);im.style.cssText="height:76px;border-radius:10px;margin:4px;border:2px solid #30d158";document.getElementById("hthumbs").appendChild(im);}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Add more if you like, or finish on the tablet.";e.target.value="";});document.getElementById("hcl").onclick=function(){window.close();setTimeout(function(){document.getElementById("hm").textContent="Tab would not close itself? Swipe it away - the photos are already on the cab.";},300);};})();</script>' +
+    '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;document.getElementById("hsent").style.display="block";var im=document.createElement("img");im.src=URL.createObjectURL(files[i]);im.style.cssText="height:76px;border-radius:10px;margin:4px;border:2px solid #30d158";document.getElementById("hthumbs").appendChild(im);if(o.id){try{ht246(files[i],o.id);}catch(e2){}}}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Add more if you like, or finish on the tablet.";e.target.value="";});' +
+    // Block 246: the phone also sends a tiny preview copy of each photo it just
+    // uploaded — fire-and-forget, guarded by the same hand-off code.
+    'async function ht246(f,pid){try{var bmp=await createImageBitmap(f,{imageOrientation:"from-image"});var s=Math.min(1,320/Math.max(bmp.width,bmp.height));var c=document.createElement("canvas");c.width=Math.max(1,Math.round(bmp.width*s));c.height=Math.max(1,Math.round(bmp.height*s));c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);var t=await new Promise(function(res){c.toBlob(res,"image/jpeg",0.7)});if(t)await fetch("/api/handoff/thumb?code="+encodeURIComponent(code)+"&photo_id="+pid,{method:"POST",headers:{"Content-Type":"image/jpeg"},body:t});}catch(e){}}document.getElementById("hcl").onclick=function(){window.close();setTimeout(function(){document.getElementById("hm").textContent="Tab would not close itself? Swipe it away - the photos are already on the cab.";},300);};})();</script>' +
     foot;
 }
 
@@ -2972,7 +3020,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
         <div style="font-weight:700">${escH(dA.ds)}</div>
         ${dA.steps.map((sA) => `<div style="font-size:.92rem;opacity:.85;padding:2px 0">&#10003; ${escH(sA.label)} <span style="opacity:.55">&middot; ${escH(sA.who)} &middot; ${escH(sA.at)}</span></div>`).join("")}
         ${dA.notes.map((nA) => `<div style="font-size:.92rem;padding:2px 0;${nA.hidden ? "text-decoration:line-through;opacity:.4" : "opacity:.92"}">&#128221; ${escH(nA.note)} <span style="opacity:.55">&middot; ${escH(nA.who)}${nA.step ? ` &middot; ${escH(nA.step)}` : ""} &middot; ${escH(nA.at)}${nA.hidden ? " &middot; hidden from customer" : ""}</span></div>`).join("")}
-        ${dA.photos.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${dA.photos.map((pA) => `<a href="/photo-view/${pA.id}" target="_blank"><img src="/photo/${pA.id}" loading="lazy" style="height:72px;border-radius:8px;${pA.hidden ? "opacity:.3" : ""}" title="${escH(pA.who)}${pA.step ? ` · ${escH(pA.step)}` : ""}${pA.hidden ? " · hidden from customer" : ""}"></a>`).join("")}</div>` : ""}
+        ${dA.photos.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${dA.photos.map((pA) => `<a href="/photo-view/${pA.id}" target="_blank"><img src="/pthumb/${pA.id}" loading="lazy" style="height:72px;border-radius:8px;${pA.hidden ? "opacity:.3" : ""}" title="${escH(pA.who)}${pA.step ? ` · ${escH(pA.step)}` : ""}${pA.hidden ? " · hidden from customer" : ""}"></a>`).join("")}</div>` : ""}
       </div>`).join("") : `<div style="opacity:.6">Nothing logged yet — steps, notes, and photos will collect here day by day.</div>`}
   </div>` : ""}
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p>
@@ -3292,7 +3340,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · AWAITING INSPECTION
       ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
       ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
-        `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
+        `<a href="/photo-view/${p.id}" target="_blank"><img src="/pthumb/${p.id}" loading="lazy" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
         : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
       <div style="margin-top:8px">${w.inspection_claimed_by
         ? `<span style="color:#5ac8fa;font-weight:700">&#128269; ${w.claim_name184} is on it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}</span>
@@ -3360,7 +3408,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
           ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
-            `<a href="/photo-view/${p.id}" target="_blank"><img src="/photo/${p.id}" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
+            `<a href="/photo-view/${p.id}" target="_blank"><img src="/pthumb/${p.id}" loading="lazy" style="height:64px;border-radius:8px;margin-right:6px"></a>`).join("")}</div>`
             : `<div style="opacity:.5;font-size:.85rem;margin-top:4px">No completion photos attached.</div>`}
           <div style="margin-top:8px">${w.inspection_claimed_by
             ? `<span style="color:#5ac8fa;font-weight:700">&#128269; ${w.claim_name184} is on it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}</span>
@@ -4458,6 +4506,15 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   </tr>`).join("")}</table>` : `<div style="opacity:.6">No products in the catalog yet.</div>`}
   </div>
 
+  <!-- Block 246 (Daniel, Fri 8/28): photo previews. Every NEW photo now uploads
+       a tiny preview copy alongside itself, and lists load those (~20 KB)
+       instead of megabyte originals — the end of the white boxes. This one-tap
+       tool builds previews for the photos taken before this existed. -->
+  <div class="panel" id="previews"><h3>Photo previews</h3>
+  <p style="opacity:.5;font-size:.85rem">New photos make their own small preview automatically — lists and build logs load fast. This button builds previews for OLDER photos (taken before this feature). Run it once from a good connection; it pulls each old photo down and sends a tiny copy back, so give it a few minutes. Safe to stop and rerun — it picks up where it left off.</p>
+  <p><button class="b" onclick="backfill246(this)">Generate previews for older photos</button> <span id="thumbmsg" style="opacity:.75;margin-left:10px"></span></p>
+  </div>
+
   <!-- Q91: SHOP CALENDAR — the shop runs Mon-Fri 7-4 by default; this marks the
        exceptions (holidays closed, or a rare worked Saturday open) and sets the
        morning day-start nudge times. The nudge itself is switched on under Features. -->
@@ -4646,6 +4703,38 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
   function savePhotoMin(part, btn){ post("/api/admin/product", { part_number: part, photo_min: Number(v("pm-"+part)) }, btn); }
+  // Block 246: preview backfill — pull each old photo, redraw it small in THIS
+  // browser (the server never decodes pixels), send the tiny copy back. Loops
+  // in batches until the server says every photo has its preview; a batch that
+  // makes no progress stops instead of spinning.
+  async function backfill246(btn){
+    btn.disabled = true; const m = document.getElementById("thumbmsg"); let done = 0, bad = 0;
+    try {
+      for (;;) {
+        const r = await fetch("/api/admin/thumb-missing").then((x) => x.json());
+        if (!r.ok) { m.textContent = r.error || "Something went wrong"; break; }
+        if (!r.ids.length) { m.textContent = done || bad ? "Done — " + done + " preview" + (done === 1 ? "" : "s") + " built" + (bad ? ", " + bad + " skipped" : "") + "." : "Every photo already has its preview ✓"; break; }
+        const before246 = done;
+        for (const id of r.ids) {
+          m.textContent = "Building previews… " + (done + bad + 1) + " of about " + (r.total + done + bad);
+          try {
+            const b = await fetch("/photo/" + id).then((x) => { if (!x.ok) throw new Error("nope"); return x.blob(); });
+            const bmp = await createImageBitmap(b, { imageOrientation: "from-image" });
+            const s = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+            const c = document.createElement("canvas");
+            c.width = Math.max(1, Math.round(bmp.width * s)); c.height = Math.max(1, Math.round(bmp.height * s));
+            c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+            const t = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.7));
+            if (!t) throw new Error("nope");
+            const u = await fetch("/api/photo/thumb?photo_id=" + id, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: t }).then((x) => x.json());
+            if (u.ok) done++; else bad++;
+          } catch (e) { bad++; }
+        }
+        if (done === before246) { m.textContent = "Stopped — " + done + " built, " + bad + " couldn't be read (their lists just keep showing the original)."; break; }
+      }
+    } catch (e) { m.textContent = "Network hiccup — tap it again to pick up where it left off."; }
+    btn.disabled = false;
+  }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
   // Q91: shop calendar + day-start nudge times.
   function saveNudge(btn){ post("/api/admin/nudge-times", { mon: v("ng-mon"), tue: v("ng-tue"), wed: v("ng-wed"), thu: v("ng-thu"), fri: v("ng-fri") }, btn); }
@@ -11800,7 +11889,20 @@ self.addEventListener("notificationclick", (e) => {
         build_id: h.build_id, task_id: h.task_id, uploaded_by: h.created_by, storage_path: path, kind: h.task_id ? "task" : "finish" }) });
       h.count += 1;
       logEvent("handoff.photo", h.created_by, { build_id: h.build_id, task_id: h.task_id, photo_id: row ? row.id : null, bytes: buf.length });
-      return json(200, { ok: true, count: h.count });
+      return json(200, { ok: true, count: h.count, id: row ? row.id : null });   // Block 246: id back so the phone can send the preview copy
+    }
+
+    // Block 246: the hand-off phone's preview upload — guarded by the code
+    // alone, and only for a photo already on that code's one cab.
+    if (url.pathname === "/api/handoff/thumb" && req.method === "POST") {
+      const h = getHandoff(url.searchParams.get("code"));
+      if (!h) return json(410, { ok: false, error: "This code expired - ask for a fresh one on the tablet" });
+      const photo_id = url.searchParams.get("photo_id");
+      if (!isUuid(photo_id)) return json(400, { ok: false, error: "That photo reference isn't valid" });
+      const [phH] = await db(`build_photo?select=id,build_id&id=eq.${photo_id}`);
+      if (!phH || phH.build_id !== h.build_id) return json(403, { ok: false, error: "That photo isn't on this code's cab" });
+      const outT = await storeThumb246(req, photo_id);
+      return json(outT.status, outT.body);
     }
 
     if (url.pathname === "/api/photo/upload" && req.method === "POST") {
@@ -11842,6 +11944,33 @@ self.addEventListener("notificationclick", (e) => {
         build_id, task_id, uploaded_by: empId, storage_path: path, kind: kindQ209 || (task_id ? "task" : "finish") }) });
       logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined });
       return json(200, { ok: true, id: row ? row.id : null });
+    }
+
+    // Block 246: the signed-in preview upload. The phone that just sent a
+    // photo sends its tiny copy here; the admin backfill button uses it too.
+    // Owner-or-admin only, so nobody can repaint someone else's previews.
+    // No clocked-in gate on purpose — the backfill runs from a desk.
+    if (url.pathname === "/api/photo/thumb" && req.method === "POST") {
+      const empT = await liveSession(req);
+      if (!empT) return json(401, { ok: false, error: "Signed out" });
+      const photo_id = url.searchParams.get("photo_id");
+      if (!isUuid(photo_id)) return json(400, { ok: false, error: "That photo reference isn't valid" });
+      const [phT] = await db(`build_photo?select=id,uploaded_by&id=eq.${photo_id}`);
+      if (!phT) return json(404, { ok: false, error: "Photo not found" });
+      if (phT.uploaded_by !== empT) {
+        const [meT] = await db(`employee?select=role&id=eq.${empT}`);
+        if (!meT || meT.role !== "admin") return json(403, { ok: false, error: "Only the photo's owner or an admin can attach its preview" });
+      }
+      const outT = await storeThumb246(req, photo_id);
+      return json(outT.status, outT.body);
+    }
+
+    // Block 246: which photos still lack a preview — feeds the admin's
+    // one-tap backfill. Count first, a working batch of ids second.
+    if (url.pathname === "/api/admin/thumb-missing") {
+      const [, failT] = await requireAdmin(); if (failT) return failT;
+      const missT = await db(`build_photo?select=id&thumb_path=is.null&order=created_at.desc&limit=1000`);
+      return json(200, { ok: true, total: missT.length, ids: missT.slice(0, 100).map((m) => m.id) });
     }
 
     // Block 107: after-hours wrap-up photos — optional evidence riding the
@@ -11976,6 +12105,27 @@ self.addEventListener("notificationclick", (e) => {
       const pidV = url.pathname.slice(12);
       if (!isUuid(pidV)) return send(404, "text/plain", "Not found");
       return send(200, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board"><meta name="robots" content="noindex, nofollow"><title>Photo — Shop Board</title><style>body{margin:0;background:#000;display:flex;flex-direction:column;min-height:100vh}img{max-width:100vw;max-height:88vh;object-fit:contain;margin:auto}#xb{position:fixed;top:14px;right:14px;background:#C8102E;color:#fff;border:none;border-radius:12px;padding:14px 26px;font-size:1.05rem;font-weight:800;cursor:pointer}</style></head><body><button id="xb" onclick="window.close();document.getElementById('cm').style.display='block'">&#10005; Close</button><img src="/photo/${pidV}"><div id="cm" style="display:none;color:#8e8e93;text-align:center;padding:12px;font-family:system-ui">If this tab didn't close itself, swipe it away — nothing is lost.</div></body></html>`);
+    }
+
+    // Block 246: the preview lane. Same photo, ~20 KB instead of ~1 MB — every
+    // small <img> in the app asks here. Falls back to the original whenever a
+    // photo has no preview yet (pre-246 photos before the backfill, or a
+    // preview that failed to send), so nothing ever renders worse than before.
+    if (url.pathname.startsWith("/pthumb/")) {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const pid = url.pathname.slice("/pthumb/".length);
+      if (!isUuid(pid)) return send(404, "text/plain", "Not found");
+      const [p] = await db(`build_photo?select=storage_path,thumb_path&id=eq.${pid}`);
+      if (!p) return send(404, "text/plain", "Not found");
+      let f = p.thumb_path ? await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${p.thumb_path}`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }) : null;
+      if (!f || !f.ok) f = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${p.storage_path}`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      if (!f.ok) return send(404, "text/plain", "Not found");
+      const buf = Buffer.from(await f.arrayBuffer());
+      res.writeHead(200, { "content-type": f.headers.get("content-type") || "image/jpeg", "cache-control": "private, max-age=86400" });
+      return res.end(buf);
     }
 
     if (url.pathname.startsWith("/photo/")) {
