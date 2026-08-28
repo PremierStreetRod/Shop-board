@@ -7182,6 +7182,36 @@ function stepLabor241(taskEvents, clockIvs, opts = {}) {
   return { perTask, unattributed };
 }
 
+// ---------- Block 244 (Daniel, 8/28): THE QUEUE MOVE THAT ALWAYS MOVES ----------
+// The old code SWAPPED the two rows' queue_pos values. Live data proved why
+// that's a trap: Line 2's 23471 and 23119 both sat at position "2" (the old
+// null-fallback math can mint duplicates), so the swap traded a 2 for a 2 —
+// a silent no-op. Every tap reported success, the page reloaded, and the
+// order never changed. Daniel: "we tried to move 23119 up today and it
+// wouldnt let us."
+// The fix reorders the LIST, not the numbers: take the queue exactly as
+// displayed, slide the cab one spot, then renumber every upcoming cab on
+// the line 1..n. Deterministic, and it HEALS any null/duplicate positions
+// (lines 1 and 3 carried strays too) the first time anyone moves anything.
+// opts.respectPins = the warehouse rule (can't land on a pinned cab's spot);
+// admin moves pass no opts and stay free, as always (Block 89).
+async function moveInQueue244(b, dir, opts = {}) {
+  const q = await db(`build?select=id,queue_pos,queue_pinned&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`);
+  const idx = q.findIndex((x) => x.id === b.id);
+  if (idx < 0) return { err: "That cab isn't in this queue anymore — refresh" };
+  const to = dir === "up" ? idx - 1 : idx + 1;
+  if (to < 0) return { err: "Already on deck" };
+  if (to >= q.length) return { err: "Already last" };
+  if (opts.respectPins && q[to].queue_pinned) return { err: "That spot is held by the front office" };
+  const arr = q.map((x) => x.id);
+  arr.splice(idx, 1); arr.splice(to, 0, b.id);
+  const oldPos = Object.fromEntries(q.map((x) => [x.id, x.queue_pos]));
+  for (let i = 0; i < arr.length; i++)
+    if (oldPos[arr[i]] !== i + 1)
+      await db(`build?id=eq.${arr[i]}`, { method: "PATCH", body: JSON.stringify({ queue_pos: i + 1 }) });
+  return { ok: true };
+}
+
 // Block 131 (logic audit L6): the ON-DECK cab of a line's upcoming queue — the
 // front cab, or (L5) the first fully-kitted cab past a stuck pin. This is the ONE
 // cab that may start a kit pull; a pull can't live anywhere else.
@@ -10266,14 +10296,8 @@ http.createServer(async (req, res) => {
       // it — the warehouse can reorder above it and below it, but nothing moves
       // it and nothing crosses it. Admin moves (/api/queue/move) stay free.
       if (b.queue_pinned) return json(400, { ok: false, error: "That spot is held by the front office" });
-      const q = (await db(`build?select=id,queue_pos,queue_pinned&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`));
-      const idx = q.findIndex((x) => x.id === b.id);
-      const swap = dir === "up" ? q[idx - 1] : q[idx + 1];
-      if (!swap) return json(400, { ok: false, error: "Already at the end" });
-      if (swap.queue_pinned) return json(400, { ok: false, error: "That spot is held by the front office" });
-      // Re-stamp both positions explicitly so nulls can never make order ambiguous.
-      await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
-      await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
+      const mv244 = await moveInQueue244(b, dir, { respectPins: true });   // Block 244: the move that always moves (renumber, not swap)
+      if (mv244.err) return json(400, { ok: false, error: mv244.err });
       logEvent("kit.queue_move", whoId, { build_id, order_number: b.order_number, dir });
       // Block 131 (L6): a reorder can change who's on deck — revert any pull now stranded.
       await revertStrandedPull(b.line_id, whoId);
@@ -11232,12 +11256,8 @@ self.addEventListener("notificationclick", (e) => {
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,line_id,state,queue_pos,order_number&id=eq.${build_id}`);
       if (!b || b.state !== "upcoming") return json(400, { ok: false, error: "Only upcoming cabs can be reordered" });
-      const q = await db(`build?select=id,queue_pos&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc`);
-      const idx = q.findIndex((x) => x.id === b.id);
-      const swap = dir === "up" ? q[idx - 1] : q[idx + 1];
-      if (!swap) return json(400, { ok: false, error: dir === "up" ? "Already on deck" : "Already last" });
-      await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: swap.queue_pos ?? (idx + (dir === "up" ? 0 : 2)) }) });
-      await db(`build?id=eq.${swap.id}`, { method: "PATCH", body: JSON.stringify({ queue_pos: b.queue_pos ?? (idx + 1) }) });
+      const mv244 = await moveInQueue244(b, dir);   // Block 244: admin moves ignore pins, as always
+      if (mv244.err) return json(400, { ok: false, error: mv244.err });
       logEvent("queue.move", adminId, { build_id, order_number: b.order_number, dir });
       // Block 131 (L6): a reorder can change who's on deck — revert any pull now stranded.
       await revertStrandedPull(b.line_id, adminId);
