@@ -6828,6 +6828,47 @@ function roundPunch235(iso) {
   const base = t.getTime() - rem * 60000 - t.getUTCSeconds() * 1000 - t.getUTCMilliseconds();
   return new Date(rem <= 6 ? base : base + 15 * 60000).toISOString();
 }
+
+// Block 248 (Daniel + owners, Tue 9/1): THE BOUNDARY RULES — payroll-math only,
+// stored punches stay exact forever. Two narrow carve-outs from the 6-down/7-up
+// rule above, everywhere else that rule is untouched:
+//  1) SHOP-OPEN SNAP (wall clock, Phoenix): a clock-IN landing 5:45–5:59 or
+//     6:45–6:59 pays from :45 only with 3 minutes of grace (:45–:48); from
+//     :49 on it pays from the hour (6:51 -> 7:00, 5:49 -> 6:00). A true early
+//     bird at 6:00 sharp keeps 6:00; punches outside these two windows keep
+//     the normal rule (7:04 still rounds to 7:00, 6:20 to 6:15).
+//  2) LUNCH LENGTH (duration, so an 11:24 lunch works the same as an 11:00
+//     one): an unpaid gap of 45–60 minutes docks 45 when it ran 45–48 min,
+//     the full hour from 49 min on (47 stays a 45-min lunch, 51 docks the
+//     hour). Gaps under 45 or over 60 minutes behave exactly as before.
+// Backdated by design: no effective date — Kailey can re-pull ANY period
+// (incl. 8/11–8/25) and compare against the physical punch-clock sheet.
+function payRules248(events) {
+  const out = []; const prevOut248 = {};   // exact last clock-out per person
+  for (const ev of events) {
+    const t = new Date(ev.claimed_at).getTime();
+    if (ev.kind !== "clock_in") { out.push({ ...ev, claimed_at: roundPunch235(ev.claimed_at) }); prevOut248[ev.employee_id] = t; continue; }
+    let adj = null;
+    const po = prevOut248[ev.employee_id];
+    if (po !== undefined && phxDate(po) === phxDate(t)) {
+      const gap = t - po;
+      if (gap >= 45 * 60000 && gap <= 60 * 60000) {
+        const gm = Math.round(gap / 60000);
+        adj = Date.parse(roundPunch235(new Date(po).toISOString())) + (gm <= 48 ? 45 : 60) * 60000;
+      }
+    }
+    if (adj === null) {
+      const p = new Date(t - PHX_OFFSET_MS);
+      const hr = p.getUTCHours(), mi = p.getUTCMinutes();
+      if ((hr === 5 || hr === 6) && mi >= 45) {
+        const base = t - (mi - 45) * 60000 - p.getUTCSeconds() * 1000 - p.getUTCMilliseconds();
+        adj = mi <= 48 ? base : base + 15 * 60000;
+      }
+    }
+    out.push({ ...ev, claimed_at: adj !== null ? new Date(adj).toISOString() : roundPunch235(ev.claimed_at) });
+  }
+  return out;
+}
 const PAY_STD_DAY = 8;                          // a full sick/unpaid day = 8 h
 // Two periods a month: 11th–25th (paid the 1st of next month) and 26th–10th
 // (paid the 15th). Cutoffs = owner-rep's best recollection; custom overrides.
@@ -6870,7 +6911,10 @@ async function payrollData(startMs, endMs) {
   const emps = empsAll215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches payroll
   // Block 235: each punch rounds to the quarter hour (6-down/7-up) BEFORE
   // pairing into work intervals — so every day naturally lands on .0/.25/.5/.75.
-  const ivs = workIntervals(events.map((ev) => ({ ...ev, claimed_at: roundPunch235(ev.claimed_at) })), nowMs);
+  // Block 248: the boundary rules ride the same spot — shop-open snap windows
+  // (5:45–6:00 / 6:45–7:00) and the 45–60-minute lunch dock; everything else
+  // still goes through roundPunch235 unchanged.
+  const ivs = workIntervals(payRules248(events), nowMs);
   const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
   // worked hours per emp per day (dayed by interval start, clipped to window)
   const worked = {};
@@ -6981,7 +7025,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
-  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Two shop rules ride on top: a morning clock-in during the <b>5:45&ndash;6:00 or 6:45&ndash;7:00 windows</b> pays from :45 only through :48 — from :49 it pays from the hour; and a <b>45&ndash;60 minute lunch</b> counts by its length — 45&ndash;48 minutes docks 45, 49 or more docks the full hour (shorter or longer lunches unchanged). Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
     <span style="opacity:.55">Pay period:</span>
     <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
