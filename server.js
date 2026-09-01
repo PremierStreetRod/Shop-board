@@ -1056,8 +1056,13 @@ const netJs = `
         const o = await r.json();
         // Block 246 (Daniel, Fri 8/28): a tiny preview copy rides up after every
         // successful photo — lists then load ~20 KB previews instead of the
-        // megabyte originals (Mike's "white boxes"). Fire-and-forget.
-        if (o && o.ok && o.id && url.indexOf("/api/photo/upload") === 0) { try { thumb246(o.id, blob); } catch (e2) {} }
+        // megabyte originals (Mike's "white boxes").
+        // Block 247 (Tue 9/1): AWAITED now — the first weekend showed 12 of 38
+        // previews lost because callers reload the page the instant the photo
+        // lands, cutting the quiet send off mid-flight. Holding the door here
+        // (plus keepalive below) lets it finish; a preview failure still never
+        // fails the photo.
+        if (o && o.ok && o.id && url.indexOf("/api/photo/upload") === 0) { try { await thumb246(o.id, blob); } catch (e2) {} }
         return o;
       } catch (e) {
         if (i === 2) return { ok: false, error: "Photo didn't make it — check Wi-Fi and try again" };
@@ -1077,7 +1082,9 @@ const netJs = `
       c.width = Math.max(1, Math.round(bmp.width * s)); c.height = Math.max(1, Math.round(bmp.height * s));
       c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
       const t = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.7));
-      if (t) await fetch("/api/photo/thumb?photo_id=" + photoId, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: t });
+      // Block 247: keepalive — even if the page still navigates away first,
+      // the browser finishes this small send in the background.
+      if (t) await fetch("/api/photo/thumb?photo_id=" + photoId, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: t, keepalive: true });
     } catch (e) {}
   }
 `;
@@ -2507,7 +2514,7 @@ function handoffPage(info) {
     '<script>(function(){var code=' + JSON.stringify(info.code) + ';document.getElementById("hp").addEventListener("change",async function(e){var files=e.target.files;var m=document.getElementById("hm");for(var i=0;i<files.length;i++){m.textContent="Sending photo "+(i+1)+" of "+files.length+"...";try{var r=await fetch("/api/handoff/upload?code="+encodeURIComponent(code),{method:"POST",headers:{"Content-Type":files[i].type||"image/jpeg"},body:files[i]});var o=await r.json();if(!o.ok){m.textContent=o.error||"That did not send - try again.";return;}document.getElementById("hc").textContent=o.count;document.getElementById("hsent").style.display="block";var im=document.createElement("img");im.src=URL.createObjectURL(files[i]);im.style.cssText="height:76px;border-radius:10px;margin:4px;border:2px solid #30d158";document.getElementById("hthumbs").appendChild(im);if(o.id){try{ht246(files[i],o.id);}catch(e2){}}}catch(err){m.textContent="Network hiccup - try that photo again.";return;}}m.textContent="Add more if you like, or finish on the tablet.";e.target.value="";});' +
     // Block 246: the phone also sends a tiny preview copy of each photo it just
     // uploaded — fire-and-forget, guarded by the same hand-off code.
-    'async function ht246(f,pid){try{var bmp=await createImageBitmap(f,{imageOrientation:"from-image"});var s=Math.min(1,320/Math.max(bmp.width,bmp.height));var c=document.createElement("canvas");c.width=Math.max(1,Math.round(bmp.width*s));c.height=Math.max(1,Math.round(bmp.height*s));c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);var t=await new Promise(function(res){c.toBlob(res,"image/jpeg",0.7)});if(t)await fetch("/api/handoff/thumb?code="+encodeURIComponent(code)+"&photo_id="+pid,{method:"POST",headers:{"Content-Type":"image/jpeg"},body:t});}catch(e){}}document.getElementById("hcl").onclick=function(){window.close();setTimeout(function(){document.getElementById("hm").textContent="Tab would not close itself? Swipe it away - the photos are already on the cab.";},300);};})();</script>' +
+    'async function ht246(f,pid){try{var bmp=await createImageBitmap(f,{imageOrientation:"from-image"});var s=Math.min(1,320/Math.max(bmp.width,bmp.height));var c=document.createElement("canvas");c.width=Math.max(1,Math.round(bmp.width*s));c.height=Math.max(1,Math.round(bmp.height*s));c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);var t=await new Promise(function(res){c.toBlob(res,"image/jpeg",0.7)});if(t)await fetch("/api/handoff/thumb?code="+encodeURIComponent(code)+"&photo_id="+pid,{method:"POST",headers:{"Content-Type":"image/jpeg"},body:t,keepalive:true});}catch(e){}}document.getElementById("hcl").onclick=function(){window.close();setTimeout(function(){document.getElementById("hm").textContent="Tab would not close itself? Swipe it away - the photos are already on the cab.";},300);};})();</script>' +
     foot;
 }
 
