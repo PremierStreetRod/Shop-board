@@ -96,6 +96,26 @@ async function db(path, opts = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+// Block 252 (EMERGENCY, Wed 9/2): Supabase caps EVERY REST response at 1,000
+// rows (db-max-rows) — a limit=20000 in the query string does NOT lift it.
+// The payroll fetch crossed 1,000 stored punches at Tue 9/1 12:02 PM and the
+// worksheet went silently blind to everything after: afternoons vanished
+// (4.0-hour "days") or never closed (25.75-hour "days"), phantom overtime,
+// the works. dbAll252 pages any read in 1,000-row bites until a short page
+// arrives — every fetch that can outgrow 1,000 rows must ride it. Pass a
+// path WITHOUT a limit param; order must be deterministic (add id as a
+// tiebreak) so offset pages never skip or double-count a row.
+async function dbAll252(path) {
+  const out = [];
+  for (let off = 0; off <= 500000; off += 1000) {
+    const page = await db(`${path}&limit=1000&offset=${off}`);
+    if (!Array.isArray(page)) break;
+    out.push(...page);
+    if (page.length < 1000) break;
+  }
+  return out;
+}
+
 // Block 215 (Daniel): the Zz Test-Account stays ACTIVE (he pokes the app with
 // it) but must never cloud pay or reports — payrollData and reportData filter
 // it out by name. Matches "Zz ..." first name or a "Test-Account"-ish last name.
@@ -766,7 +786,7 @@ async function periodEndCheck221() {
     const pend221 = (d221.ahNotes || []).filter((n) => !n.declined).length;
     // Oddity count over the ended period — the same flags as the console lane.
     const emps221 = await db(`employee?select=id,first_name,last_name,pay_type&active=is.true`);
-    const evs221 = await db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc&limit=20000`);
+    const evs221 = await dbAll252(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc,id.asc`);
     const byED221 = {};
     for (const ev of evs221) { const dsO = phxDate(new Date(ev.claimed_at).getTime());
       ((byED221[ev.employee_id] = byED221[ev.employee_id] || {})[dsO] = byED221[ev.employee_id][dsO] || []).push(ev); }
@@ -4870,7 +4890,8 @@ async function reportData(startMs, endMs) {
     db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`),
     db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`),
     db(`event_log?select=at,payload&event_type=eq.build.fixjob_opened&order=at.asc&limit=2000`),
-    db(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc&limit=10000`),
+    dbAll252(`clock_event?select=employee_id,line_id,kind,reason,claimed_at,corrected_by,added_by,correction_note&voided=is.false&order=claimed_at.asc,id.asc`),   // Block 252: paged — reports read the whole history and the table passed Supabase's 1,000-row cap
+
     db(`after_hours_session?select=id,employee_id,reason,approved_by,confirmed_by,signed_off_by,declined_by,decline_reason,started_at,ended_at&started_at=gte.${new Date(sinceMs).toISOString()}&started_at=lt.${new Date(winEnd).toISOString()}`),
   ]);
   const emps = empsAllR215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches reports
@@ -5287,7 +5308,7 @@ async function integrityData(startMs, endMs) {
   const soBuilds = soBuildIds.length ? await db(`build?select=id,order_number,line_id,started_at&id=in.(${soBuildIds.join(",")})`) : [];
   const bById = {}; for (const b of soBuilds) bById[b.id] = b;
   const signers = [...new Set(signoffs.map((e) => e.actor_id).filter(Boolean))];
-  const signerClocks = signers.length ? await db(`clock_event?select=employee_id,line_id,claimed_at&voided=is.false&kind=eq.clock_in&employee_id=in.(${signers.join(",")})&order=claimed_at.asc&limit=8000`) : [];
+  const signerClocks = signers.length ? await dbAll252(`clock_event?select=employee_id,line_id,claimed_at&voided=is.false&kind=eq.clock_in&employee_id=in.(${signers.join(",")})&order=claimed_at.asc,id.asc`) : [];
   const selfSignList = [];
   for (const e of signoffs) {
     const b = bById[e.payload && e.payload.build_id]; if (!b || !b.started_at) continue;
@@ -6911,7 +6932,8 @@ async function payrollData(startMs, endMs) {
   // (same queries verbatim; isWorkDay below rides the cached calendar).
   const [empsAll215, events, ahSess111, offRows, auto148] = await Promise.all([
     db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner
-    db(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&order=claimed_at.asc&limit=20000`),
+    dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&claimed_at=gte.${new Date(startMs - 2 * 86400000).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc,id.asc`),   // Block 252: WINDOWED (2-day margin for overnight spill) + PAGED — the unbounded fetch hit Supabase's silent 1,000-row cap on Tue 9/1 and payroll went blind to everything after
+
     db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`),
     db(`time_off_request?select=employee_id,start_date,end_date,reason,hours&status=eq.approved&start_date=lte.${dates[dates.length - 1]}&end_date=gte.${dates[0]}`).catch(() => []),
     db(`clock_event?select=employee_id,claimed_at&voided=is.false&kind=eq.clock_out_auto&claimed_at=gte.${new Date(startMs).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc`),
@@ -8946,7 +8968,7 @@ http.createServer(async (req, res) => {
       const fixSeed127 = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&fix_build_id=eq.${bO.id}&kind=eq.clock_in&limit=2000`);
       if (fixSeed127.length) {
         const empsF127 = [...new Set(fixSeed127.map((s) => s.employee_id))];
-        const fmF127 = fixHoursByBuild(await db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc&limit=20000`));
+        const fmF127 = fixHoursByBuild(await dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc,id.asc`));
         fixHrs127 = fmF127[bO.id] || 0;
       }
       // Block 230 (Daniel): ADMIN-ONLY internal activity feed — the customer
@@ -9132,7 +9154,7 @@ http.createServer(async (req, res) => {
       // steps done · 3 going right now" — the owner-walk-in activity number.
       const arIds230 = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
       const [events, tasksB230] = await Promise.all([
-        db(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc&limit=10000`),
+        dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc,id.asc`),
         arIds230.length ? db(`task?select=build_id,state,is_background&build_id=in.(${arIds230.join(",")})&limit=4000`) : [],
       ]);
       const tcnt230 = {};
@@ -9384,7 +9406,7 @@ http.createServer(async (req, res) => {
         tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
         (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(tcFloor238).toISOString()}&order=claimed_at.asc`) : [],   // Block 238: back through the whole previous period
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
-        acct189 ? db(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc&limit=20000`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
+        acct189 ? dbAll252(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc,id.asc`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
         (acct189 && tcEmpSel) ? db(`time_off_request?select=id,start_date,end_date,reason,hours&employee_id=eq.${tcEmpSel}&status=eq.approved&end_date=gte.${phxDate(tcFloor238)}&order=start_date`) : [],   // Block 238: back through the whole previous period   // Block 216/217: the selected person's recorded time off (hours = partial day) — shows + cancels from the editor
       ]);
       const lname190 = Object.fromEntries(linesAll189.map((l) => [l.id, l.name]));
@@ -9404,7 +9426,7 @@ http.createServer(async (req, res) => {
         workIds.length ? db(`task?select=id,name,display_no,build_id,completed_by,completed_at&build_id=in.(${workIds.join(",")})&state=eq.complete&order=completed_at.desc.nullslast&limit=8`) : [],
         ahRows.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRows.map((s) => s.id).join(",")})`) : [],
         actIds133.length ? db(`line_down?select=build_id,reason,down_at,up_at&build_id=in.(${actIds133.join(",")})&order=down_at.asc`) : [],
-        fxEmps127.length ? db(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc&limit=20000`) : [],
+        fxEmps127.length ? dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${fxEmps127.join(",")})&order=claimed_at.asc,id.asc`) : [],
         cabProjections(mgrBoard),
       ]);
       const [repTog] = repTogRows212; const [togLine] = togLineRows212;
