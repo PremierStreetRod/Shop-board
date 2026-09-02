@@ -5688,7 +5688,7 @@ async function pushDiffData() {
   // within the hour (the page would starve), and absence from a delta push means
   // "nothing changed", never "left the queue". Now: read ALL rows, and diff each
   // order in the latest push against ITS OWN most recent earlier row.
-  const rows = await db(`coyote_intake?select=payload,received_at&order=received_at.desc&limit=5000`);
+  const rows = await dbAll252(`coyote_intake?select=payload,received_at&order=received_at.desc,id.asc`);
   const recs = rows.map((r) => {
     const p = r.payload || {}, o = (p.order && typeof p.order === "object") ? p.order : {};
     const c = (p.customer && typeof p.customer === "object") ? p.customer : {};
@@ -5789,7 +5789,7 @@ function pushDiffPage(d) {
 // and lets us watch the hourly pushes land. Writes nothing.
 async function feedMonitorData() {
   // health from small columns (all rows)
-  const meta = await db(`coyote_intake?select=order_number,received_at,processed_at&limit=100000`);
+  const meta = await dbAll252(`coyote_intake?select=order_number,received_at,processed_at&order=id.asc`);
   const total = meta.length;
   let fresh = 0, handled = 0; const byOrder = {}, perDay = {}; let oldest = null, newest = null;
   for (const r of meta) {
@@ -6105,7 +6105,7 @@ async function linesManagerData() {
   // Block 122 (owner-rep): which lines still have a not-signed-off cab on them,
   // so disabling one WARNS (but still allows — a temporary line-down is fine;
   // re-enabling restores the cab exactly). One cab per line, so first wins.
-  const onLine122 = await db(`build?select=order_number,line_id,state&state=in.(active,awaiting_inspection,rework)&limit=1000`);
+  const onLine122 = await dbAll252(`build?select=order_number,line_id,state&state=in.(active,awaiting_inspection,rework)&order=id.asc`);
   const occ122 = {}; for (const b of onLine122) if (b.line_id != null && !occ122[b.line_id]) occ122[b.line_id] = b.order_number;
   return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [], occupant: occ122[l.id] || null })), families };
 }
@@ -6271,13 +6271,13 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await db(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status&limit=100000`);
+  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status&order=id.asc`);
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   // Block 176 (Fable-5): index builds by their Coyote ROOT order number too, so
   // the stuck-cab detector below can find a cab whether it was placed under the
   // bare order (23417) or a multi-cab dotted key (23417.1). One order -> N cabs.
   const buildsByRoot = {}; for (const b of builds) { const rt = b.coyote_root || String(b.order_number || "").split(".")[0]; (buildsByRoot[rt] = buildsByRoot[rt] || []).push(b); }
-  const allNums = await db(`build?select=cab_number&cab_number=not.is.null&limit=100000`);
+  const allNums = await dbAll252(`build?select=cab_number&cab_number=not.is.null&order=id.asc`);
   const hi = {}; for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
   return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder, buildsByRoot, hi };
 }
@@ -6695,12 +6695,12 @@ function reconcileShape(open, famOf, lineName, hi) {
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
 async function reconcileData() {
-  const open = await db("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&limit=100000");   // Block 233: fix_job joined the list — a returned cab on a line was falling off the queue page entirely
+  const open = await dbAll252("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&order=id.asc");   // Block 233: fix_job joined the list — a returned cab on a line was falling off the queue page entirely
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
   const lines = await db("line?select=id,name&order=id");
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
-  const allNums = await db("build?select=cab_number&cab_number=not.is.null&limit=100000");
+  const allNums = await dbAll252("build?select=cab_number&cab_number=not.is.null&order=id.asc");
   const hi = {};
   for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
   const shaped = reconcileShape(open, famOf, lineName, hi);
@@ -6708,7 +6708,7 @@ async function reconcileData() {
   // by a Coyote Hold/Cancel BEFORE they started. Shown here so they're noted;
   // each returns to its line's queue automatically if Coyote flips it back to
   // Queued (the sync handles it). Started cabs are NEVER set aside.
-  const aside = await db("build?select=order_number,part_number,cab_number,state,customer_name,coyote_status,created_at&state=in.(on_hold,cancelled)&started_at=is.null&order=created_at.desc&limit=1000");
+  const aside = await dbAll252("build?select=order_number,part_number,cab_number,state,customer_name,coyote_status,created_at&state=in.(on_hold,cancelled)&started_at=is.null&order=created_at.desc,id.asc");   // Block 253: paged
   shaped.setAside = aside.map((b) => ({
     order: b.order_number || "—", part: b.part_number || "", family: famOf[String(b.part_number || "").toUpperCase()] || "",
     cab: b.cab_number || "", customer: b.customer_name || "",
@@ -9018,9 +9018,9 @@ http.createServer(async (req, res) => {
       const allIds = [...new Set([...onB.map((b2) => b2.id), ...doneIds])];
       const [doneB, phAll, ntAllB, tnAll218] = await Promise.all([
         doneIds.length ? db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [],
-        allIds.length ? db(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish,task)&limit=2000`) : [],   // Block 218: step photos count
-        allIds.length ? db(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [],
-        allIds.length ? db(`task_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&limit=2000`) : [],   // Block 218: step notes count
+        allIds.length ? dbAll252(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish,task)&order=id.asc`) : [],   // Block 218: step photos count
+        allIds.length ? dbAll252(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&order=id.asc`) : [],
+        allIds.length ? dbAll252(`task_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&order=id.asc`) : [],   // Block 218: step notes count
       ]);
       const ntAll = [...ntAllB, ...tnAll218];
       const famOf211 = Object.fromEntries(partsH.map((p2) => [p2.part_number, p2.family]));
@@ -11531,7 +11531,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return json(403, { ok: false, error: "Not allowed" });
-      const rows = await db(`build?select=id,queue_pos,state,queue_pinned&state=in.(upcoming,active,awaiting_inspection,rework)&limit=100000`);
+      const rows = await dbAll252(`build?select=id,queue_pos,state,queue_pinned&state=in.(upcoming,active,awaiting_inspection,rework)&order=id.asc`);
       rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       let seed = ""; for (const r of rows) seed += r.id + ":" + (r.queue_pos == null ? "" : r.queue_pos) + ":" + r.state + ":" + (r.queue_pinned ? 1 : 0) + "|";
       let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
