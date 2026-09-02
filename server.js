@@ -8231,7 +8231,7 @@ http.createServer(async (req, res) => {
       if (!isUuid(id)) { noteLoginFail(req, id); return json(404, { ok: false, error: "No PIN on file — see the manager" }); }
       // Q70 hardening (2026-07-29 soak-test find): same active enforcement
       // as /api/pin/set above — a retired account can't sign in by id.
-      const [emp] = await db(`employee?select=id,pin_hash,must_change_pin,role&id=eq.${id}&active=is.true`);
+      const [emp] = await db(`employee?select=id,pin_hash,must_change_pin,role,first_name,last_name&id=eq.${id}&active=is.true`);   // Block 250: names along so the off-network gate can recognize the test account
       if (!emp || !emp.pin_hash) { noteLoginFail(req, id); return json(404, { ok: false, error: "No PIN on file — see the manager" }); }
       if (!checkPin(pin, emp.pin_hash)) {
         const s = strike(id);
@@ -8241,7 +8241,11 @@ http.createServer(async (req, res) => {
       }
       // Block 173 (C1 — owner ruling: admin-only outside company Wi-Fi). Inert until
       // SHOP_EGRESS_IP is set. Non-admin EXCEPTION mechanism = pending owner ruling.
-      if (!onShopNetwork(req) && emp.role !== "admin") {
+      // Block 250 (Daniel, 9/2): Zz Test-Account is EXEMPT — it's Daniel's remote
+      // test login (never reaches payroll/reports per Block 215) and the gate was
+      // blocking his off-site testing. JUST that account; every real non-admin
+      // still needs the shop Wi-Fi.
+      if (!onShopNetwork(req) && emp.role !== "admin" && !isTestAcct215(emp)) {
         logEvent("login.offnetwork_blocked", id, {});
         return json(403, { ok: false, error: "Off the shop network — only admins can sign in from outside. Connect to the shop Wi-Fi to sign in." });
       }
