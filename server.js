@@ -811,13 +811,20 @@ async function week40Check221(empId, outIso) {
     const wStart = pStart + wk * 7 * 86400000;
     const wEnd = Math.min(wStart + 7 * 86400000, phxDayStart(cur.t) + 86400000);
     const evs = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(wStart).toISOString()}&claimed_at=lt.${new Date(wEnd).toISOString()}&order=claimed_at.asc`);
+    // Block 249 (Daniel, 9/2 — after the notice burst): count the PAID hours,
+    // through the very same payRules248 + quarter-rounding the Pay Worksheet
+    // pays on — not raw minutes. The 9/1 burst flagged five men on exact
+    // minutes while the worksheet settled three of them at 40.00–40.25; a
+    // notice should never cry overtime the paycheck won't show. Strictly
+    // OVER 40.00 paid fires; exactly 40.00 flat stays quiet.
+    const evs249 = payRules248(evs.map((e249) => ({ ...e249, employee_id: empId })));
     let open221 = null, mins = 0;
-    for (const ev of evs) {
+    for (const ev of evs249) {
       const t = new Date(ev.claimed_at).getTime();
       if (ev.kind === "clock_in") open221 = t;
-      else if (open221 != null) { mins += (t - open221) / 60000; open221 = null; }
+      else if (open221 != null) { mins += Math.max(0, (t - open221) / 60000); open221 = null; }
     }
-    if (mins < 40 * 60) return;
+    if (mins <= 40 * 60) return;
     const [who] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${empId}`);
     if (!who || isTestAcct215(who) || ["salary", "na"].includes(who.pay_type)) return;
     const wkKey = phxDate(wStart);
@@ -826,9 +833,10 @@ async function week40Check221(empId, outIso) {
     logEvent("payroll.week40", null, { employee_id: empId, week: wkKey, minutes: Math.round(mins) });
     const adminsW = await db(`employee?select=id&active=is.true&role=eq.admin`);
     const acctW = await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`);
+    const paidH249 = (mins / 60).toFixed(2), otH249 = (mins / 60 - 40).toFixed(2);   // paid mins land on quarters already
     notify("payroll.week40", [...new Set([...adminsW.map((a) => a.id), ...acctW.map((a) => a.id)])],
-      `${who.first_name} ${((who.last_name || "")[0] || "")}. crossed 40h this week`,
-      `Worked hours passed 40 for the week starting ${wkKey} — overtime accrues from here (Arizona weekly rule). The Pay Worksheet handles the math automatically.`,
+      `${who.first_name} ${((who.last_name || "")[0] || "")}. crossed 40 paid hours this week`,
+      `${paidH249} paid hours for the week starting ${wkKey} — that's ${otH249} h of overtime so far (Arizona weekly rule; paid hours = the same rounded math as the Pay Worksheet, which handles it automatically).`,
       "/payroll");
   } catch (e) { console.error("week-40 check failed:", e.message); }
 }
