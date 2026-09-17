@@ -3296,7 +3296,7 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
     <div style="font-weight:800;font-size:.82rem;letter-spacing:.04em;color:#ff8f98">CUSTOMER SELECTIONS — confirm each is ON THIS CAB and correct before sign-off</div>
     ${(L && L.length) ? L.map((o) => `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="oc255" data-b="${id}" data-o="${escH(o).replace(/"/g, "&quot;")}"> ${escH(o)}</label>`).join("")
       : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
-    <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — the rework note fills in for you.</div>
+    <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — your checked boxes are SAVED, and the rework note fills in for you.</div>
   </div>`;
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -4053,6 +4053,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           reason: g153("rr-").value,
           note: g153("rn-").value,
           hours: Number(g153("rh-").value),
+          // Block 256: the boxes the manager DID tick ride the send-back and
+          // are saved server-side — inspection work is never thrown away.
+          opts_verified: Array.prototype.slice.call(document.querySelectorAll('.oc255[data-b="' + id + '"]:checked')).map(function (x) { return x.dataset.o; }),
           claimed_at: new Date().toISOString() }) });
       const out = await r.json();
       if (out.ok) return location.reload();
@@ -10142,26 +10145,23 @@ http.createServer(async (req, res) => {
       // the work has missed twice.) Loudly logged + bell-noticed so no
       // manager is surprised the cab moved.
       if (b.state === "rework") {
-        // Block 255 (order 23109): the OPTION GATE has no back door. A rework
-        // cab reaches self-pass with its sign-off never completed — so its
-        // customer selections were never verified. If the order carries
-        // options and no gate='body' verification exists, the crew's tap
-        // parks the cab at INSPECTION instead (their screen clears the same),
-        // and the manager signs it off through the checklist. Cabs with no
-        // options self-pass exactly as the 8/22 one-inspection ruling says.
-        const optsSP255 = await optionList255(b);
-        if (optsSP255.length) {
-          const verSP255 = await db(`option_check?select=id&build_id=eq.${build_id}&gate=eq.body&limit=1`);
-          if (!verSP255.length) {
-            await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
-              state: "awaiting_inspection", final_note: note || null,
-              inspection_claimed_by: null, inspection_claimed_at: null }) });
-            logEvent("build.selfpass_routed", empId, { build_id, order_number: b.order_number, reason: "customer selections never verified — option gate (Block 255)" });
-            const mgrsRT255 = await floorMgrIds220("inspect");
-            if (mgrsRT255.length) void notify("build.ready_inspection", mgrsRT255,
-              `ORDER ${b.order_number} — rework done, needs the selections check`,
-              `The crew finished the rework, but this cab's customer selections were never verified — it parked at inspection instead of self-passing. Sign it off through the checklist.`, "/manager");
-            return json(200, { ok: true, routed_inspection: true });
+        // Block 256 (supersedes 255's park-at-inspection — Daniel: "i dont want
+        // to cause too much work and over inspections"): the manager's
+        // send-back already SAVED every checklist line they verified; the
+        // crew's push to Body now CONFIRMS whatever remains — attributed to
+        // the person who pushed it, loudly logged, and NAMED in the managers'
+        // self-pass notice so a phone-glance spot-check costs nothing.
+        // Warehouse Gate 2 stays the second human set of eyes when it wakes.
+        const optsSP256 = await optionList255(b);
+        let confirmed256 = [];
+        if (optsSP256.length) {
+          const haveSP256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body`);
+          const setSP256 = new Set(haveSP256.map((r2) => r2.item_text));
+          confirmed256 = optsSP256.filter((o) => !setSP256.has(o));
+          if (confirmed256.length) {
+            await db("option_check", { method: "POST", body: JSON.stringify(confirmed256.map((o) => ({
+              build_id, gate: "body", item_text: o, checked_by: empId, checked_at: claimed_at || new Date().toISOString() }))) });
+            logEvent("options.verified", empId, { build_id, order_number: b.order_number, gate: "body", lines: confirmed256.length, by_production_selfpass: true });
           }
         }
         await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
@@ -10177,7 +10177,7 @@ http.createServer(async (req, res) => {
         const mgrsSP = await floorMgrIds220("inspect");
         if (mgrsSP.length) notify("build.self_passed", mgrsSP,
           `ORDER ${b.order_number} — rework done, sent to Body by the crew`,
-          `Every rework item is checked off and production pushed the cab through (one-inspection system). If the fixes aren't right, Body sends it back with one tap on the Manager console.`, "/manager");
+          `Every rework item is checked off and production pushed the cab through (one-inspection system).${confirmed256.length ? ` Production also CONFIRMED ${confirmed256.length} customer selection${confirmed256.length > 1 ? "s" : ""} at the push: ${confirmed256.slice(0, 3).join(" · ")}${confirmed256.length > 3 ? " …" : ""}.` : ""} If the fixes aren't right, Body sends it back with one tap on the Manager console.`, "/manager");
         return json(200, { ok: true, self_passed: true });
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
@@ -10307,10 +10307,10 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { build_id, reason, note, hours, claimed_at } = await body(req);
+      const { build_id, reason, note, hours, claimed_at, opts_verified } = await body(req);   // Block 256: verified boxes ride along
       if (!reason) return json(400, { ok: false, error: "Pick a reason" });
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);
       if (!b || b.state !== "awaiting_inspection")
         return json(400, { ok: false, error: "Only a cab awaiting inspection can be sent back" });
       const when = claimed_at || new Date().toISOString();
@@ -10326,6 +10326,23 @@ http.createServer(async (req, res) => {
         source: "rework", state: "not_started", sort_order: 1000 + priors.length }) });
       logEvent("build.rework_assigned", empId, { build_id, order_number: b.order_number,
         reason, note: note || "", hours: Number(hours) || null, at: when });
+      // Block 256 (Daniel: production still pushes the cab to Body after
+      // fixing a found miss): every checklist box the manager DID tick is
+      // SAVED here, with their name — only lines that are really on the live
+      // order count, and lines already on record aren't doubled. The unchecked
+      // miss rides the rework note; production's push confirms the remainder.
+      const optsV256 = Array.isArray(opts_verified) ? opts_verified.map((x) => String(x)).filter(Boolean) : [];
+      if (optsV256.length) {
+        const exp256 = await optionList255(b);
+        const have256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body`);
+        const haveSet256 = new Set(have256.map((r2) => r2.item_text));
+        const new256 = optsV256.filter((o) => exp256.includes(o) && !haveSet256.has(o));
+        if (new256.length) {
+          await db("option_check", { method: "POST", body: JSON.stringify(new256.map((o) => ({
+            build_id, gate: "body", item_text: o, checked_by: empId, checked_at: when }))) });
+          logEvent("options.verified", empId, { build_id, order_number: b.order_number, gate: "body", lines: new256.length, at_sendback: true });
+        }
+      }
       // File 16: the line's usual techs hear it the moment it's assigned —
       // no walking to the board to discover the cab came back. Q106 sandbox.
       const techsR = await db(`employee?select=id&active=is.true&lines=cs.{${b.line_id}}`);
