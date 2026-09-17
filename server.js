@@ -2948,6 +2948,23 @@ const progressReportPage210 = (b, family, days) => {
 </body></html>`;
 };
 
+// Block 255 (order 23109 — the cab shipped missing two paid options): the
+// OPTION CHECKLIST derives from the customer's LIVE Coyote order, never from
+// the task list — a cab with a hollow task history (the go-live seeds) still
+// gets its full list. Returns every selection as "Label: value" text, stock
+// choices included (Daniel: stock gets acknowledged too).
+async function optionList255(b, allow255 = null) {
+  const root = (b && (b.coyote_root || String(b.order_number || "").split(".")[0])) || "";
+  if (!root) return [];
+  if (!allow255) {
+    const prods255 = await db("product?select=part_number");
+    allow255 = new Set(prods255.map((p) => String(p.part_number).toUpperCase()));
+  }
+  const [ci255] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(root)}&order=received_at.desc&limit=1`);
+  const det255 = ci255 && ci255.payload ? parseCoyoteDetail(ci255.payload, b.part_number, allow255) : null;
+  if (!det255 || !det255.features.length) return [];
+  return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
+}
 const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null) => {
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
   // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
@@ -3271,6 +3288,16 @@ const settingsPage117 = (me) => `<!doctype html>
   }
 </script></div></body></html>`;
 
+// Block 255: the sign-off OPTION GATE's checklist widget — every customer
+// selection (stock included) gets its own box; the server refuses
+// /api/build/complete until every line is checked. A no-options cab gets one
+// explicit confirm box, so nothing ever passes untouched.
+const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10px;padding:8px 10px;margin:8px 0;background:#1c1416">
+    <div style="font-weight:800;font-size:.82rem;letter-spacing:.04em;color:#ff8f98">CUSTOMER SELECTIONS — confirm each is ON THIS CAB and correct before sign-off</div>
+    ${(L && L.length) ? L.map((o) => `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="oc255" data-b="${id}" data-o="${escH(o).replace(/"/g, "&quot;")}"> ${escH(o)}</label>`).join("")
+      : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
+    <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — the rework note fills in for you.</div>
+  </div>`;
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -3390,6 +3417,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
            <button class="btn gray" style="padding:6px 12px;margin-top:0;margin-left:8px" onclick="armM(this,()=>claimInsp184('${w.id}','takeover',this))">Take over</button>
            <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>claimInsp184('${w.id}','release',this))">Release</button>`
         : `<button class="btn" style="background:#0a4a6e;border-color:#5ac8fa;margin-top:0" onclick="claimInsp184('${w.id}','claim',this)">&#128269; I&#39;ve got this one</button> <span style="opacity:.5;font-size:.85rem">first tap takes it — the others see your name here</span>`}</div>
+      ${oc255(w.id, w.opts255)}
       <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
         <select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
@@ -3458,6 +3486,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
                <button class="btn gray" style="padding:6px 12px;margin-top:0;margin-left:8px" onclick="armM(this,()=>claimInsp184('${w.id}','takeover',this))">Take over</button>
                <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>claimInsp184('${w.id}','release',this))">Release</button>`
             : `<button class="btn" style="background:#0a4a6e;border-color:#5ac8fa;margin-top:0" onclick="claimInsp184('${w.id}','claim',this)">&#128269; I&#39;ve got this one</button>`}</div>
+          ${oc255(w.id, w.opts255)}
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
           <!-- The OTHER inspection outcome (files 11/18): send it back,
                reason-coded (Q77 list), with a note + a time frame in hours. -->
@@ -3490,7 +3519,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
-        ${insp188 ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`
+        ${insp188 ? "" : `${oc255(r.active.id, r.active.opts255)}<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`
       : `<div style="opacity:.6">No active cab</div>
         ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
@@ -3660,10 +3689,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   async function act(kind, id, btn) {
     btn.disabled = true; const orig109 = btn.textContent; btn.textContent = "Working…";
     try {
+      // Block 255: sign-off carries the option checklist — every checked
+      // "customer selection" box rides to the server, which refuses the
+      // sign-off unless EVERY expected line is covered (no force, no bypass).
+      var oc255s, ocack255;
+      if (kind === "complete") {
+        oc255s = Array.prototype.slice.call(document.querySelectorAll('.oc255[data-b="' + id + '"]:checked')).map(function (x) { return x.dataset.o; });
+        ocack255 = !!document.querySelector('.ocack255[data-b="' + id + '"]:checked');
+      }
       const r = await fetch("/api/build/" + kind, { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString(),
-          force: btn.dataset.force109 === "1" ? true : undefined }) });
+          force: btn.dataset.force109 === "1" ? true : undefined,
+          opts_checked: kind === "complete" ? oc255s : undefined,
+          opts_ack: kind === "complete" ? ocack255 : undefined }) });
       const out = await r.json();
       if (out.ok) return location.reload();
       // Block 128 (logic audit L1): sign-off with OPEN steps is a DELIBERATE
@@ -3684,6 +3723,12 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         document.getElementById("err").textContent = out.error || "";
         setTimeout(function () { var x = document.getElementById(pid128); if (x) x.remove(); }, 8000);
         return;
+      }
+      // Block 255: an option the checker left unchecked pre-fills the rework
+      // note, so "send it back naming the option" is one glance + one tap.
+      if (out.need_opts && out.need_opts.length) {
+        var pf255 = document.getElementById("Trn-" + id) || document.getElementById("rn-" + id);
+        if (pf255 && !pf255.value) pf255.value = "Customer option NOT done: " + out.need_opts[0];
       }
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
@@ -9403,7 +9448,7 @@ http.createServer(async (req, res) => {
         // on-the-clock list and the punch corrector — an accounting or Body
         // Shop punch should read "Accounting time", not a blank or "line 16".
         db(`line?select=id,name&order=id`),
-        db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`),
+        db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at,coyote_root&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`),   // Block 255: root feeds the option checklist
         db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`),
         db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200"),
         db("employee?select=id,first_name,last_name&active=is.true"),
@@ -9466,6 +9511,14 @@ http.createServer(async (req, res) => {
             photosHave: ph194.filter((p) => p.build_id === bid).length,
             photosNeed: bld && pmin194[bld.part_number] != null ? pmin194[bld.part_number] : 1 };
         }
+      }
+      // Block 255 (order 23109): the sign-off OPTION CHECKLIST — one list per
+      // active/awaiting cab, straight from the live Coyote order (≤ 8 cabs).
+      const sign255 = builds.filter((b) => b.state === "active" || b.state === "awaiting_inspection");
+      if (sign255.length) {
+        const prodsOC255 = await db("product?select=part_number");
+        const allowOC255 = new Set(prodsOC255.map((p) => String(p.part_number).toUpperCase()));
+        for (const b255 of sign255) b255.opts255 = await optionList255(b255, allowOC255);
       }
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const latestCk = {};
@@ -10055,7 +10108,7 @@ http.createServer(async (req, res) => {
       }
       const { build_id, note, claimed_at, photo_pass } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);   // Block 255: root feeds the option gate
       // Accepts ACTIVE (first finish), REWORK (resubmit after fixes, file 18),
       // and FIX_JOB (Q85: a returned/kicked-back cab resubmitting for re-inspection).
       if (!b || (b.state !== "active" && b.state !== "rework" && b.state !== "fix_job"))
@@ -10089,6 +10142,28 @@ http.createServer(async (req, res) => {
       // the work has missed twice.) Loudly logged + bell-noticed so no
       // manager is surprised the cab moved.
       if (b.state === "rework") {
+        // Block 255 (order 23109): the OPTION GATE has no back door. A rework
+        // cab reaches self-pass with its sign-off never completed — so its
+        // customer selections were never verified. If the order carries
+        // options and no gate='body' verification exists, the crew's tap
+        // parks the cab at INSPECTION instead (their screen clears the same),
+        // and the manager signs it off through the checklist. Cabs with no
+        // options self-pass exactly as the 8/22 one-inspection ruling says.
+        const optsSP255 = await optionList255(b);
+        if (optsSP255.length) {
+          const verSP255 = await db(`option_check?select=id&build_id=eq.${build_id}&gate=eq.body&limit=1`);
+          if (!verSP255.length) {
+            await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+              state: "awaiting_inspection", final_note: note || null,
+              inspection_claimed_by: null, inspection_claimed_at: null }) });
+            logEvent("build.selfpass_routed", empId, { build_id, order_number: b.order_number, reason: "customer selections never verified — option gate (Block 255)" });
+            const mgrsRT255 = await floorMgrIds220("inspect");
+            if (mgrsRT255.length) void notify("build.ready_inspection", mgrsRT255,
+              `ORDER ${b.order_number} — rework done, needs the selections check`,
+              `The crew finished the rework, but this cab's customer selections were never verified — it parked at inspection instead of self-passing. Sign it off through the checklist.`, "/manager");
+            return json(200, { ok: true, routed_inspection: true });
+          }
+        }
         await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
           state: "production_complete", final_note: note || null,
           rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null,
@@ -10325,15 +10400,31 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=role&id=eq.${empId}`);
       if (!me || (me.role !== "manager" && me.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { build_id, claimed_at, force } = await body(req);
+      const { build_id, claimed_at, force, opts_checked, opts_ack } = await body(req);   // Block 255: the checklist rides along
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,fix_kind,fix_reason,fix_assigned_at,kit_status,kit_note&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,fix_kind,fix_reason,fix_assigned_at,kit_status,kit_note,part_number,coyote_root&id=eq.${build_id}`);   // Block 255: part/root feed the option gate
       if (!b || (b.state !== "active" && b.state !== "awaiting_inspection"))
         return json(400, { ok: false, error: "Cab is not active or awaiting inspection" });
       // Block 109 (owner-rep): advancing a cab to BODY with steps still open
       // must never happen by accident. The manager override stays (block 99
       // judgment call) but it is INFORMED now — the first tap reports how
       // many steps are open, the second tap confirms; overrides are audited.
+      // Block 255 (order 23109 — shipped missing two paid options): the OPTION
+      // GATE. Every customer selection on the LIVE Coyote order must be
+      // individually confirmed present-and-correct before the cab can leave
+      // production. HARD gate — no force: an option found NOT done goes back
+      // through the existing rework flow instead. Derived from the order, not
+      // the task list, so a cab with a hollow task history can't slip through.
+      const optsExp255 = await optionList255(b);
+      const sent255 = Array.isArray(opts_checked) ? opts_checked.map((x) => String(x)) : [];
+      if (optsExp255.length) {
+        const missing255 = optsExp255.filter((o) => !sent255.includes(o));
+        if (missing255.length)
+          return json(400, { ok: false, need_opts: missing255,
+            error: `Verify the customer's selections first — ${missing255.length} not confirmed: ${missing255.slice(0, 3).join(" · ")}${missing255.length > 3 ? " …" : ""}. If one is NOT done, leave it unchecked and send the cab back for rework naming that option.` });
+      } else if (!opts_ack) {
+        return json(400, { ok: false, need_opts_ack: true, error: "No customer options came through on this order — tick the confirm box to acknowledge, then sign off." });
+      }
       const openT109 = await db(`task?select=id&build_id=eq.${build_id}&state=neq.complete&is_background=is.false`);
       // Block 254 (Daniel: "warn, allow anyway"): a cab STILL OWED parts warns
       // at sign-off through the same informed-tap flow — the manager sees what
@@ -10354,6 +10445,13 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
       logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix, by_role: me.role,
         short_at_signoff: shortSO254 || undefined, still_missing: shortSO254 ? (b.kit_note || "") : undefined });   // Block 254: the warned-past-it override, on the record
+      // Block 255: the verification itself, on the record — one audited row per
+      // confirmed selection (gate-aware: 'body' now, 'ship' wakes with the
+      // Body→warehouse hand-off build). Zero-options cabs log the acknowledgment.
+      if (optsExp255.length)
+        await db("option_check", { method: "POST", body: JSON.stringify(optsExp255.map((o) => ({
+          build_id, gate: "body", item_text: o, checked_by: empId, checked_at: claimed_at || new Date().toISOString() }))) });
+      logEvent("options.verified", empId, { build_id, order_number: b.order_number, gate: "body", lines: optsExp255.length });
       if (wasFix) logEvent("build.fixjob_closed", empId, { build_id, order_number: b.order_number, kind: b.fix_kind, reason: b.fix_reason, signed_off_at: claimed_at });
       // Q109: sign-off frees the line — warehouse can deliver the next
       // verified kit the moment this fires. Q106 sandbox applies.
