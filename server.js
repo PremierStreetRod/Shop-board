@@ -4407,6 +4407,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
     <a href="#calendar" style="color:#fff;font-weight:700;margin-right:16px">Shop calendar</a>
     <a href="#picklists" style="color:#fff;font-weight:700;margin-right:16px">Reason lists</a>
+    <a href="/admin/rework" style="color:#8ec9ff;font-weight:700;margin-right:16px">Inspection &amp; rework</a>
   </div>
   <h2>Admin</h2>
 
@@ -7608,6 +7609,96 @@ function actPill258(act, kind, id, tplId) {
   return `<a href="${href}" style="text-decoration:none" title="median of the last ${r.n} cabs \u00b7 range ${r.lo}\u2013${r.hi} crew-hrs \u00b7 tap for the receipts"><span style="display:inline-block;background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:3px 9px;font-size:.85rem;font-weight:800">${r.median} <span style="opacity:.65;font-weight:600">\u00b7${r.n}</span></span></a>`;
 }
 
+// ---------- Block 259 (Daniel, 9/18): THE REWORK SCOREBOARD ----------
+// Daniel's read on rework time: "i believe we have a staffing issue of body
+// shop NOT checking the right boxes or properly explaining WHY a cab goes
+// back... this could be a great tool." A TEACHING instrument, not a wall of
+// shame (kid-gloves, Block 223 lineage): first-look pass rate and Body
+// kickback rate BY LINE, the send-back REASONS as the coaching themes,
+// granted-vs-ACTUAL rework cost (the 258 engine measures what the fix really
+// took), labor-share context instead of name-stamping, and the inspector
+// named on every send-back so standards differences show both directions.
+// Admin eyes only; the floor never sees a scoreboard.
+function firstPass259(evs) {
+  // One build's inspection story, time-ordered: the FIRST decisive event wins.
+  for (const e of [...evs].sort((a, b) => a.at - b.at)) {
+    if (e.type === "build.rework_assigned") return "sent_back";
+    if (e.type === "build.production_complete") {
+      if (e.self_pass) return "sent_back";                                   // self-pass exists only after a rework — belt to the event above
+      return e.from_state === "active" ? "skipped" : "passed";               // "skipped" = manager signed off straight from active (their call; shown, never counted in the rate)
+    }
+  }
+  return "pending";
+}
+async function reworkBoard259() {
+  const [evs259, builds259, lines259, emps259] = await Promise.all([
+    dbAll252(`event_log?select=at,actor_id,event_type,payload&event_type=in.(build.rework_assigned,build.production_complete,build.fixjob_opened)&order=at.asc,id.asc`),
+    dbAll252(`build?select=id,order_number,cab_number,line_id,part_number,started_at&started_at=not.is.null&order=id.asc`),
+    db(`line?select=id,name&enabled=is.true&order=id`),
+    db("employee?select=id,first_name,last_name"),
+  ]);
+  const nm259 = {}; for (const e of emps259) nm259[e.id] = `${e.first_name} ${((e.last_name || "")[0] || "")}.`.trim();
+  const byBuild259 = {};
+  for (const ev of evs259) {
+    const p = ev.payload || {}; if (!p.build_id) continue;
+    (byBuild259[p.build_id] = byBuild259[p.build_id] || []).push({
+      at: new Date(ev.at).getTime(), type: ev.event_type, actor: ev.actor_id,
+      from_state: p.from_state, self_pass: !!p.self_pass, kind: p.kind,
+      reason: p.reason || "", note: p.note || "", hours: p.hours });
+  }
+  const perLine259 = {}; for (const l of lines259) perLine259[l.id] = { name: l.name, passed: 0, sent: 0, skipped: 0, kick: 0, signed: 0 };
+  const sendbacks259 = [], kicks259 = [];
+  const reasons259 = {};
+  for (const b of builds259) {
+    const evs = byBuild259[b.id] || []; if (!evs.length) continue;
+    const L = perLine259[b.line_id]; if (!L) continue;
+    const fp = firstPass259(evs);
+    if (fp === "passed") L.passed++; else if (fp === "sent_back") L.sent++; else if (fp === "skipped") L.skipped++;
+    if (evs.some((e) => e.type === "build.production_complete")) L.signed++;
+    for (const e of evs) {
+      if (e.type === "build.rework_assigned") {
+        reasons259[e.reason || "(no reason)"] = (reasons259[e.reason || "(no reason)"] || 0) + 1;
+        sendbacks259.push({ b, at: e.at, reason: e.reason, note: e.note, granted: Number(e.hours) || 0, inspector: nm259[e.actor] || "?" });
+      }
+      if (e.type === "build.fixjob_opened" && e.kind === "kickback") { L.kick++; kicks259.push({ b, at: e.at, reason: e.reason, note: e.note, granted: Number(e.hours) || 0, by: nm259[e.actor] || "?" }); }
+    }
+  }
+  // ACTUAL rework cost + labor share for the send-back cabs — the 258 engine,
+  // scoped to just those builds (rare rows; read-only; a hiccup shows "—").
+  const sbIds259 = [...new Set(sendbacks259.map((x) => x.b.id))];
+  if (sbIds259.length) {
+    try {
+      const [tasksSB, evTaskSB, punchesSB] = await Promise.all([
+        dbAll252(`task?select=id,build_id,name,is_background,source&build_id=in.(${sbIds259.join(",")})&order=id.asc`),
+        dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&order=at.asc,id.asc`),
+        dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at&voided=is.false&order=claimed_at.asc,id.asc`),
+      ]);
+      const testSB = new Set(emps259.filter((e) => isTestAcct215(e)).map((e) => e.id));
+      const ivsSB = pairLineIvs258(punchesSB.filter((p) => !testSB.has(p.employee_id)));
+      for (const sb of sendbacks259) {
+        const bt = tasksSB.filter((t) => t.build_id === sb.b.id);
+        const tEvs = [];
+        for (const ev of evTaskSB) { const p = ev.payload || {}; if (p.build_id === sb.b.id && p.task_id) tEvs.push({ at: new Date(ev.at).getTime(), type: ev.event_type.slice(5), task_id: p.task_id }); }
+        if (!tEvs.length) continue;
+        const labor = lineLabor258(tEvs, ivsSB.filter((iv) => iv.line === sb.b.line_id), { background: new Set(bt.filter((t) => t.is_background).map((t) => t.id)) });
+        let fixH = 0, shares = {};
+        for (const tid in labor) {
+          const t = bt.find((x) => x.id === tid); if (!t) continue;
+          if (t.source === "rework") fixH += labor[tid].crewH;
+          for (const e in labor[tid].byPerson) shares[e] = (shares[e] || 0) + labor[tid].byPerson[e];
+        }
+        sb.actual = Math.round(fixH * 100) / 100;
+        const tot = Object.values(shares).reduce((a, x) => a + x, 0);
+        sb.builtBy = tot ? Object.entries(shares).sort((a, z) => z[1] - a[1]).slice(0, 2)
+          .map(([e, h]) => `${nm259[e] || "?"} ${Math.round((h / tot) * 100)}%`).join(" \u00b7 ") : "";
+      }
+    } catch (e259) { console.error("rework cost calc failed:", e259.message); }
+  }
+  sendbacks259.sort((a, z) => z.at - a.at); kicks259.sort((a, z) => z.at - a.at);
+  return { perLine: Object.values(perLine259), sendbacks: sendbacks259.slice(0, 15), kicks: kicks259.slice(0, 15),
+    reasons: Object.entries(reasons259).sort((a, z) => z[1] - a[1]), names: nm259 };
+}
+
 // ---------- Block 244 (Daniel, 8/28): THE QUEUE MOVE THAT ALWAYS MOVES ----------
 // The old code SWAPPED the two rows' queue_pos values. Live data proved why
 // that's a trap: Line 2's 23471 and 23119 both sat at position "2" (the old
@@ -10170,6 +10261,52 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await linesManagerData();
       return send(200, "text/html; charset=utf-8", linesManagerPage(data));
+    }
+
+    // Block 259: INSPECTION & REWORK — the scoreboard-as-teaching-tool.
+    // Admin only (kid-gloves: the floor never sees a scoreboard); read-only.
+    if (url.pathname === "/admin/rework") {
+      const empRW = await liveSession(req);
+      if (!empRW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meRW] = await db(`employee?select=role&id=eq.${empRW}`);
+      if (!meRW || meRW.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      const D = await reworkBoard259();
+      const escRW = (x) => String(x == null ? "" : x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      const dRW = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
+      const rate = (l) => (l.passed + l.sent) ? Math.round((l.passed / (l.passed + l.sent)) * 100) + "%" : "\u2014";
+      const tot = D.perLine.reduce((a, l) => ({ passed: a.passed + l.passed, sent: a.sent + l.sent, skipped: a.skipped + l.skipped, kick: a.kick + l.kick, signed: a.signed + l.signed }), { passed: 0, sent: 0, skipped: 0, kick: 0, signed: 0 });
+      return send(200, "text/html; charset=utf-8", `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board \u2014 Inspection &amp; rework</title>${style}
+<style>table{width:100%;border-collapse:collapse;font-size:.92rem}td,th{padding:6px 8px;border-top:1px solid var(--line);text-align:left}th{opacity:.55}.mut{opacity:.6}
+.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}.big{font-size:1.4rem;font-weight:800}</style></head>
+<body><div class="wrap" style="max-width:900px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:2px 0 10px"><a href="/admin" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to Admin</a></p>
+  <h2>Inspection &amp; rework <span class="mut" style="font-size:.6em;font-weight:400">\u2014 a teaching tool, admin eyes only</span></h2>
+  <div class="lane"><h3 style="margin:0 0 6px">First look at inspection \u2014 by line</h3>
+    <div class="mut" style="font-size:.85rem;margin-bottom:6px">A cab's FIRST inspection outcome: signed off clean, or sent back for another pass. "Skipped" = a manager signed off straight from active (their judgment call \u2014 shown, never graded). Kickbacks = Body sent a signed-off cab back \u2014 the miss that matters most, and it grades the inspection too.</div>
+    <table><tr><th>Line</th><th>Passed first look</th><th>Sent back</th><th>First-pass rate</th><th>Skipped</th><th>Body kickbacks</th><th>Signed off</th></tr>
+    ${D.perLine.map((l) => `<tr><td><b>${escRW(l.name)}</b></td><td>${l.passed}</td><td>${l.sent}</td><td class="big" style="font-size:1.05rem">${rate(l)}</td><td class="mut">${l.skipped}</td><td style="color:${l.kick ? "#ff9f0a" : "inherit"}">${l.kick}</td><td class="mut">${l.signed}</td></tr>`).join("")}
+    <tr style="border-top:2px solid var(--line)"><td><b>Shop</b></td><td><b>${tot.passed}</b></td><td><b>${tot.sent}</b></td><td class="big" style="font-size:1.05rem">${rate(tot)}</td><td class="mut">${tot.skipped}</td><td>${tot.kick}</td><td class="mut">${tot.signed}</td></tr></table>
+    <div class="mut" style="font-size:.8rem;margin-top:6px">Small counts early \u2014 a rate over a handful of cabs is a hint, not a verdict. Reworks a crew finishes and pushes themselves aren't re-graded (the owners' one-inspection system).</div>
+  </div>
+  <div class="lane"><h3 style="margin:0 0 6px">Why cabs come back \u2014 the teaching list</h3>
+    ${D.reasons.length ? D.reasons.map(([r, n]) => `<div style="padding:4px 0;border-top:1px solid var(--line)"><b>${n}\u00d7</b> ${escRW(r)}</div>`).join("") : `<div class="mut">No send-backs on record \u2014 nothing to teach yet.</div>`}
+    <div class="mut" style="font-size:.8rem;margin-top:6px">Morning-meeting material is THEMES ("watch the seam seal"), never rankings.</div>
+  </div>
+  <div class="lane"><h3 style="margin:0 0 6px">Recent send-backs</h3>
+    ${D.sendbacks.length ? `<table><tr><th>When</th><th>Order</th><th>Reason</th><th>Given</th><th>Actually took</th><th>Inspector</th><th>Built mostly by</th></tr>
+    ${D.sendbacks.map((x) => `<tr><td class="mut">${dRW(x.at)}</td><td><a href="/order/${encodeURIComponent(x.b.order_number)}" style="color:inherit"><b>${escRW(x.b.order_number)}</b></a>${x.b.cab_number ? ` <span class="mut">\u00b7 ${escRW(x.b.cab_number)}</span>` : ""}</td>
+      <td>${escRW(x.reason)}${x.note ? `<div class="mut" style="font-size:.85em">${escRW(x.note)}</div>` : ""}</td>
+      <td class="mut">${x.granted || "\u2014"}h</td><td style="font-weight:700;color:#8ec9ff">${x.actual != null ? x.actual + " crew-hrs" : "\u2014"}</td>
+      <td class="mut">${escRW(x.inspector)}</td><td class="mut">${escRW(x.builtBy || "\u2014")}</td></tr>`).join("")}</table>` : `<div class="mut">None yet.</div>`}
+  </div>
+  <div class="lane"><h3 style="margin:0 0 6px">Body kickbacks \u2014 after sign-off</h3>
+    ${D.kicks.length ? `<table><tr><th>When</th><th>Order</th><th>Reason</th><th>Hrs set aside</th><th>Sent back by</th></tr>
+    ${D.kicks.map((x) => `<tr><td class="mut">${dRW(x.at)}</td><td><a href="/order/${encodeURIComponent(x.b.order_number)}" style="color:inherit"><b>${escRW(x.b.order_number)}</b></a></td><td>${escRW(x.reason)}${x.note ? `<div class="mut" style="font-size:.85em">${escRW(x.note)}</div>` : ""}</td><td class="mut">${x.granted || "\u2014"}h</td><td class="mut">${escRW(x.by)}</td></tr>`).join("")}</table>` : `<div class="mut">None \u2014 nothing signed off has bounced back from Body.</div>`}
+  </div>
+</div></body></html>`);
     }
 
     // Block 258: THE RECEIPTS — the drill-down behind every ACTUAL pill.
