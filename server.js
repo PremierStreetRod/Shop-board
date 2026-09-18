@@ -1016,6 +1016,17 @@ async function sweepForgottenClockOuts() {
   } catch (e) { console.error("sweeper failed (will retry):", e.message); }
 }
 sweepForgottenClockOuts();                       // boot sweep
+// Block 258: the step_actuals toggle rides in ON BOOT — the Supabase console
+// was unreachable the day this shipped, so the server seeds its own Features
+// row. Idempotent: inserts ON once if missing, never flips it afterwards
+// (the Features panel owns it from then on). Daniel ruled ON at deploy.
+(async () => {
+  try {
+    if (!DB_READY) return;
+    const t258 = await db("feature_toggle?select=key&key=eq.step_actuals");
+    if (!t258.length) await db("feature_toggle", { method: "POST", body: JSON.stringify({ key: "step_actuals", enabled: true }) });
+  } catch (e258) { console.error("step_actuals ensure failed:", e258.message); }
+})();
 setInterval(sweepForgottenClockOuts, 10 * 60 * 1000); // steady sweep
 
 // Read a JSON request body (small, so no streaming worries).
@@ -4336,6 +4347,7 @@ const TOGGLE_INFO = {
   // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
   // is running the floor. This switch lets an admin share the page if wanted.
   manager_reports: ["Managers can see Reports", "Let the manager role open the Reports page. OFF = admins only."],
+  step_actuals: ["Step time averages (admin only)", "Shows the real crew-hours beside each step's and upgrade's hour standard in the Build steps editor — measured from the floor's own punches, median of the last 12 cabs per item, with a tap-through to every cab behind the number. Admin eyes only; the floor never sees a stopwatch."],
   // Q113 (owner-rep): line open/close is manual control worth having — admins
   // always; this switch decides whether the manager role gets it too.
   manager_line_control: ["Managers can open/close lines", "Let the manager role close a line for the day and reopen it. OFF = admins only."],
@@ -4360,7 +4372,7 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = []) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = [], act258 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -4470,28 +4482,31 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <p>${tmpls.map((t) => t.id === tplId
     ? `<b style="color:var(--red)">${t.family}</b>`
     : `<a href="/admin?tpl=${t.id}#steps" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
-  <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th><th></th><th></th><th></th></tr>
+  <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
   ${steps.map((s, i) => `<tr>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
     <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}</td>
     <td><input class="num" id="sd-${s.id}" value="${s.day_end ? `${s.day_no},${s.day_end}` : s.day_no}"></td>
     <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
+    ${act258 ? `<td>${actPill258(act258, "step", s.id, tplId)}</td>` : ""}
     <td><button class="b" onclick="saveStep('${s.id}',this)">Save</button></td>
     <td>${i > 0 ? `<button class="b" onclick="moveStep('${s.id}','up',this)">&uarr;</button>` : ""}
         ${i < steps.length - 1 ? `<button class="b" onclick="moveStep('${s.id}','down',this)">&darr;</button>` : ""}</td>
     <td><button class="b red" onclick="arm(this,()=>retireStep('${s.id}'))">Retire</button></td>
   </tr>`).join("")}</table>
+  ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a number appears at 2 cabs). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
   <p style="margin-top:10px">Add a step:
     <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
     Day <input class="num" id="new-day" value="1" title="4, or 4,5 for a step that carries over"> Hrs <input class="num" id="new-hrs" value="1">
     <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
   <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
-  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th><th></th><th></th></tr>
+  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
   ${optItems.filter((o) => !o.kit_only).map((o) => `<tr${o.retired ? ' style="opacity:.45"' : ""}>
     <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${o.match_text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</code></td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
     <td><input class="num" id="op-d-${o.id}" value="${o.day_no}"></td>
+    ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
     <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
   </tr>`).join("")}</table>
@@ -7452,6 +7467,147 @@ function stepLabor241(taskEvents, clockIvs, opts = {}) {
   return { perTask, unattributed };
 }
 
+// ---------- Block 258 (Daniel, 9/18): STEP ACTUALS v2 — the LINE'S clock ----------
+// Daniel's correction to the 241 engine: "the time is right, but... the time
+// is based off TWO people on the line working, not one." Attribution moves
+// from the tapper's clock to the LINE's clock: at any instant, everyone
+// clocked into the line pours labor into whatever non-background tasks are
+// open, split evenly across them. The unit out the other end is CREW-HOURS —
+// the same unit as the template's man_hours column, so standard vs actual is
+// finally apples to apples whether one man built the cab or two.
+// Windows replay from the append-only event_log exactly as 241 did (start
+// opens, unstart discards, complete closes, undo reopens); a still-open
+// window HOLDS its share of the split (so a closed neighbor never soaks its
+// labor) but is never itself sampled — only completed work measures.
+const QUICK_TAP_MIN_258 = 15;   // wall-minute floor (Daniel 9/18, periscope-verified: all 93 sub-15-min windows were bookkeeping taps)
+const tierFloor258 = (stdH) => Number(stdH) <= 2 ? 0.25 : Number(stdH) <= 8 ? 0.35 : 0.5;   // graduated standards test — a 20h option "done" in 6 crew-hours is fiction, a 1h step in 20 real minutes is a fast crew
+const median258 = (xs) => { const a = [...xs].sort((x, y) => x - y); const m = a.length >> 1; return a.length ? (a.length % 2 ? a[m] : Math.round(((a[m - 1] + a[m]) / 2) * 100) / 100) : 0; };
+function lineLabor258(taskEvents, clockIvs, opts = {}) {
+  const nowMs = opts.nowMs || Date.now();
+  const bg = opts.background || new Set();
+  const open = {}, wins = [];
+  for (const ev of [...taskEvents].sort((a, b) => a.at - b.at)) {
+    if (ev.type === "start") open[ev.task_id] = ev.at;
+    else if (ev.type === "unstart") delete open[ev.task_id];                 // mis-tap: window discarded, zero labor
+    else if (ev.type === "undo") open[ev.task_id] = ev.at;
+    else if (ev.type === "complete") { if (open[ev.task_id] != null) { wins.push({ task: ev.task_id, from: open[ev.task_id], to: ev.at }); delete open[ev.task_id]; } }
+  }
+  const holders = [...wins, ...Object.entries(open).map(([task, from]) => ({ task, from, to: nowMs, openEnded: true }))].filter((w) => !bg.has(w.task));
+  const cuts = [...new Set([...holders.flatMap((w) => [w.from, w.to]), ...clockIvs.flatMap((c) => [c.start, c.end])])].sort((a, b) => a - b);
+  const acc = {};
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i], b = cuts[i + 1]; if (b <= a) continue;
+    const heads = clockIvs.filter((c) => c.start <= a && c.end >= b);        // who is ON the line this slice
+    if (!heads.length) continue;                                             // nobody clocked in: nothing accrues, period
+    const openNow = holders.filter((w) => w.from <= a && w.to >= b);
+    if (!openNow.length) continue;                                           // line labor with nothing open stays unattributed
+    for (const w of openNow) {
+      const t = (acc[w.task] = acc[w.task] || { crewMs: 0, byPerson: {} });
+      for (const h of heads) { t.crewMs += (b - a) / openNow.length; t.byPerson[h.emp] = (t.byPerson[h.emp] || 0) + (b - a) / openNow.length; }
+    }
+  }
+  const out = {};
+  for (const w of wins) {                                                    // ONLY closed windows become samples
+    if (bg.has(w.task)) continue;                                            // background: never a sample (nor a split partner, above)
+    const o = (out[w.task] = out[w.task] || { crewH: 0, wallMin: 0, byPerson: {}, from: w.from, to: w.to });
+    o.wallMin += (w.to - w.from) / 60000; o.to = Math.max(o.to, w.to); o.from = Math.min(o.from, w.from);
+  }
+  for (const tid in out) {
+    const p = acc[tid];
+    if (p) { out[tid].crewH = Math.round(p.crewMs / 36000) / 100; for (const e in p.byPerson) out[tid].byPerson[e] = Math.round(p.byPerson[e] / 36000) / 100; }
+    out[tid].wallMin = Math.round(out[tid].wallMin);
+  }
+  return out;
+}
+// Pair raw punches into per-person per-line clocked intervals (voided rows
+// pre-filtered by the caller). Test accounts are the CALLER's job to drop.
+function pairLineIvs258(punches, nowMs) {
+  const open = {}, ivs = [];
+  for (const p of [...punches].sort((a, b) => new Date(a.claimed_at) - new Date(b.claimed_at))) {
+    const t = new Date(p.claimed_at).getTime();
+    if (p.kind === "clock_in") { if (open[p.employee_id]) { const o = open[p.employee_id]; ivs.push({ emp: p.employee_id, line: o.line, start: o.start, end: t }); } open[p.employee_id] = { line: p.line_id, start: t }; }
+    else if (open[p.employee_id]) { const o = open[p.employee_id]; ivs.push({ emp: p.employee_id, line: o.line, start: o.start, end: t }); delete open[p.employee_id]; }
+  }
+  for (const e in open) ivs.push({ emp: Number.isNaN(e) ? e : e, line: open[e].line, start: open[e].start, end: nowMs || Date.now() });
+  return ivs;
+}
+// The whole family's actuals in one pass: every started build of the family,
+// its task windows through lineLabor258 against its line's crew, then the
+// two-test filter (15-min wall floor + graduated %-of-CURRENT-standard) and
+// the last-12-per-item median. Compute-on-demand — a few thousand small rows
+// at this scale, READ-ONLY, admin surfaces only (Daniel: the floor never
+// sees a stopwatch, and nothing here touches a floor endpoint).
+async function stepActuals258(family, tplSteps, optItems) {
+  const norm258 = (x) => String(x || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
+  const prods258 = await db("product?select=part_number,family");
+  const parts258 = new Set(prods258.filter((p) => p.family === family).map((p) => String(p.part_number).toUpperCase()));
+  const builds258 = (await dbAll252(`build?select=id,order_number,cab_number,line_id,part_number,started_at&started_at=not.is.null&order=id.asc`))
+    .filter((b) => parts258.has(String(b.part_number || "").toUpperCase()));
+  if (!builds258.length) return { rows: {}, names: {} };
+  const bIds258 = new Set(builds258.map((b) => b.id));
+  const [tasks258, evAll258, emps258] = await Promise.all([
+    dbAll252(`task?select=id,build_id,name,man_hours,is_background,source&build_id=in.(${builds258.map((b) => b.id).join(",")})&order=id.asc`),
+    dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&order=at.asc,id.asc`),
+    db("employee?select=id,first_name,last_name"),
+  ]);
+  const lines258 = [...new Set(builds258.map((b) => b.line_id).filter(Boolean))];
+  const punches258 = lines258.length ? await dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at&voided=is.false&order=claimed_at.asc,id.asc`) : [];
+  const testIds258 = new Set(emps258.filter((e) => isTestAcct215(e)).map((e) => e.id));   // Zz never counts as crew
+  const ivsAll258 = pairLineIvs258(punches258.filter((p) => !testIds258.has(p.employee_id)));
+  const names258 = {}; for (const e of emps258) names258[e.id] = `${e.first_name} ${((e.last_name || "")[0] || "")}.`.trim();
+  const tMeta258 = {}; for (const t of tasks258) tMeta258[t.id] = t;
+  const evByBuild258 = {};
+  for (const ev of evAll258) {
+    const p = ev.payload || {}; if (!p.task_id || !bIds258.has(p.build_id)) continue;
+    (evByBuild258[p.build_id] = evByBuild258[p.build_id] || []).push({ at: new Date(ev.at).getTime(), type: ev.event_type.slice(5), task_id: p.task_id });
+  }
+  // one sample per completed task; key = the CURRENT editor row it belongs to
+  const stepKey258 = {}; for (const st of tplSteps || []) stepKey258[norm258(st.name)] = { kind: "step", id: st.id, std: Number(st.man_hours) };
+  const optKey258 = {}; for (const o of optItems || []) optKey258[norm258(o.match_text)] = { kind: "opt", id: o.id, std: Number(o.man_hours) };
+  const rows = {};   // "<kind>:<id>" -> { samples: [], excluded: [] }
+  for (const b of builds258) {
+    const evs = evByBuild258[b.id]; if (!evs || !evs.length) continue;
+    const bgSet = new Set(tasks258.filter((t) => t.build_id === b.id && t.is_background).map((t) => t.id));
+    const labor = lineLabor258(evs, ivsAll258.filter((iv) => iv.line === b.line_id), { background: bgSet });
+    for (const tid in labor) {
+      const t = tMeta258[tid]; if (!t || t.is_background) continue;
+      if (t.source === "rework" || t.source === "fix") continue;             // quarantined: measured, never averaged (Daniel 9/18)
+      const keyRef = t.source === "option" ? optKey258[norm258(String(t.name).replace(/^UPGRADE\s*\u2014\s*/, ""))] : stepKey258[norm258(t.name)];
+      if (!keyRef) continue;                                                 // renamed/retired out of the current editor: no row to hang it on
+      const L = labor[tid];
+      const smp = { o: b.order_number, cab: b.cab_number || "", crewH: L.crewH, wallMin: L.wallMin, when: L.to,
+        by: Object.entries(L.byPerson).map(([e, h]) => `${names258[e] || "?"} ${h}h`).join(" + "),
+        crewAvg: L.wallMin ? Math.round((L.crewH / (L.wallMin / 60)) * 10) / 10 : 0 };
+      const bucket = (rows[`${keyRef.kind}:${keyRef.id}`] = rows[`${keyRef.kind}:${keyRef.id}`] || { std: keyRef.std, samples: [], excluded: [] });
+      if (L.wallMin < QUICK_TAP_MIN_258) bucket.excluded.push({ ...smp, why: `open only ${L.wallMin} min — under the ${QUICK_TAP_MIN_258}-minute floor (bookkeeping tap, not work)` });
+      else if (keyRef.std > 0 && L.crewH < keyRef.std * tierFloor258(keyRef.std)) bucket.excluded.push({ ...smp, why: `${L.crewH} crew-hrs on a ${keyRef.std}h standard — under the ${Math.round(tierFloor258(keyRef.std) * 100)}% floor (too fast to be the work)` });
+      else bucket.samples.push(smp);
+    }
+  }
+  for (const k in rows) {
+    const r = rows[k];
+    r.samples.sort((a, z) => z.when - a.when);
+    r.windowed = r.samples.slice(0, 12);                                     // the last-12 rule: the figure reads how the shop builds TODAY
+    r.older = r.samples.slice(12);
+    r.n = r.windowed.length;
+    const xs = r.windowed.map((x) => x.crewH);
+    r.median = r.n ? median258(xs) : 0;
+    r.lo = r.n ? Math.min(...xs) : 0; r.hi = r.n ? Math.max(...xs) : 0;
+  }
+  return { rows, names: names258 };
+}
+// The pill the editors render: live number, accumulating, or honest silence.
+// A LINK, not an input — nothing here is editable, and it must never be
+// mistaken for the Hours box beside it (Daniel: "it NEEDS to look different").
+function actPill258(act, kind, id, tplId) {
+  if (!act) return "";
+  const r = (act.rows || {})[`${kind}:${id}`];
+  const href = `/admin/step-actual?tpl=${tplId}&kind=${kind}&id=${id}`;
+  if (!r || (r.n < 2 && !r.excluded.length && r.n === 0)) return `<a href="${href}" style="text-decoration:none"><span style="display:inline-block;background:#2c2c2e;color:#6e6e73;border-radius:9px;padding:3px 9px;font-size:.82rem">&mdash;</span></a>`;
+  if (r.n < 2) return `<a href="${href}" style="text-decoration:none"><span style="display:inline-block;background:#2c2c2e;color:#8e8e93;border-radius:9px;padding:3px 9px;font-size:.82rem">${r.n} cab${r.n === 1 ? "" : "s"}</span></a>`;
+  return `<a href="${href}" style="text-decoration:none" title="median of the last ${r.n} cabs \u00b7 range ${r.lo}\u2013${r.hi} crew-hrs \u00b7 tap for the receipts"><span style="display:inline-block;background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:3px 9px;font-size:.85rem;font-weight:800">${r.median} <span style="opacity:.65;font-weight:600">\u00b7${r.n}</span></span></a>`;
+}
+
 // ---------- Block 244 (Daniel, 8/28): THE QUEUE MOVE THAT ALWAYS MOVES ----------
 // The old code SWAPPED the two rows' queue_pos values. Live data proved why
 // that's a trap: Line 2's 23471 and 23119 both sat at position "2" (the old
@@ -10016,6 +10172,61 @@ http.createServer(async (req, res) => {
       return send(200, "text/html; charset=utf-8", linesManagerPage(data));
     }
 
+    // Block 258: THE RECEIPTS — the drill-down behind every ACTUAL pill.
+    // Admin-only, toggle-gated, read-only. Shows the last-12 window fully,
+    // the older qualifying cabs collapsed, and every EXCLUDED sample with its
+    // reason spelled out — a number you can always interrogate (Daniel's
+    // ruling: it earns trust by admitting what it doesn't know).
+    if (url.pathname === "/admin/step-actual") {
+      const empSA = await liveSession(req);
+      if (!empSA) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meSA] = await db(`employee?select=role&id=eq.${empSA}`);
+      if (!meSA || meSA.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      const [togSA] = await db("feature_toggle?select=enabled&key=eq.step_actuals");
+      if (!togSA || !togSA.enabled) { res.writeHead(302, { Location: "/admin" }); return res.end(); }
+      const tplSA = url.searchParams.get("tpl"), kindSA = url.searchParams.get("kind"), idSA = url.searchParams.get("id");
+      if (!isUuid(tplSA) || !isUuid(idSA) || !["step", "opt"].includes(kindSA)) return send(400, "text/plain; charset=utf-8", "Bad reference");
+      const [tmplSA] = await db(`build_template?select=id,family&id=eq.${tplSA}`);
+      if (!tmplSA) return send(404, "text/plain; charset=utf-8", "No such template");
+      const [stepsSA, optsSA] = await Promise.all([
+        db(`step_template?select=id,display_no,name,man_hours&template_id=eq.${tplSA}&retired=is.false&order=sort_order`),
+        db(`option_item?select=id,match_text,man_hours&family=eq.${encodeURIComponent(tmplSA.family)}`),
+      ]);
+      const rowSA = kindSA === "step" ? stepsSA.find((x) => x.id === idSA) : optsSA.find((x) => x.id === idSA);
+      if (!rowSA) return send(404, "text/plain; charset=utf-8", "No such step");
+      const actSA = await stepActuals258(tmplSA.family, stepsSA, optsSA);
+      const rSA = (actSA.rows || {})[`${kindSA}:${idSA}`] || { std: Number(rowSA.man_hours), samples: [], windowed: [], older: [], excluded: [], n: 0, median: 0, lo: 0, hi: 0 };
+      const nameSA = kindSA === "step" ? `${rowSA.display_no}. ${rowSA.name}` : rowSA.match_text;
+      const dSA = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
+      const escSA = (x) => String(x == null ? "" : x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      const rowHtml = (x) => `<tr><td><a href="/order/${encodeURIComponent(x.o)}" style="color:inherit"><b>${escSA(x.o)}</b></a>${x.cab ? ` <span class="mut">\u00b7 ${escSA(x.cab)}</span>` : ""}</td>
+        <td>${dSA(x.when)}</td><td style="font-weight:800;color:#8ec9ff">${x.crewH}</td><td class="mut">${escSA(x.by)}</td>
+        <td class="mut">${Math.round(x.wallMin / 6) / 10}h wall \u00b7 ~${x.crewAvg || "?"} on line</td></tr>`;
+      return send(200, "text/html; charset=utf-8", `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board \u2014 Step actual</title>${style}
+<style>table{width:100%;border-collapse:collapse;font-size:.92rem}td,th{padding:6px 8px;border-top:1px solid var(--line);text-align:left}th{opacity:.55}.mut{opacity:.6}
+.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}</style></head>
+<body><div class="wrap" style="max-width:860px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <p style="text-align:center;margin:2px 0 10px"><a href="/admin#steps" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to Build steps</a></p>
+  <div class="lane">
+    <div style="opacity:.6;font-size:.85rem">${escSA(tmplSA.family)} \u00b7 ${kindSA === "step" ? "build step" : "upgrade option"}</div>
+    <h2 style="margin:2px 0 8px">${escSA(nameSA)}</h2>
+    <div style="font-size:1.05rem">Standard <b>${Number(rowSA.man_hours)}h</b> \u00b7 Actual ${rSA.n >= 2 ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:2px 10px;font-weight:800">${rSA.median} crew-hrs</span> <span class="mut">median of the last ${rSA.n} cab${rSA.n === 1 ? "" : "s"} \u00b7 range ${rSA.lo}\u2013${rSA.hi}</span>` : `<span class="mut">not enough data yet (${rSA.n} qualifying cab${rSA.n === 1 ? "" : "s"} \u2014 a number appears at 2)</span>`}</div>
+  </div>
+  <div class="lane"><h3 style="margin:0 0 4px">The cabs behind the number</h3>
+    <div class="mut" style="font-size:.85rem;margin-bottom:6px">Crew-hours = every clocked person on the line while the step was open, split across open steps. Newest first; the figure reads the last 12.</div>
+    ${rSA.windowed.length ? `<table><tr><th>Order</th><th>Done</th><th>Crew-hrs</th><th>Who</th><th>Context</th></tr>${rSA.windowed.map(rowHtml).join("")}</table>` : `<div class="mut">Nothing qualifying yet.</div>`}
+    ${rSA.older.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:#8e8e93">Older cabs (${rSA.older.length}) \u2014 not part of the current figure</summary><table>${rSA.older.map(rowHtml).join("")}</table></details>` : ""}
+  </div>
+  <div class="lane"><h3 style="margin:0 0 4px">Thrown out \u2014 and why</h3>
+    <div class="mut" style="font-size:.85rem;margin-bottom:6px">Excluded from the math, never from the record. If real work keeps landing here, the standard \u2014 or a floor habit \u2014 needs a look.</div>
+    ${rSA.excluded.length ? `<table><tr><th>Order</th><th>Done</th><th>Crew-hrs</th><th>Who</th><th>Why it's out</th></tr>${rSA.excluded.sort((a, z) => z.when - a.when).map((x) => `<tr style="opacity:.7"><td><a href="/order/${encodeURIComponent(x.o)}" style="color:inherit">${escSA(x.o)}</a></td><td>${dSA(x.when)}</td><td>${x.crewH}</td><td class="mut">${escSA(x.by)}</td><td style="color:#ff9f0a">${escSA(x.why)}</td></tr>`).join("")}</table>` : `<div class="mut">Nothing excluded for this ${kindSA === "step" ? "step" : "option"}.</div>`}
+  </div>
+</div></body></html>`);
+    }
+
     // SYNC (admin-only). GET = PREVIEW the Coyote→board write engine (writes
     // NOTHING — shows exactly what it would place/hold/complete/cancel/park).
     // The apply run is /api/admin/sync {mode:"apply"} (scheduler / on-demand).
@@ -10751,25 +10962,6 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
-    // Block 257 (TEMPORARY PERISCOPE — Daniel, 9/18): Supabase's dashboard
-    // login is unreachable from the shop (their gateway degraded), so this
-    // hidden, KEY-GATED, READ-ONLY endpoint stands in for ONE analysis: the
-    // task open→close windows feeding the Step Actuals quick-tap threshold
-    // ruling. Linked from NOWHERE, renders nothing, no session involved, no
-    // names returned (actor ids only), wrong/missing key = a plain 404 like
-    // any unknown path. Daniel: "keep it behind the scene... temporary."
-    // REMOVE in the Step Actuals build (the next block that touches this file).
-    if (url.pathname === "/api/periscope257") {
-      if (String(url.searchParams.get("k") || "") !== "ps257_80fdbdb03ecdb3df5645e15b63afad08735a11f2807f1847")
-        return send(404, "text/plain; charset=utf-8", "Not found");
-      const [ev257, task257, build257] = await Promise.all([
-        dbAll252(`event_log?select=at,actor_id,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&order=at.asc,id.asc`),
-        dbAll252(`task?select=id,build_id,display_no,name,day_no,man_hours,is_background,source&order=id.asc`),
-        dbAll252(`build?select=id,order_number,line_id,state,started_at&order=id.asc`),
-      ]);
-      return json(200, { ok: true, ev: ev257, tasks: task257, builds: build257 });
-    }
-
     // Block 254 (the 23682/"3214" loop-closer): PARTS ARRIVED — warehouse
     // confirms a short-started cab's kit is finally complete. Only valid once
     // the cab has LEFT upcoming (an upcoming short kit clears the normal way —
@@ -11445,7 +11637,15 @@ self.addEventListener("notificationclick", (e) => {
         ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
         hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
         photos: ahPhA.filter((p2) => p2.session_id === s.id).map((p2) => p2.id) }));
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin));
+      // Block 258: STEP ACTUALS — computed only when the toggle is ON, only
+      // for the family being viewed, read-only. A compute hiccup renders the
+      // editor exactly as before (never blocks the admin page).
+      let act258 = null;
+      try {
+        const togSA258 = toggles.find((t) => t.key === "step_actuals");
+        if (togSA258 && togSA258.enabled && fam94) act258 = await stepActuals258(fam94, steps, optItems94);
+      } catch (eA258) { console.error("step actuals failed:", eA258.message); }
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin, act258));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
