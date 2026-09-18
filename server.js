@@ -10751,6 +10751,25 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // Block 257 (TEMPORARY PERISCOPE — Daniel, 9/18): Supabase's dashboard
+    // login is unreachable from the shop (their gateway degraded), so this
+    // hidden, KEY-GATED, READ-ONLY endpoint stands in for ONE analysis: the
+    // task open→close windows feeding the Step Actuals quick-tap threshold
+    // ruling. Linked from NOWHERE, renders nothing, no session involved, no
+    // names returned (actor ids only), wrong/missing key = a plain 404 like
+    // any unknown path. Daniel: "keep it behind the scene... temporary."
+    // REMOVE in the Step Actuals build (the next block that touches this file).
+    if (url.pathname === "/api/periscope257") {
+      if (String(url.searchParams.get("k") || "") !== "ps257_80fdbdb03ecdb3df5645e15b63afad08735a11f2807f1847")
+        return send(404, "text/plain; charset=utf-8", "Not found");
+      const [ev257, task257, build257] = await Promise.all([
+        dbAll252(`event_log?select=at,actor_id,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&order=at.asc,id.asc`),
+        dbAll252(`task?select=id,build_id,display_no,name,day_no,man_hours,is_background,source&order=id.asc`),
+        dbAll252(`build?select=id,order_number,line_id,state,started_at&order=id.asc`),
+      ]);
+      return json(200, { ok: true, ev: ev257, tasks: task257, builds: build257 });
+    }
+
     // Block 254 (the 23682/"3214" loop-closer): PARTS ARRIVED — warehouse
     // confirms a short-started cab's kit is finally complete. Only valid once
     // the cab has LEFT upcoming (an upcoming short kit clears the normal way —
