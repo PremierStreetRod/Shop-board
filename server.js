@@ -4486,7 +4486,10 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
   ${steps.map((s, i) => `<tr>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
-    <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}</td>
+    <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
+      ${s.wh_callout
+        ? `<div style="margin-top:3px"><input id="sw-${s.id}" value="${String(s.wh_callout).replace(/"/g, "&quot;")}" style="width:95%;font-size:.8rem;opacity:.85" title="Warehouse call-out — pushed to the warehouse crew the moment this step is started. Clear the text and Save to turn it off."> <small style="opacity:.5">&#128230; pushed to warehouse when started</small></div>`
+        : `<a href="#" onclick="return wcal260('${s.id}',this)" style="font-size:.75rem;color:#8e8e93;text-decoration:none" title="Add a warehouse call-out — pushed to the warehouse crew when this step starts">&#128230;+</a>`}</td>
     <td><input class="num" id="sd-${s.id}" value="${s.day_end ? `${s.day_no},${s.day_end}` : s.day_no}"></td>
     <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
     ${act258 ? `<td>${actPill258(act258, "step", s.id, tplId)}</td>` : ""}
@@ -4767,8 +4770,13 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Assign temp codes to everyone without a PIN";
   }
-  function saveStep(id, btn){ post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
-    name: v("sm-"+id), day_no: v("sd-"+id), man_hours: Number(v("sh-"+id)) }, btn); }
+  function saveStep(id, btn){ var sw260 = document.getElementById("sw-"+id);   // Block 260: input only exists when a call-out is set (or just added)
+    post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
+    name: v("sm-"+id), day_no: v("sd-"+id), man_hours: Number(v("sh-"+id)),
+    wh_callout: sw260 ? sw260.value : undefined }, btn); }
+  function wcal260(id, a){ var d = document.createElement("div"); d.style.marginTop = "3px";
+    d.innerHTML = '<input id="sw-'+id+'" placeholder="What should warehouse deliver when this step starts?" style="width:95%;font-size:.8rem"> <small style="opacity:.5">&#128230; then Save</small>';
+    a.parentNode.appendChild(d); a.style.display = "none"; return false; }
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
   function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
   function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: Number(v("op-new-day")) }, btn); }
@@ -7826,11 +7834,12 @@ async function resumeDownLine135(lineId, empId) {
 async function freezeAndStart(b, empId, startedAt) {
   await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt, queue_pinned: false }) });
   const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
-  const steps = await db(`step_template?select=display_no,name,day_no,day_end,man_hours,is_background,sort_order&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
+  const steps = await db(`step_template?select=display_no,name,day_no,day_end,man_hours,is_background,sort_order,wh_callout&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
   for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
     await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: st.display_no,
       name: st.name, day_no: st.day_no, day_end: st.day_end ?? null, man_hours: st.man_hours, is_background: st.is_background,
-      source: "template", state: "not_started", sort_order: st.sort_order }) });
+      source: "template", state: "not_started", sort_order: st.sort_order,
+      wh_callout: st.wh_callout ?? null }) });   // Block 260: the warehouse call-out freezes with the step
   // Block 94b: freeze the cab's UPGRADE OPTIONS in with the steps. Structured
   // options match the per-family library by exact normalized text and get real
   // hours on their day. Unknown options + ALL PSR-CUSTOM add-ons become FLAGS
@@ -8288,6 +8297,37 @@ async function kitVerifyNudge222(buildId) {
       `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is 75% done. On deck: order ${next222.order_number}${next222.cab_number ? ` (Cab #${next222.cab_number})` : ""} — its kit hasn't been verified yet. Make sure every part is accounted for before the line frees.`,
       "/home");
   } catch (e) { console.error("kit-verify nudge failed:", e.message); }
+}
+
+// ---------- Block 260 (Daniel, 9/21): THE WAREHOUSE CALL-OUT ----------
+// "on line 4, the blazer, well, they are tight on space over there, so the
+// bedsides, door panels and tailgate are delivered to the line later into
+// the build... when he starts step 12 on day three, fit inner wheelhouses
+// LH & RH, i want you to send a PUSH notification that tells warehouse that
+// line 4 is ready to receive the final pieces of the blazer tub."
+// Built GENERAL, not hardcoded: any build step may carry a wh_callout note
+// (migration 0059; set in the Build steps editor). The note lives on the
+// TEMPLATE ROW — renames and renumbering from the step-review pass can't
+// break it — and freezes onto each cab's task copy at start like every
+// other step field. When a step carrying one is STARTED, the warehouse crew
+// gets ONE push naming what the line is ready to receive. Fires once per
+// task ever (event_log dedupe survives undo/restart), fire-and-forget so it
+// never slows the floor tap.
+async function whCallout260(t, empId) {
+  try {
+    const [b] = await db(`build?select=id,line_id,order_number,cab_number,state&id=eq.${t.build_id}`);
+    if (!b || b.line_id == null || !["active", "rework"].includes(b.state)) return;
+    const dup260 = await db(`event_log?select=id&event_type=eq.warehouse.callout&payload->>task_id=eq.${t.id}&limit=1`);
+    if (dup260.length) return;                                               // undo + restart never buzzes twice
+    const [ln260] = await db(`line?select=name&id=eq.${b.line_id}`);
+    const lname260 = ln260 ? ln260.name : "Line " + b.line_id;
+    logEvent("warehouse.callout", empId, { task_id: t.id, build_id: b.id, order_number: b.order_number,
+      display_no: t.display_no, line: lname260, callout: t.wh_callout });
+    notify("warehouse.callout", await warehouseIds(),
+      `${lname260} — ready for a delivery`,
+      `${lname260} is ready to receive: ${t.wh_callout}. Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""}. The crew just started "${t.display_no}. ${t.name}".`,
+      "/home");
+  } catch (e) { console.error("warehouse callout failed:", e.message); }
 }
 
 // Q116: PACE EARLY-WARNING. Turns the board's own red into a push so the
@@ -8838,7 +8878,12 @@ http.createServer(async (req, res) => {
       // Block 212 (v201 SPEED): the floor's most-tapped endpoint — the two
       // independent lookups now share one round trip.
       const [tRows212, lastCkRows212] = await Promise.all([
-        db(`task?select=id,state,build_id,display_no,is_background&id=eq.${task_id}`),
+        // Block 260: name + wh_callout ride along for the warehouse call-out.
+        // started_by too — the Block 164 "only the starter (or a manager) can
+        // un-start" guard read t.started_by but it was never SELECTED, so the
+        // check silently passed everyone; fetching it makes the documented
+        // rule real (audit fix, this block).
+        db(`task?select=id,state,build_id,display_no,is_background,name,wh_callout,started_by&id=eq.${task_id}`),
         db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
       ]);
       const [t] = tRows212;
@@ -8903,6 +8948,7 @@ http.createServer(async (req, res) => {
       logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
       if (to === "complete") void kitVerifyNudge222(t.build_id);   // Block 222: 75% checkpoint — nudge warehouse if the on-deck kit is unverified
+      if (to === "in_progress" && t.state === "not_started" && t.wh_callout) void whCallout260(t, empId);   // Block 260: a fresh start on a call-out step pings warehouse
       return json(200, { ok: true });
     }
 
@@ -11742,7 +11788,7 @@ self.addEventListener("notificationclick", (e) => {
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
       const [steps, optItems94, ahPhA, linesA108] = await Promise.all([
-        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
+        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
         fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],
         ahRowsA.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [],
         ahRowsA.length ? db(`line?select=id,name`) : [],
@@ -12337,6 +12383,12 @@ self.addEventListener("notificationclick", (e) => {
         const patch = Object.assign({ display_no: String(p.display_no || ""), name: String(p.name || ""),
           man_hours: Number(p.man_hours) || 0 }, parseDays152(p.day_no));   // Block 152: "4,5" carry-over
         if (!patch.name) return json(400, { ok: false, error: "A step needs a name" });
+        // Block 260: the warehouse call-out — only touched when the editor
+        // sent the field (the input only renders when a call-out is set or
+        // being added); empty text CLEARS it. Future cabs only, like every
+        // template edit (Q97 freeze) — the live-cab seed is a one-time
+        // config done by hand.
+        if (p.wh_callout !== undefined) patch.wh_callout = String(p.wh_callout).trim().slice(0, 200) || null;
         await db(`step_template?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify(patch) });
         logEvent("template.step_updated", adminId, { step_id: p.id, changes: patch });
         return json(200, { ok: true });
