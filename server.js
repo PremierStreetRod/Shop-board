@@ -4506,14 +4506,18 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
   <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
   <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
-  ${optItems.filter((o) => !o.kit_only).map((o) => `<tr${o.retired ? ' style="opacity:.45"' : ""}>
-    <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${o.match_text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</code></td>
+  ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
+    const kids261 = optItems.filter((a) => a.alias_of === o.id);
+    return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
+    <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${esc261(o.match_text)}</code>
+      ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
+      ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
     <td><input class="num" id="op-d-${o.id}" value="${o.day_no}"></td>
     ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
     <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
-  </tr>`).join("")}</table>
+  </tr>`; }).join(""))((x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])))}</table>
   ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
   <p style="margin-top:10px">Add an option:
     <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
@@ -4782,6 +4786,21 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: Number(v("op-new-day")) }, btn); }
   function saveOpt(id, btn){ post("/api/admin/option", { action: "update", id, man_hours: Number(v("op-h-"+id)), day_no: Number(v("op-d-"+id)) }, btn); }
   function toggleOpt(id, to, btn){ post("/api/admin/option", { action: to, id }, btn); }
+  // Block 261: duplicate-wording links. "dup…" on the duplicate row opens a
+  // picker of the family's other main options; confirming folds this row in
+  // under the picked one (one row shows, every spelling still matches).
+  window.OPTS261 = ${JSON.stringify(optItems.filter((o) => !o.kit_only && !o.alias_of && !o.retired).map((o) => ({ id: o.id, text: String(o.match_text).slice(0, 80) })))};
+  function dupOpt261(id, a){
+    if (document.getElementById("al-" + id)) return false;
+    var d = document.createElement("div"); d.style.marginTop = "3px";
+    var s = document.createElement("select"); s.id = "al-" + id; s.style.maxWidth = "260px"; s.style.fontSize = ".8rem";
+    var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "this is a duplicate of…"; s.appendChild(o0);
+    (window.OPTS261 || []).forEach(function (x) { if (x.id !== id) { var oo = document.createElement("option"); oo.value = x.id; oo.textContent = x.text; s.appendChild(oo); } });
+    var b = document.createElement("button"); b.className = "b"; b.textContent = "Link"; b.style.marginLeft = "6px";
+    b.onclick = function () { if (s.value) post("/api/admin/option", { action: "alias", id: id, of: s.value }, b); };
+    d.appendChild(s); d.appendChild(b); a.parentNode.appendChild(d); a.style.display = "none"; return false;
+  }
+  function unDup261(id){ post("/api/admin/option", { action: "unalias", id }); return false; }
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: v("new-day"), man_hours: Number(v("new-hrs")) }, btn); }
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
@@ -7856,17 +7875,26 @@ async function freezeAndStart(b, empId, startedAt) {
       if (det94) {
         const famMap94 = {}; for (const x of prodsAll94) famMap94[String(x.part_number).toUpperCase()] = x.family;
         const fam94 = famMap94[String(b.part_number || "").toUpperCase()] || "";
-        const lib94 = fam94 ? await db(`option_item?select=match_text,man_hours,day_no&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
+        const lib94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,alias_of&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
         // Block 119b: also collapse space BEFORE a colon — Coyote's raw text
         // (and library rows pasted from it) can read "Floor : Large Hump
         // Floor" while the rebuilt form reads "Floor: …"; both sides must
         // normalize identically or a real option throws a bogus flag.
         const norm94 = (s) => String(s || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
         const byText94 = {}; for (const o of lib94) byText94[norm94(o.match_text)] = o;
+        const byId261 = {}; for (const o of lib94) byId261[o.id] = o;
         const sig94 = []; let sort94 = 9000;
         for (const f of det94.features) {
           const full = (f.label ? f.label + ": " : "") + f.value;
-          const hit = byText94[norm94(full)] || byText94[norm94(f.value)];
+          let hit = byText94[norm94(full)] || byText94[norm94(f.value)];
+          // Block 261 (Daniel: "combine the duplicates so ONLY one shows up,
+          // but the wording variations still populate through"): an ALIAS row
+          // is a spelling variant pointing at its canonical wording. Resolve
+          // ONE hop — hours/day/name all come from the canonical, so every
+          // spelling lands as the same task. A dangling alias (canonical
+          // retired or missing) resolves to NOTHING and falls through to the
+          // flag path below — never-guess holds.
+          if (hit && hit.alias_of) { const can261 = byId261[hit.alias_of]; hit = (can261 && !can261.alias_of) ? can261 : null; }
           // Block 113 (owner-rep): a PRICED library match OUTRANKS the
           // stock-prefix heuristic — "Stock Holes w/ Radius Front Edge"
           // starts with the word Stock but carries real radius-edge labor,
@@ -7879,8 +7907,13 @@ async function freezeAndStart(b, empId, startedAt) {
             // recognized for the signature: no task, no flag, no clock time.
             if (Number(hit.man_hours) > 0) {
               optCount94++;
+              // Block 261: the task is NAMED by the library row that matched —
+              // for an alias-resolved hit that is the CANONICAL wording, so
+              // two spellings of the same job build one actuals history. The
+              // order's own wording still rides the signature (sig94, above)
+              // and the sign-off checklist (optionList255 reads the order).
               await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
-                name: "UPGRADE — " + full, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
+                name: "UPGRADE — " + hit.match_text, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
                 source: "option", state: "not_started", sort_order: sort94++ }) });
             }
           } else {
@@ -11789,7 +11822,7 @@ self.addEventListener("notificationclick", (e) => {
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
       const [steps, optItems94, ahPhA, linesA108] = await Promise.all([
         (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
-        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],
+        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only,alias_of&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],
         ahRowsA.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [],
         ahRowsA.length ? db(`line?select=id,name`) : [],
       ]);
@@ -12318,16 +12351,46 @@ self.addEventListener("notificationclick", (e) => {
         return json(200, { ok: true });
       }
       if (!isUuid(p.id)) return json(400, { ok: false, error: "Bad option reference" });
+      // Block 261: aliases follow their canonical row EVERYWHERE — edits,
+      // retire and restore all land on the canonical and propagate, so the
+      // mirror invariant (alias hours/day == canonical hours/day) can never
+      // drift and every legacy read of an alias row stays truthful.
+      const [row261] = await db(`option_item?select=id,family,alias_of,man_hours,day_no,retired&id=eq.${p.id}`);
+      if (!row261) return json(404, { ok: false, error: "Option not found" });
       if (act === "update") {
+        if (row261.alias_of) return json(400, { ok: false, error: "This wording follows its main option — edit that one" });
         const hrs = Number(p.man_hours), day = Number(p.day_no);
         if (!(hrs >= 0 && hrs < 200) || !Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Hours/day look wrong" });
         await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ man_hours: hrs, day_no: day }) });
+        await db(`option_item?alias_of=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ man_hours: hrs, day_no: day }) });
         logEvent("option.updated", adminId, { id: p.id, man_hours: hrs, day_no: day });
         return json(200, { ok: true });
       }
       if (act === "retire" || act === "restore") {
+        if (row261.alias_of) return json(400, { ok: false, error: "Unlink this wording first — then retire it on its own" });
         await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: act === "retire" }) });
+        await db(`option_item?alias_of=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ retired: act === "retire" }) });
         logEvent(act === "retire" ? "option.retired" : "option.restored", adminId, { id: p.id });
+        return json(200, { ok: true });
+      }
+      if (act === "alias") {
+        // Mark THIS row as a spelling of OF (the canonical). No chains, no
+        // cycles, same family only; hours/day snap to the canonical's.
+        if (!isUuid(p.of) || p.of === p.id) return json(400, { ok: false, error: "Pick the option this wording belongs to" });
+        const [can261] = await db(`option_item?select=id,family,alias_of,man_hours,day_no,retired&id=eq.${p.of}`);
+        if (!can261 || can261.family !== row261.family) return json(400, { ok: false, error: "That option isn't in this cab family" });
+        if (can261.alias_of) return json(400, { ok: false, error: "That one is itself a spelling of another option — pick the main one" });
+        if (can261.retired) return json(400, { ok: false, error: "That option is retired — restore it first" });
+        const kids261 = await db(`option_item?select=id&alias_of=eq.${p.id}&limit=1`);
+        if (kids261.length) return json(400, { ok: false, error: "Other wordings point at this one — unlink them first" });
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ alias_of: p.of, man_hours: can261.man_hours, day_no: can261.day_no, retired: false }) });
+        logEvent("option.aliased", adminId, { id: p.id, alias_of: p.of, family: row261.family });
+        return json(200, { ok: true });
+      }
+      if (act === "unalias") {
+        if (!row261.alias_of) return json(400, { ok: false, error: "This wording stands on its own already" });
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ alias_of: null }) });
+        logEvent("option.unaliased", adminId, { id: p.id, was_alias_of: row261.alias_of });
         return json(200, { ok: true });
       }
       return json(400, { ok: false, error: "Unknown action" });
