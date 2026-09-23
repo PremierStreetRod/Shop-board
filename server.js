@@ -3712,7 +3712,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
         </tr>`).join("")}</table>` : `<div style="opacity:.6">No punches that day.</div>`}
       <p style="margin-top:12px">Add a missed punch pair:
-        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}"${tc.defLine189 === l.id ? " selected" : ""}>${l.name}</option>`).join("")}</select>
+        <select id="tca-line">${tc.lines.map((l) => `<option value="${l.id}"${tc.defLine189 === l.id ? " selected" : ""}>${l.name}</option>`).join("")}${(tc.fixes || []).map((f) => `<option value="fix:${f.id}">Fix work &mdash; ${f.order}${f.cab ? ` &middot; Cab #${f.cab}` : ""}</option>`).join("")}</select>
         IN <input type="time" id="tca-in" step="60"> OUT <input type="time" id="tca-out" step="60">
         <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="armM(this,()=>tcAdd())">Add</button>
         <span style="opacity:.55;font-size:.85rem">(leave OUT blank only for today)</span></p>
@@ -4133,8 +4133,13 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   function tcAdd(){ const d=document.getElementById("tc-date").value;
     const i=document.getElementById("tca-in").value, o=document.getElementById("tca-out").value;
     if(!i){ document.getElementById("err").textContent="The IN time is needed"; return; }
+    // Block 272: a "fix:<build id>" pick books the pair onto the Fix-work
+    // bucket TIED to that fix — the punch counts toward the fix's hours and
+    // puts the person on its board strip, same as the floor's own grab.
+    var lv272=document.getElementById("tca-line").value;
+    var fx272=lv272.indexOf("fix:")===0?lv272.slice(4):null;
     tcPost({ action:"add", employee_id: document.getElementById("tc-emp").value,
-      line_id: Number(document.getElementById("tca-line").value),
+      line_id: fx272?15:Number(lv272), fix_build_id: fx272,
       in_at: tcIso(d,i), out_at: o ? tcIso(d,o) : null }); }
   // Failed-inspection path: reason + note + time frame -> /api/build/rework.
   async function sendBack(id, btn, pfx) {   // Block 153: pfx picks which copy's inputs (top lane vs line lane)
@@ -9944,7 +9949,7 @@ http.createServer(async (req, res) => {
         db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&kind=eq.clock_in&limit=5000`),
         db(`event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=15`),
         fetch(`http://127.0.0.1:${PORT}/api/board-state`).then((r) => r.json()).catch(() => null),
-        tcEmpSel ? db(`clock_event?select=id,kind,line_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
+        tcEmpSel ? db(`clock_event?select=id,kind,line_id,fix_build_id,reason,claimed_at,voided,corrected_by,added_by,correction_note&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(phxDayStart(tcDate)).toISOString()}&claimed_at=lt.${new Date(phxDayStart(tcDate) + 86400000).toISOString()}&order=claimed_at.asc`) : [],
         (acct189 && tcEmpSel) ? db(`clock_event?select=id,kind,claimed_at,reason&voided=is.false&employee_id=eq.${tcEmpSel}&claimed_at=gte.${new Date(tcFloor238).toISOString()}&order=claimed_at.asc`) : [],   // Block 238: back through the whole previous period
         shopHours(), calendarOverrides(),   // both in-process cached (60 s / 5 min) — near-free here
         acct189 ? dbAll252(`clock_event?select=employee_id,kind,claimed_at,corrected_by,added_by&voided=is.false&claimed_at=gte.${new Date(phxDayStart(phxDate(Date.now() - 13 * 86400000))).toISOString()}&order=claimed_at.asc,id.asc`) : [],   // Block 215/216: the oddities scan — corrected_by rides along so a human-touched auto-close clears its flag
@@ -10092,8 +10097,14 @@ http.createServer(async (req, res) => {
       // (tcEmpSel/tcDate parsed above the Block-212 wave; punches rode wave 1).
       let tcPunches = [];
       if (tcEmpSel) {
+        // Block 272 (out of Mike's lunch-return correction): a Fix-work punch
+        // names ITS FIX in the corrector — "Fix work — 23109", never "line 15".
+        const fxIds272 = [...new Set(tcRawP212.filter((p2) => p2.fix_build_id).map((p2) => p2.fix_build_id))];
+        const fxNames272 = {};
+        if (fxIds272.length) for (const bFx of await db(`build?select=id,order_number&id=in.(${fxIds272.join(",")})`)) fxNames272[bFx.id] = bFx.order_number;
         tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
-          lineName: p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
+          lineName: p2.line_id === FIX_LINE_ID ? "Fix work" + (fxNames272[p2.fix_build_id] ? " — " + fxNames272[p2.fix_build_id] : "")
+            : p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
       }
@@ -10112,7 +10123,17 @@ http.createServer(async (req, res) => {
       const defLine189 = !selRow189 ? null
         : selRow189.department === "Production" && Array.isArray(selRow189.lines) && selRow189.lines.length ? selRow189.lines[0]
         : DEPT_LINE189[selRow189.department] || SHOP_LINE_ID;
-      const tc = { emps: tcEmps, lines: tcLines189,
+      // Block 272: the corrector can finally SPEAK fix punches — every OPEN
+      // fix joins the add-pair picker as "Fix work — <order>". (Mike's lunch
+      // return needed a hand-written SQL paste because this picker couldn't
+      // express the Fix-work bucket; next time it's two clicks in this lane.
+      // A CLOSED fix's punches still Move/Void fine — only ADDing to a closed
+      // fix stays out of the picker, and the endpoint allows it by id when
+      // that fix already carries punches.)
+      const tcFixes272 = tcEmpSel
+        ? (await db(`build?select=id,order_number,cab_number&state=eq.fix_job&order=fix_assigned_at`)).map((bF) => ({ id: bF.id, order: bF.order_number, cab: bF.cab_number }))
+        : [];
+      const tc = { emps: tcEmps, lines: tcLines189, fixes: tcFixes272,
         selEmp: tcEmpSel, date: tcDate, punches: tcPunches, defLine189 };
       // Block 191 (owner ruling, day 2): the ACCOUNTING TIMECARD EDITOR.
       // Daniel: the punch-level corrector is "100% not EASY" for accounting.
@@ -11638,7 +11659,7 @@ http.createServer(async (req, res) => {
       const [meP] = await db(`employee?select=role,department&id=eq.${meId}`);   // Block 238: department feeds the accounting reach-back
       if (!meP || (meP.role !== "manager" && meP.role !== "admin"))
         return json(403, { ok: false, error: "Manager or admin only" });
-      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id, ids } = await body(req);   // Block 192: in_id/out_id feed void_pair · Block 199: ids feeds void_run
+      const { action, punch_id, new_at, employee_id, line_id, in_at, out_at, note, in_id, out_id, ids, fix_build_id } = await body(req);   // Block 192: in_id/out_id feed void_pair · Block 199: ids feeds void_run · Block 272: fix_build_id ties an added Fix-work pair to its fix
       if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
       // Q115: reject malformed ids before they reach Postgres (a non-uuid id
       // used to throw a 500). The UI only ever sends real ids.
@@ -11798,6 +11819,23 @@ http.createServer(async (req, res) => {
       }
       if (action === "add") {
         if (!employee_id || !line_id || !in_at) return json(400, { ok: false, error: "Person, line, and the IN time are needed" });
+        // Block 272 (out of Mike's lunch-return correction): the corrector can
+        // now ADD punches on the Fix-work bucket — but never blind. A line-15
+        // pair must NAME its fix (a bare Fix-work punch counts toward nothing
+        // and shows nobody on the board), and the named fix must be real:
+        // open right now, or already carrying Fix-work punches under that id
+        // (so a punch on a fix that closed this morning can still be repaired).
+        if (Number(line_id) === FIX_LINE_ID || fix_build_id) {
+          if (Number(line_id) !== FIX_LINE_ID)
+            return json(400, { ok: false, error: "A fix reference only makes sense on the Fix-work bucket" });
+          if (!isUuid(fix_build_id))
+            return json(400, { ok: false, error: "Pick WHICH fix the punches belong to — a bare Fix-work punch counts toward nothing" });
+          const [fb272] = await db(`build?select=id,state&id=eq.${fix_build_id}`);
+          const had272 = (fb272 && fb272.state !== "fix_job")
+            ? await db(`clock_event?select=id&fix_build_id=eq.${fix_build_id}&line_id=eq.${FIX_LINE_ID}&limit=1`) : [];
+          if (!fb272 || (fb272.state !== "fix_job" && !had272.length))
+            return json(400, { ok: false, error: "That fix isn't open and has no fix-punch history — check the pick" });
+        }
         const inMs = new Date(in_at).getTime(), outMs = out_at ? new Date(out_at).getTime() : null;
         if (!Number.isFinite(inMs) || (out_at && !Number.isFinite(outMs))) return json(400, { ok: false, error: "Bad time" });
         if (inMs > nowP || (outMs && outMs > nowP)) return json(400, { ok: false, error: "Can't punch the future" });
@@ -11818,12 +11856,14 @@ http.createServer(async (req, res) => {
         if (!sane) return json(400, { ok: false, error: "That would tangle the day's punches — check the times" });
         await db("clock_event", { method: "POST", body: JSON.stringify({
           employee_id, line_id, kind: "clock_in", claimed_at: new Date(inMs).toISOString(),
-          added_by: meId, correction_note: note }) });
+          added_by: meId, correction_note: note,
+          ...(Number(line_id) === FIX_LINE_ID ? { fix_build_id } : {}) }) });   // Block 272: the IN carries the fix — replay attributes the stint from the open clock_in, same as the floor's grab
         if (outMs) await db("clock_event", { method: "POST", body: JSON.stringify({
           employee_id, line_id, kind: "clock_out_shift", reason: "Added by correction",
           claimed_at: new Date(outMs).toISOString(), added_by: meId, correction_note: note }) });
         logEvent("punch.added", meId, { employee_id, line_id, in_at: new Date(inMs).toISOString(),
-          out_at: outMs ? new Date(outMs).toISOString() : null, note });
+          out_at: outMs ? new Date(outMs).toISOString() : null, note,
+          ...(Number(line_id) === FIX_LINE_ID ? { fix_build_id } : {}) });   // Block 272: the audit names the fix too
         void acctEditNotice221(meId, "added punches", employee_id, phxDate(inMs), `/manager?tc_emp=${employee_id}&tc_date=${phxDate(inMs)}#timecorrections`);
         return json(200, { ok: true });
       }
