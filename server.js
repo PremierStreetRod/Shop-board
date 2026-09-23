@@ -2596,6 +2596,10 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
   ${tv98 ? "" : (emp196 ? `<div style="margin:8px 0 0">${nav196(emp196)}</div>` : `<p style="text-align:center;margin:8px 0 0"><a href="/home" style="color:#8e8e93;margin-right:16px">&#8962; Home</a><a href="/logout" style="color:#8e8e93">Sign out</a></p>`)}   <!-- Block 196: the ONE shared nav (TV stays link-free) -->
   <!-- Q113: the master chip — is the shop working right now? -->
   <div style="text-align:center;margin:8px 0 2px"><span id="shopchip"></span></div>
+  <!-- Block 266 (Daniel): RETURNED FOR FIX — every open fix job gets its OWN
+       lane on the board (it never displaces a production tile). Renders only
+       while a fix is open; disappears when the lane is empty. -->
+  <div id="fixstrip" style="padding:0 26px"></div>
   <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
        left-hand UPCOMING rail; the staff board (phones / iPads) tiles the
        LINES first, full width, and the upcoming queue reads BELOW them. -->
@@ -2694,6 +2698,20 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             l.upcoming.map(u => '<div style="background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b><div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
           : '<div style="opacity:.45">Nothing in the queue.</div>');
       }
+      // Block 266: the RETURNED FOR FIX lane — own strip, own countdown color.
+      const fx266 = document.getElementById("fixstrip");
+      if (fx266) fx266.innerHTML = (s.fixjobs && s.fixjobs.length)
+        ? '<div style="background:#1c1c1e;border:1px dashed #4a90d9;border-radius:14px;padding:14px 18px;margin:10px 0 4px">'
+          + '<div style="font-weight:800;letter-spacing:.04em;color:#4a90d9;margin-bottom:8px">RETURNED FOR FIX — its own line, off the production clocks</div>'
+          + s.fixjobs.map(f => '<div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;border-left:6px solid ' + bar[f.color] + ';padding:4px 0 4px 10px;margin-bottom:6px">'
+            + '<b style="font-size:1.15rem">ORDER ' + ol(f.order) + '</b>'
+            + (f.cab ? '<span style="opacity:.8">Cab #' + f.cab + '</span>' : '')
+            + (f.family ? '<span style="opacity:.8">' + f.family + '</span>' : '')
+            + '<span style="opacity:.85">' + f.reason + '</span>'
+            + '<span class="s-' + f.color + '" style="font-weight:700">' + f.elapsed + ' of ' + (f.hours || "—") + ' hrs</span>'
+            + (f.line ? '<span style="opacity:.55">re-inspects on ' + f.line + '</span>' : '')
+            + '</div>').join("")
+          + '</div>' : "";
       document.getElementById("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
       lastState = s; applySleep(s);
     }catch(e){ /* board never crashes; next poll retries */ }
@@ -3675,7 +3693,19 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
   ${insp188 || acct189 ? "" : `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
-    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.hours ? ` · ${f.hours} hr frame` : ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} <span style="opacity:.7">· on ${f.line}</span>${f.note ? `<br><span style="opacity:.75">${f.note}</span>` : ""}</div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off on its line (above).</div>`}
+    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""}
+      <!-- Block 266 (Daniel): the open fix is EDITABLE in place — frame, note,
+           re-inspect line — plus "Fix done" (manager closes the work, cab goes
+           to the inspection lane above for the checklist sign-off) and Cancel
+           (opened in error; cab returns to production complete, all audited). -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
+        fix within <input class="num" id="fxh-${f.id}" value="${f.hours ?? ""}" style="width:70px"> hrs ·
+        re-inspects on <select id="fxl-${f.id}">${fixjob.lines.map((l) => `<option value="${l.id}"${l.id === f.line_id ? " selected" : ""}>${l.name}</option>`).join("")}</select>
+        <input id="fxn-${f.id}" value="${String(f.note || "").replace(/"/g, "&quot;")}" placeholder="note" style="min-width:220px">
+        <button class="b" onclick="saveFix266('${f.id}',this)">Save</button>
+        <button class="b grn" onclick="armM(this,()=>doneFix266('${f.id}'))">Fix done &rarr; inspection</button>
+        <button class="b red" onclick="armM(this,()=>cancelFix266('${f.id}'))">Cancel fix job</button>
+      </div></div>`).join("") : `<div style="opacity:.6">No open fix jobs. When one is closed, it re-inspects through the normal sign-off on its line (above).</div>`}
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
       <b>Open a fix job on a returned cab:</b>
       <p>Order
@@ -3683,7 +3713,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
         <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
       </p>
-      <p>Re-inspects on <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+      <p>Re-inspects on <select id="fx-line"><option value="">&mdash; its original line &mdash;</option>${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
         · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
       <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
       <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
@@ -4007,6 +4037,24 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       document.getElementById("err").textContent = out.error || "Something went wrong";
     } catch(e){ document.getElementById("err").textContent = "Network hiccup — try again"; }
   }
+  // Block 266: edit / finish / cancel an OPEN fix job from its own row.
+  async function fixCall266(path, payload){
+    try {
+      var r = await fetch(path, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+      var out = await r.json();
+      if(out.ok) return location.reload();
+      document.getElementById("err").textContent = out.error || "Something went wrong";
+    } catch(e){ document.getElementById("err").textContent = "Network hiccup — try again"; }
+  }
+  function saveFix266(id, btn){
+    btn.disabled = true;
+    fixCall266("/api/build/fixjob-update", { build_id: id,
+      hours: document.getElementById("fxh-"+id).value,
+      note: document.getElementById("fxn-"+id).value,
+      line_id: document.getElementById("fxl-"+id).value });
+  }
+  function doneFix266(id){ fixCall266("/api/build/fixjob-done", { build_id: id }); }
+  function cancelFix266(id){ fixCall266("/api/build/fixjob-cancel", { build_id: id }); }
   async function lineClosed(lineId, to) {
     try {
       const r = await fetch("/api/line/closed", { method: "POST",
@@ -9517,7 +9565,7 @@ http.createServer(async (req, res) => {
       const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
         db(`employee?select=id,first_name&active=is.true`),
-        db(`build?select=id,order_number,part_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),
+        db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),
         // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
         // order #, customer or business name, ship-to state. The Q65 toggle
         // ("Customer names on the TV") still governs the name; missing row = ON.
@@ -9641,7 +9689,22 @@ http.createServer(async (req, res) => {
           tv = { asleep: true, message: !workday ? "Shop closed today" : (hrNow < hrsB.open ? ("Opens " + fmtH(hrsB.open)) : "Closed for the day") };
         }
       } catch (e) { /* toggle hiccup — never sleep on error */ }
-      return json(200, { shop: shopState, tv, lines: lines.map((l) => {
+      // Block 266 (Daniel, 9/23 — "a fix job should be shown on the shop board
+      // under its own line"): every open fix job rides its OWN lane on the
+      // board, whatever the production tiles are doing. Same wall-clock-vs-
+      // frame countdown as the tile override; wording matches the TV-approved
+      // "Returned for fix" copy. The never-displace tile rule is untouched.
+      const fixjobs266 = builds.filter((b) => b.state === "fix_job").map((b) => {
+        const fxS = new Date(b.fix_assigned_at || b.started_at).getTime();
+        const elap = Math.max(0, (now - fxS) / 3600000);
+        const frm = Number(b.fix_hours) || 0;
+        return { order: b.order_number, cab: b.cab_number || "", family: familyOf[b.part_number] || "",
+          kind: b.fix_kind === "kickback" ? "kickback" : "customer return", reason: b.fix_reason || "",
+          hours: frm, elapsed: Math.round(elap * 10) / 10,
+          color: !frm ? "amber" : elap > frm ? "red" : elap > frm * 0.75 ? "amber" : "green",
+          line: (lines.find((l2) => l2.id === b.line_id) || {}).name || "" };
+      });
+      return json(200, { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]) } : null;
         const upcoming95 = (upOf[l.id] || []).map((u) => ({ order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));
@@ -10095,7 +10158,7 @@ http.createServer(async (req, res) => {
         if (cS && sendback207.length < 6) sendback207.push({ id: cS.id, order: cS.order_number, cab: cS.cab_number });
       }
       const fixjob = {
-        open: fxOpenRows.map((f) => ({ order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0 })),
+        open: fxOpenRows.map((f) => ({ id: f.id, line_id: f.line_id, order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0 })),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
         sendback: sendback207,
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
@@ -10832,6 +10895,79 @@ http.createServer(async (req, res) => {
       notify("build.fixjob_opened", techsFx.map((t) => t.id),
         `Order ${b.order_number} is back${lnFx223 ? ` on ${lnFx223.name}` : ""}`,
         `It needs a fix after sign-off: ${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs set aside. The fix step is on the cab screen.`, "/home");
+      return json(200, { ok: true });
+    }
+
+    // Block 266 (Daniel, 9/23): an OPEN fix job is editable from its manager-
+    // console row — frame hours, note, re-inspect line. Audited, fix_job only.
+    if (url.pathname === "/api/build/fixjob-update" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, hours, note, line_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,line_id,fix_hours,fix_note&id=eq.${build_id}`);
+      if (!b || b.state !== "fix_job") return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
+      const patch266 = { fix_hours: Number(hours) || null, fix_note: String(note || "").trim().slice(0, 300) || null };
+      if (line_id !== undefined && line_id !== null && line_id !== "") {
+        if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "That line isn't valid" });
+        patch266.line_id = Number(line_id);
+      }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patch266) });
+      logEvent("build.fixjob_edited", empId, { build_id, order_number: b.order_number,
+        hours: patch266.fix_hours, note: patch266.fix_note || "", line_id: patch266.line_id ?? b.line_id,
+        was: { hours: b.fix_hours, note: b.fix_note || "", line_id: b.line_id } });
+      return json(200, { ok: true });
+    }
+
+    // Block 266: "Fix done → inspection" — the manager closes out the fix work
+    // from the console (marks the remaining F-steps complete under their own
+    // name, loudly audited) and the cab lands in the inspection lane, where the
+    // normal sign-off with the full customer-selections checklist still stands
+    // between it and production complete. No gate is skipped — only the tech's
+    // finish tap is stood in for.
+    if (url.pathname === "/api/build/fixjob-done" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,cab_number&id=eq.${build_id}`);
+      if (!b || b.state !== "fix_job") return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
+      const whenD = claimed_at || new Date().toISOString();
+      const openF266 = await db(`task?select=id&build_id=eq.${build_id}&source=eq.fix&state=neq.complete`);
+      if (openF266.length) {
+        await db(`task?build_id=eq.${build_id}&source=eq.fix&state=neq.complete`, { method: "PATCH",
+          body: JSON.stringify({ state: "complete", completed_by: empId, completed_at: whenD }) });
+        logEvent("task.manager_completed", empId, { build_id, order_number: b.order_number, count: openF266.length, via: "fixjob_done" });
+      }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        state: "awaiting_inspection", inspection_claimed_by: null, inspection_claimed_at: null }) });
+      logEvent("build.fixjob_done", empId, { build_id, order_number: b.order_number, steps_closed: openF266.length, at: whenD });
+      return json(200, { ok: true });
+    }
+
+    // Block 266: cancel a fix job opened in error — the cab returns to
+    // PRODUCTION COMPLETE, fix fields clear, nothing deleted, all audited.
+    if (url.pathname === "/api/build/fixjob-cancel" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin"))
+        return json(403, { ok: false, error: "Manager or admin only" });
+      const { build_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,fix_kind,fix_reason&id=eq.${build_id}`);
+      if (!b || b.state !== "fix_job") return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
+        state: "production_complete", fix_kind: null, fix_reason: null, fix_note: null,
+        fix_hours: null, fix_assigned_at: null }) });
+      logEvent("build.fixjob_cancelled", empId, { build_id, order_number: b.order_number,
+        kind: b.fix_kind, reason: b.fix_reason });
       return json(200, { ok: true });
     }
 
