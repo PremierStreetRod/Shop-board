@@ -1731,7 +1731,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false }, prog209 = { ask: false, mandatory: false, have: false }) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false, offFix: false }, prog209 = { ask: false, mandatory: false, have: false }) => {
   const inRework = build.state === "rework";
   const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
   // Per-task documentation (file 11): count what's attached to each step.
@@ -1837,7 +1837,18 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ⟲ BACK FOR ONE MORE PASS — ${build.fix_reason || "see note"}${build.fix_hours ? ` · ${Number(build.fix_hours)} hrs set aside` : ""}
     ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
   </div>` : ""}
-  ${inFix && fixLane.onFix ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
+  ${inFix && fixLane.offFix ? `
+  <!-- Block 271 (Mike's lunch return): the SELF-HEAL banner. You're LOOKING at
+       a fix but your open punch isn't on it — steps tap fine, yet every hour
+       lands off the fix and the board names nobody. One tap runs the same
+       audited "Work this fix" grab (closes wherever your clock is parked,
+       opens the Fix-work stint on THIS cab). -->
+  <div class="note" style="background:#3a1200;border-color:#ff453a;text-align:center">
+    &#9888; <b>YOUR TIME ISN'T LANDING ON THIS FIX.</b><br>
+    <span style="opacity:.85">You can work the steps, but your clock is parked somewhere else right now &mdash; the board shows nobody on this fix and your hours miss it.</span><br>
+    <button onclick="fixClaim('${build.id}',this)" style="margin-top:10px;background:#7a1f1f;color:#fff;border:1px solid #ff453a;border-radius:10px;padding:12px 22px;font-size:1rem;font-weight:700;cursor:pointer">Put my clock on this fix &mdash; one tap</button>
+  </div>` : ""}
+  ${inFix && fixLane.onFix && !fixLane.offFix ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
   ${fixLane.open && fixLane.open.length ? `<div class="cabbar" style="border-color:#4a90d9">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
     ${fixLane.open.map((f) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0">
@@ -2169,10 +2180,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   // Block 126 (M3): grab a fix onto the Fix-work clock (any tech, any line), or
   // step off a fix you're done with. Both reload to the true screen.
   async function fixClaim(id, btn){
-    if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+    if (btn) { btn.dataset.was271 = btn.textContent; btn.disabled = true; btn.textContent = "Opening…"; }   // Block 271: the banner button shares this path — restore its own label on error
     const out = await sbPost("/api/fix/claim", { build_id: id, claimed_at: new Date().toISOString() }, (m) => { document.getElementById("err").textContent = m; });
     if (out.ok) return location.reload();
-    if (btn) { btn.disabled = false; btn.textContent = "Work this fix"; }
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.was271 || "Work this fix"; }
   }
   async function fixRelease(btn){
     if (btn) { btn.disabled = true; btn.textContent = "…"; }
@@ -8843,7 +8854,7 @@ http.createServer(async (req, res) => {
       }
       // Block 212 (v201 SPEED): the floor home's three base reads together.
       const [lastRows212, allLines, reasons] = await Promise.all([
-        db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 271: +fix_build_id — the cab screen needs to know if your clock is on THIS fix
         db(`line?select=id,name&enabled=is.true&order=id`),
         db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
       ]);
@@ -8919,7 +8930,17 @@ http.createServer(async (req, res) => {
           // one per tech.)
           const [progTog209] = progTogRows212;
           const prog209 = { ask: true, mandatory: Boolean(progTog209 && progTog209.enabled), have: Boolean(ph209.length || nt209q212.length || tn209q218.length) };   // Block 218: any photo or note today — progress, step or finish — satisfies the ask
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126 }, prog209));
+          // Block 271 (Mike's lunch return, 9/23): the screen can FOLLOW a fix
+          // (focus or line-fallback) while the person's CLOCK is somewhere else
+          // entirely — lunch closes the Fix-work stint, the general CLOCK IN
+          // lands on 14, and the focus redirect then hides the clock screen's
+          // "Work this fix" lane. Every hour after that lands OFF the fix and
+          // the board names nobody. So: if this cab is a fix and your open
+          // punch is NOT the Fix-work bucket for THIS cab, the cab page shows
+          // a loud put-my-clock-on-it banner (one tap = the same audited
+          // "Work this fix" grab, close-old + open-fix).
+          const offFix271 = build.state === "fix_job" && !(last.line_id === FIX_LINE_ID && last.fix_build_id === build.id);
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271 }, prog209));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
