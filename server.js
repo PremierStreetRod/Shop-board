@@ -10709,7 +10709,11 @@ http.createServer(async (req, res) => {
       // kit" signal — the first real event on the notification matrix.
       // Q106: sandboxed to the owner-rep until cutover, like everything.
       const [lnF] = await db(`line?select=name&id=eq.${b.line_id}`);
-      notify("build.awaiting_inspection", await warehouseIds(),
+      // Block 268 (Daniel, 9/23): a FIX finishing is between production and
+      // Body — no line is freeing and no kit needs pulling, so warehouse
+      // stays quiet (and the line-frees-soon heads-up below skips too).
+      // Revisit when crating & shipping join the warehouse build-out.
+      if (b.state !== "fix_job") notify("build.awaiting_inspection", await warehouseIds(),
         `${lnF ? lnF.name : "Line"} — pull the next kit`,
         `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection. The line frees soon.`, "/home");
       // Block 99 (owner-rep): the DIRECT review signal — a finished cab is the
@@ -10725,7 +10729,7 @@ http.createServer(async (req, res) => {
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
       const [lfsTog] = await db(`feature_toggle?select=enabled&key=eq.line_frees_soon_alert`);
-      if (lfsTog && lfsTog.enabled === true) {
+      if (lfsTog && lfsTog.enabled === true && b.state !== "fix_job") {   // Block 268: no line frees when a fix finishes
         const mgrs = await floorMgrIds220();
         if (mgrs.length) notify("touch.linefrees", mgrs, `${lnF ? lnF.name : "A line"} frees up soon`,
           `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is heading to inspection — the line will be ready for the next cab shortly.`, "/manager");
