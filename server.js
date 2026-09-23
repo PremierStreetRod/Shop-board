@@ -1739,8 +1739,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   const photosOf = {}; for (const p of tphotos) (photosOf[p.task_id] = photosOf[p.task_id] || []).push(p);
   // Q107: who's-on-it line under a step. Times shown in Phoenix (Q82, UTC-7 fixed).
   const phx = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(11, 16) : "";
+  // Block 269: helpers ride the who-line — both names on a shared step.
+  const helpNames269 = (t) => (t.helpers || []).map((h) => people[h]).filter(Boolean);
   const whoLine = (t) =>
-    t.state === "in_progress" && t.started_by ? `Started by ${people[t.started_by] || "?"} · ${phx(t.started_at)}` :
+    t.state === "in_progress" && t.started_by ? `Started by ${people[t.started_by] || "?"} · ${phx(t.started_at)}${helpNames269(t).length ? ` · helping: ${helpNames269(t).join(" · ")}` : ""}` :
     t.state === "complete" && t.completed_by ? `Done by ${people[t.completed_by] || "?"} · ${phx(t.completed_at)}` : "";
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
   // Block 124 (logic audit L4): "standard hours" counts only the real
@@ -1855,7 +1857,16 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
-        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}<a style="display:inline-block;padding:6px 14px;margin:2px 0;border:1px solid #4a7ab0;border-radius:9px;color:#8ec2f0;font-size:.95rem;font-weight:600;cursor:pointer;white-space:nowrap" onclick="toggleAtt('${t.id}')">${
+        ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}${
+          // Block 269 (Daniel — the Andrew & Christopher door-hang): a SECOND
+          // tech on a running step gets a real join instead of the trapped tap
+          // (tapping the step would COMPLETE it). Leave any time with one tap;
+          // helping also ends itself when the step completes or un-starts.
+          t.state === "in_progress" && !t.is_background && t.started_by && t.started_by !== emp.id
+            ? ((t.helpers || []).includes(emp.id)
+              ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #2e6b3e;border-radius:8px;color:#30d158;cursor:pointer;white-space:nowrap" onclick="helping269('${t.id}',false)">&#10003; Done helping &mdash; off this step</a> `
+              : `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #4a7ab0;border-radius:8px;color:#8ec2f0;cursor:pointer;white-space:nowrap" onclick="helping269('${t.id}',true)">&#129309; I'm helping this step</a> `)
+            : ""}<a style="display:inline-block;padding:6px 14px;margin:2px 0;border:1px solid #4a7ab0;border-radius:9px;color:#8ec2f0;font-size:.95rem;font-weight:600;cursor:pointer;white-space:nowrap" onclick="toggleAtt('${t.id}')">${
           (notesOf[t.id] || []).length + (photosOf[t.id] || []).length
             ? `${(photosOf[t.id] || []).length ? `📎 ${(photosOf[t.id] || []).length} photo${(photosOf[t.id] || []).length === 1 ? "" : "s"}` : ""}${(photosOf[t.id] || []).length && (notesOf[t.id] || []).length ? " · " : ""}${(notesOf[t.id] || []).length ? `📝 ${(notesOf[t.id] || []).length} note${(notesOf[t.id] || []).length === 1 ? "" : "s"}` : ""} — view / add`
             : "&#128247; Add note / photo"}</a>
@@ -1919,6 +1930,16 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     const err = document.getElementById("err");
     const out = await sbPost("/api/task/state",
       { task_id: id, to: "not_started", claimed_at: new Date().toISOString() },
+      (m) => { err.textContent = m; });
+    if (out.ok) return location.reload();
+    err.textContent = out.error || "Something went wrong";
+  }
+  // Block 269: join or leave a running step as a HELPER — the safe move for
+  // a second set of hands (tapping the step itself would complete it).
+  async function helping269(id, on) {
+    const err = document.getElementById("err");
+    const out = await sbPost("/api/task/helping",
+      { task_id: id, on: on },
       (m) => { err.textContent = m; });
     if (out.ok) return location.reload();
     err.textContent = out.error || "Something went wrong";
@@ -8869,7 +8890,7 @@ http.createServer(async (req, res) => {
           // its nine build-dependent reads now land in ONE round trip.
           const mid209 = phxDayStart(phxDate(Date.now()));
           const [tasks, notes, tphotos, folks, prodMinRows212, cShots, progTogRows212, ph209, nt209q212, tn209q218] = await Promise.all([
-            db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build.id}&order=day_no,sort_order`),
+            db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at,helpers&build_id=eq.${build.id}&order=day_no,sort_order`),
             // Per-task documentation (file 11) rides along with the task list.
             db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`),
             db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`),
@@ -9028,11 +9049,45 @@ http.createServer(async (req, res) => {
       if (to === "complete") { patch.completed_by = empId; patch.completed_at = claimed_at || new Date().toISOString(); }
       if (to === "in_progress" && t.state === "complete") { patch.completed_by = null; patch.completed_at = null; }
       if (to === "not_started") { patch.started_by = null; patch.started_at = null; }
+      // Block 269: helping ends itself when the step completes or the start
+      // is undone — a helper never lingers on a step that isn't running.
+      if (to === "complete" || to === "not_started") patch.helpers = [];
       await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patch) });
       logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
       if (to === "complete") void kitVerifyNudge222(t.build_id);   // Block 222: 75% checkpoint — nudge warehouse if the on-deck kit is unverified
       if (to === "in_progress" && t.state === "not_started" && t.wh_callout) void whCallout260(t, empId);   // Block 260: a fresh start on a call-out step pings warehouse
+      return json(200, { ok: true });
+    }
+
+    // Block 269 (Daniel — Andrew & Christopher on the same door-hang): a
+    // second tech JOINS a running step as a helper, or takes themselves off
+    // when they're done ("maybe he is just putting in a few hours of help").
+    // Display + record: both names on the step, audited both ways. The pace
+    // math and the line-labor split behind step averages stay untouched.
+    if (url.pathname === "/api/task/helping" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { task_id, on } = await body(req);
+      if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
+      const [t] = await db(`task?select=id,state,build_id,display_no,name,is_background,started_by,helpers&id=eq.${task_id}`);
+      if (!t) return json(400, { ok: false, error: "That step isn't there anymore — refresh" });
+      const have269 = Array.isArray(t.helpers) ? t.helpers : [];
+      if (on === true) {
+        if (t.is_background) return json(400, { ok: false, error: "Background steps don't take helpers" });
+        if (t.state !== "in_progress") return json(400, { ok: false, error: "You can only join a step that's running" });
+        if (t.started_by === empId) return json(400, { ok: false, error: "You started this step — you're already on it" });
+        if (!have269.includes(empId)) {
+          await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ helpers: [...have269, empId] }) });
+          logEvent("task.helping", empId, { task_id, build_id: t.build_id, display_no: t.display_no, starter: t.started_by });
+        }
+        return json(200, { ok: true });
+      }
+      if (have269.includes(empId)) {
+        await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ helpers: have269.filter((h) => h !== empId) }) });
+        logEvent("task.help_done", empId, { task_id, build_id: t.build_id, display_no: t.display_no });
+      }
       return json(200, { ok: true });
     }
 
