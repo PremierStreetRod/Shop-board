@@ -3683,11 +3683,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
         <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
       </p>
-      <p>On line <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
+      <p>Re-inspects on <select id="fx-line">${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
         · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
       <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
       <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
-      <span style="opacity:.5;font-size:.85rem">The fix step lands on the cab's screen; a tech works it, then it re-inspects through the sign-off on its line (above).</span>
+      <span style="opacity:.5;font-size:.85rem">The crew grabs the fix from the Open-fixes lane on their screens &mdash; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here.</span>
     </div>
   </div>`}
   <div class="msg err" id="err"></div>
