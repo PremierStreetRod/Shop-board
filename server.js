@@ -2709,6 +2709,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             + (f.family ? '<span style="opacity:.8">' + f.family + '</span>' : '')
             + '<span style="opacity:.85">' + f.reason + '</span>'
             + '<span class="s-' + f.color + '" style="font-weight:700">' + f.elapsed + ' of ' + (f.hours || "—") + ' hrs</span>'
+            + (f.techs && f.techs.length ? '<span style="font-weight:700">On it: ' + f.techs.join(' · ') + '</span>' : '<span style="opacity:.45">nobody on it right now</span>')
             + (f.line ? '<span style="opacity:.55">re-inspects on ' + f.line + '</span>' : '')
             + '</div>').join("")
           + '</div>' : "";
@@ -3693,7 +3694,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
   ${insp188 || acct189 ? "" : `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
-    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""}
+    ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} · ${(f.on || []).length ? `<b style="color:#4a90d9">on it: ${f.on.join(" · ")}</b>` : `<span style="opacity:.55">nobody on it right now</span>`}
       <!-- Block 266 (Daniel): the open fix is EDITABLE in place — frame, note,
            re-inspect line — plus "Fix done" (manager closes the work, cab goes
            to the inspection lane above for the checklist sign-off) and Cancel
@@ -3710,14 +3711,14 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <b>Open a fix job on a returned cab:</b>
       <p>Order
         <select id="fx-cab">${fixjob.completed.length ? fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
-        <select id="fx-kind"><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
-        <select id="fx-reason">${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
+        <select id="fx-kind"><option value="" disabled selected>&mdash; who sent it back? &mdash;</option><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
+        <select id="fx-reason"><option value="" disabled selected>&mdash; why is it back? &mdash;</option>${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
       </p>
       <p>Re-inspects on <select id="fx-line"><option value="">&mdash; its original line &mdash;</option>${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
         · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
       <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
       <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
-      <span style="opacity:.5;font-size:.85rem">The crew grabs the fix from the Open-fixes lane on their screens &mdash; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here.</span>
+      <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span>
     </div>
   </div>`}
   <div class="msg err" id="err"></div>
@@ -4027,6 +4028,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   async function openFix(){
     var cab = document.getElementById("fx-cab").value;
     if(!cab){ document.getElementById("err").textContent = "No completed cab to send back."; return; }
+    if(!document.getElementById("fx-kind").value){ document.getElementById("err").textContent = "Pick who sent it back — Body Shop or the customer."; return; }
+    if(!document.getElementById("fx-reason").value){ document.getElementById("err").textContent = "Pick why it came back."; return; }
     var payload = { build_id: cab, kind: document.getElementById("fx-kind").value,
       reason: document.getElementById("fx-reason").value, line_id: document.getElementById("fx-line").value,
       hours: document.getElementById("fx-hours").value, note: document.getElementById("fx-note").value };
@@ -9596,7 +9599,7 @@ http.createServer(async (req, res) => {
       // steps done · 3 going right now" — the owner-walk-in activity number.
       const arIds230 = builds.filter((b) => b.state === "active" || b.state === "rework").map((b) => b.id);
       const [events, tasksB230] = await Promise.all([
-        dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc,id.asc`),
+        dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at,fix_build_id&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc,id.asc`),
         arIds230.length ? db(`task?select=build_id,state,is_background&build_id=in.(${arIds230.join(",")})&limit=4000`) : [],
       ]);
       const tcnt230 = {};
@@ -9614,7 +9617,7 @@ http.createServer(async (req, res) => {
       const now = Date.now();
       for (const ev of events) {
         const t = new Date(ev.claimed_at).getTime();
-        if (ev.kind === "clock_in") open[ev.employee_id] = { line: ev.line_id, start: t };
+        if (ev.kind === "clock_in") open[ev.employee_id] = { line: ev.line_id, start: t, fix: ev.fix_build_id || null };
         else if (open[ev.employee_id]) {
           const o = open[ev.employee_id];
           (intervals[o.line] = intervals[o.line] || []).push({ s: o.start, e: t });
@@ -9623,9 +9626,13 @@ http.createServer(async (req, res) => {
         lastKind[ev.employee_id] = ev;
       }
       const onLine = {};
+      // Block 267 (Daniel: "it SHOULD show mike logged into and working the fix
+      // job"): who's on each open fix RIGHT NOW — grab punches carry the build.
+      const fixOn267 = {};
       for (const [empId, o] of Object.entries(open)) {   // still on the clock now
         (intervals[o.line] = intervals[o.line] || []).push({ s: o.start, e: now });
         if (nameOf[empId]) (onLine[o.line] = onLine[o.line] || []).push(nameOf[empId]);
+        if (o.line === FIX_LINE_ID && o.fix && nameOf[empId]) (fixOn267[o.fix] = fixOn267[o.fix] || []).push(nameOf[empId]);
       }
 
       const cabOf = {}; // first (oldest-started) active cab per line = the one on the floor
@@ -9702,6 +9709,7 @@ http.createServer(async (req, res) => {
           kind: b.fix_kind === "kickback" ? "kickback" : "customer return", reason: b.fix_reason || "",
           hours: frm, elapsed: Math.round(elap * 10) / 10,
           color: !frm ? "amber" : elap > frm ? "red" : elap > frm * 0.75 ? "amber" : "green",
+          techs: fixOn267[b.id] || [],
           line: (lines.find((l2) => l2.id === b.line_id) || {}).name || "" };
       });
       return json(200, { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
@@ -10158,7 +10166,12 @@ http.createServer(async (req, res) => {
         if (cS && sendback207.length < 6) sendback207.push({ id: cS.id, order: cS.order_number, cab: cS.cab_number });
       }
       const fixjob = {
-        open: fxOpenRows.map((f) => ({ id: f.id, line_id: f.line_id, order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0 })),
+        open: fxOpenRows.map((f) => {
+          // Block 267: name who's on the fix RIGHT NOW — the board feed already
+          // computes it from the grab punches; match by order number.
+          const bf267 = ((mgrBoard && mgrBoard.fixjobs) || []).find((x) => x.order === f.order_number);
+          return { id: f.id, line_id: f.line_id, order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0, on: (bf267 && bf267.techs) || [] };
+        }),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
         sendback: sendback207,
         reasons: fxReasons, lines: lines.map((l) => ({ id: l.id, name: l.name })) };
