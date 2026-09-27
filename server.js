@@ -1026,6 +1026,12 @@ sweepForgottenClockOuts();                       // boot sweep
     const t258 = await db("feature_toggle?select=key&key=eq.step_actuals");
     if (!t258.length) await db("feature_toggle", { method: "POST", body: JSON.stringify({ key: "step_actuals", enabled: true }) });
   } catch (e258) { console.error("step_actuals ensure failed:", e258.message); }
+  // Block 280: pace_v2 seeds ON the same way (Daniel ruled ON with a one-tap revert).
+  try {
+    if (!DB_READY) return;
+    const t280 = await db("feature_toggle?select=key&key=eq.pace_v2");
+    if (!t280.length) await db("feature_toggle", { method: "POST", body: JSON.stringify({ key: "pace_v2", enabled: true }) });
+  } catch (e280) { console.error("pace_v2 ensure failed:", e280.message); }
 })();
 setInterval(sweepForgottenClockOuts, 10 * 60 * 1000); // steady sweep
 
@@ -2710,6 +2716,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${ol(l.cab.order)}</div>
             \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
+            \${l.cab.open_line ? \`<div style="opacity:.9;font-size:1.05rem;margin-top:2px">\${l.cab.open_line}</div>\` : ""}
             <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
             \${l.cab.steps_total ? \`<div style="opacity:.55;font-size:.95rem;margin-top:2px">\${l.cab.steps_done} of \${l.cab.steps_total} steps done\${l.cab.steps_open ? \` · \${l.cab.steps_open} going right now\` : ""}</div>\` : ""}
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
@@ -4231,7 +4238,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 
     else if (l.down) line = `<span class="muted">Down — ${esc(l.down.reason || "")}</span>`;
     else if (!l.cab) line = `<span class="muted">Idle${l.ondeck ? ` — on deck: ${esc(l.ondeck.order)} (${esc(l.ondeck.family || "")})` : ""}</span>`;
     else { const pp = proj[l.cab.order];
-      line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}${pp ? ` · ${projPhrase(pp)}` : ""}`; }
+      line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.open_line ? ` · ${esc(l.cab.open_line)}` : ""}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}${pp ? ` · ${projPhrase(pp)}` : ""}`; }
     const techs = (l.techs && l.techs.length) ? ` <span class="muted">· ${l.techs.map(esc).join(", ")}</span>` : "";
     return `<div class="row"><span class="dot ${dot}"></span><b>${esc(l.name)}</b> — ${line}${techs}</div>`;
   }).join("") : `<div class="muted">No lines to show.</div>`}
@@ -4435,6 +4442,7 @@ const TOGGLE_INFO = {
   // Owner-rep call 2026-07-29: reports are an ADMIN thing; the manager's job
   // is running the floor. This switch lets an admin share the page if wanted.
   manager_reports: ["Managers can see Reports", "Let the manager role open the Reports page. OFF = admins only."],
+  pace_v2: ["Live pace credit (v2)", "The board credits a step as the crew's hours go into it (capped at the step's standard) instead of only at the done tap, so a long step doesn't read red while it's on pace. A step tapped done too fast earns only the hours poured. OFF = the old done-tap-only counter."],
   step_actuals: ["Step time averages (admin only)", "Shows the real crew-hours beside each step's and upgrade's hour standard in the Build steps editor — measured from the floor's own punches, median of the last 12 cabs per item, with a tap-through to every cab behind the number. Admin eyes only; the floor never sees a stopwatch."],
   // Q113 (owner-rep): line open/close is manual control worth having — admins
   // always; this switch decides whether the manager role gets it too.
@@ -7647,6 +7655,123 @@ function pairLineIvs258(punches, nowMs) {
   for (const e in open) ivs.push({ emp: Number.isNaN(e) ? e : e, line: open[e].line, start: open[e].start, end: nowMs || Date.now() });
   return ivs;
 }
+// ---------- Block 280 (Daniel, 9/27): PACE ENGINE v2 — credit as the work happens ----------
+// Playbook 63. The board's "ahead / on pace / behind / needs help" used to
+// credit a step ONLY at its done tap, so any step over 4 crew-hours went red
+// before it could finish (Ross's bundled steps are mostly 5–16h). Now:
+//   behind = coverage − earned, earned = Σ credit(complete) + Σ min(poured, std) over OPEN steps.
+//   RULE C — a COMPLETED step earns its full standard only if the hours poured
+//            into it reached the 258 too-fast floor (tierFloor258); under the
+//            floor it earns only what was poured (the done-early tap buys nothing).
+//   RULE D — background and 0-hour steps take no share of the crew's hours.
+//   FORGIVING — once an open step holds its full standard it stops taking a
+//            share; the hours flow to the other open step(s). Hours that land
+//            on a lone capped step are tracked as "over" for the tile.
+// Same replay as lineLabor258 (start opens, unstart discards, complete closes,
+// undo reopens); crew = everyone clocked onto the line (test accounts out).
+// Proven in tests/t281_pace_v2.js against these exact functions.
+function paceLabor280(taskEvents, clockIvs, tasks, nowMs) {
+  const open = {}, wins = [], state = {};
+  for (const ev of [...taskEvents].sort((a, b) => a.at - b.at)) {
+    if (ev.type === "start") { open[ev.task_id] = ev.at; state[ev.task_id] = "open"; }
+    else if (ev.type === "unstart") { delete open[ev.task_id]; state[ev.task_id] = "not"; }
+    else if (ev.type === "undo") { open[ev.task_id] = ev.at; state[ev.task_id] = "open"; }
+    else if (ev.type === "complete") { if (open[ev.task_id] != null) { wins.push({ task: ev.task_id, from: open[ev.task_id], to: ev.at }); delete open[ev.task_id]; } state[ev.task_id] = "done"; }
+  }
+  const eligible = (id) => { const t = tasks[id]; return Boolean(t) && !t.bg && Number(t.std) > 0; };   // RULE D
+  const holders = [...wins, ...Object.entries(open).map(([task, from]) => ({ task, from, to: nowMs }))].filter((w) => w.to > w.from && eligible(w.task));
+  const cuts = [...new Set([...holders.flatMap((w) => [w.from, w.to]), ...clockIvs.flatMap((c) => [c.start, c.end])])].sort((a, b) => a - b);
+  const acc = {}, over = {};   // task -> crew-ms
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    let a = cuts[i]; const b = cuts[i + 1]; if (b <= a) continue;
+    const heads = clockIvs.filter((c) => c.start <= a && c.end >= b).length;   // who is ON the line this slice
+    if (!heads) continue;                                                        // nobody clocked in: nothing accrues, period
+    const sharers = [...new Set(holders.filter((w) => w.from <= a && w.to >= b).map((w) => w.task))];
+    if (!sharers.length) continue;                                               // line labor with nothing open stays unattributed
+    while (a < b) {                                                              // FORGIVING: sub-slice so a step drops out the instant it holds its standard
+      const live = sharers.filter((id) => (acc[id] || 0) < Number(tasks[id].std) * 3600000 - 1);
+      if (!live.length) { const ov = (b - a) * heads / sharers.length; for (const id of sharers) over[id] = (over[id] || 0) + ov; break; }
+      const rate = heads / live.length;                                          // crew-ms per wall-ms, per sharer
+      let span = b - a;
+      for (const id of live) span = Math.min(span, (Number(tasks[id].std) * 3600000 - (acc[id] || 0)) / rate);
+      span = Math.max(span, 1);
+      for (const id of live) acc[id] = (acc[id] || 0) + span * rate;
+      a += span;
+    }
+  }
+  const r100 = (ms) => Math.round(ms / 36000) / 100;
+  const accrued = {}; for (const id in acc) accrued[id] = r100(acc[id]);
+  const overH = {}; for (const id in over) overH[id] = r100(over[id]);
+  const wallMin = {}; for (const w of wins) wallMin[w.task] = (wallMin[w.task] || 0) + (w.to - w.from) / 60000;
+  return { accrued, over: overH, state, wallMin };
+}
+// The board's earned figure for one cab. taskRows = frozen task rows (id,
+// display_no, name, state, man_hours, is_background); the DB state is the
+// truth for done/open, the replay supplies the hours poured. A completed step
+// with no start window at all (manager-completed, pre-v2 history) keeps its
+// full standard — RULE C only judges taps that exist.
+function paceEarned280(taskRows, taskEvents, clockIvs, nowMs) {
+  const tasks = {}; for (const t of taskRows) tasks[t.id] = { std: Number(t.man_hours) || 0, bg: Boolean(t.is_background) };
+  const L = paceLabor280(taskEvents, clockIvs, tasks, nowMs);
+  let earned = 0; const open = [], fast = [];
+  for (const t of taskRows) {
+    if (t.is_background) continue;
+    const std = Number(t.man_hours) || 0, acc = L.accrued[t.id] || 0, ov = L.over[t.id] || 0;
+    if (t.state === "complete") {
+      const judged = L.state[t.id] === "done";                                   // a real start→done window exists in the replay
+      if (judged && std > 0 && acc < std * tierFloor258(std)) { earned += acc; fast.push({ id: t.id, no: t.display_no, name: t.name, poured: acc, std }); }
+      else earned += std;
+    } else if (t.state === "in_progress" && std > 0) {
+      earned += Math.min(acc, std);
+      open.push({ id: t.id, no: t.display_no, name: t.name, poured: Math.round((acc + ov) * 10) / 10, std, over: Math.max(0, Math.round((acc + ov - std) * 10) / 10) });
+    }
+  }
+  return { earned: Math.round(earned * 100) / 100, open, fast };
+}
+// One cab's task-tap events, shaped for the engine (event_log rows -> {at,type,task_id}).
+function taskEvsFromLog280(rows, buildIds) {
+  const want = new Set(buildIds); const out = {};
+  for (const ev of rows) { const p = ev.payload || {}; if (!p.task_id || !want.has(p.build_id)) continue;
+    (out[p.build_id] = out[p.build_id] || []).push({ at: new Date(ev.at).getTime(), type: String(ev.event_type).slice(5), task_id: p.task_id }); }
+  return out;
+}
+// Block 280 TAP FACTS (Daniel: bell only, floor managers, nothing to techs):
+//   pace.fast_tap     — a step tapped done under the too-fast floor
+//   pace.unstart_long — an undo-start on a step that had been open 15+ min
+async function paceTapFact280(t, empId, kind) {
+  try {
+    const [b] = await db(`build?select=id,order_number,cab_number,line_id,started_at&id=eq.${t.build_id}`);
+    if (!b || !b.started_at || !b.line_id) return;
+    const startIso = new Date(new Date(b.started_at).getTime() - 3600000).toISOString();
+    const [evRows, punches, emps, tasksB] = await Promise.all([
+      dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&payload->>build_id=eq.${b.id}&at=gte.${startIso}&order=at.asc,id.asc`),
+      dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at&voided=is.false&line_id=eq.${b.line_id}&claimed_at=gte.${startIso}&order=claimed_at.asc,id.asc`),
+      db("employee?select=id,first_name,last_name"),
+      db(`task?select=id,display_no,name,state,man_hours,is_background&build_id=eq.${b.id}`),
+    ]);
+    const testIds = new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id));
+    const ivs = pairLineIvs258(punches.filter((p) => !testIds.has(p.employee_id)), Date.now());
+    const evs = (taskEvsFromLog280(evRows, [b.id])[b.id] || []);
+    const tasks = {}; for (const x of tasksB) tasks[x.id] = { std: Number(x.man_hours) || 0, bg: Boolean(x.is_background) };
+    const L = paceLabor280(evs, ivs, tasks, Date.now());
+    const [who] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
+    const name = who ? `${who.first_name} ${(who.last_name || "")[0] || ""}.`.trim() : "Someone";
+    const cab = `${b.order_number}${b.cab_number ? " · Cab #" + b.cab_number : ""}`;
+    const std = Number(t.man_hours) || 0;
+    const link = `/order?n=${encodeURIComponent(String(b.order_number).split(".")[0])}`;
+    if (kind === "fast") {
+      const poured = L.accrued[t.id] || 0, wall = Math.round(L.wallMin[t.id] || (t.started_at ? (Date.now() - new Date(t.started_at).getTime()) / 60000 : 0));   // the done event may not have landed yet: fall back to started_at
+      if (!(std > 0) || poured >= std * tierFloor258(std)) return;
+      await notify("pace.fast_tap", await floorMgrIds220(), `Fast done-tap — ${cab}`,
+        `${name} marked step ${t.display_no} "${t.name}" done with ${poured} crew-hrs poured in (${wall} min open) on a ${std}h standard. The board credited the ${poured}, not the ${std}.`, link);
+    } else if (kind === "unstart") {
+      const openMin = t.started_at ? Math.round((Date.now() - new Date(t.started_at).getTime()) / 60000) : 0;
+      if (openMin < 15) return;
+      await notify("pace.unstart_long", await floorMgrIds220(), `Undo-start after ${openMin} min — ${cab}`,
+        `${name} undid the start on step ${t.display_no} "${t.name}" after it had been open ${openMin} min. Those hours now count against the cab with no step to credit.`, link);
+    }
+  } catch (e) { console.error("pace tap fact failed:", e && e.message); }
+}
 // The whole family's actuals in one pass: every started build of the family,
 // its task windows through lineLabor258 against its line's crew, then the
 // two-test filter (15-min wall floor + graduated %-of-CURRENT-standard) and
@@ -8300,7 +8425,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged"];
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long"];   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -9014,7 +9139,7 @@ http.createServer(async (req, res) => {
         // un-start" guard read t.started_by but it was never SELECTED, so the
         // check silently passed everyone; fetching it makes the documented
         // rule real (audit fix, this block).
-        db(`task?select=id,state,build_id,display_no,is_background,name,wh_callout,started_by&id=eq.${task_id}`),
+        db(`task?select=id,state,build_id,display_no,is_background,name,wh_callout,started_by,man_hours,started_at&id=eq.${task_id}`),   // Block 280: +man_hours,started_at for the tap facts
         db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
       ]);
       const [t] = tRows212;
@@ -9082,6 +9207,8 @@ http.createServer(async (req, res) => {
       logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
       if (to === "complete") void kitVerifyNudge222(t.build_id);   // Block 222: 75% checkpoint — nudge warehouse if the on-deck kit is unverified
+      if (to === "complete" && !t.is_background) void paceTapFact280(t, empId, "fast");                                  // Block 280: fast done-tap fact (bell, floor mgrs)
+      if (to === "not_started" && t.state === "in_progress" && !t.is_background) void paceTapFact280(t, empId, "unstart");   // Block 280: long undo-start fact
       if (to === "in_progress" && t.state === "not_started" && t.wh_callout) void whCallout260(t, empId);   // Block 260: a fresh start on a call-out step pings warehouse
       return json(200, { ok: true });
     }
@@ -9742,13 +9869,33 @@ http.createServer(async (req, res) => {
       }
       const ids = Object.values(cabOf).map((b) => b.id);
       const tasks = ids.length
-        ? await db(`task?select=build_id,state,man_hours&build_id=in.(${ids.join(",")})`) : [];
+        ? await db(`task?select=id,build_id,display_no,name,state,man_hours,is_background&build_id=in.(${ids.join(",")})&order=day_no,sort_order`) : [];
       const agg = {};
       for (const t of tasks) {
         const a = (agg[t.build_id] = agg[t.build_id] || { done: 0, total: 0 });
         a.total += Number(t.man_hours);
         if (t.state === "complete") a.done += Number(t.man_hours);
       }
+      // Block 280: PACE v2 — earned credit as the work happens (Playbook 63).
+      // One read of the live cabs' tap events; crew intervals from the same
+      // punch stream the coverage math uses (test accounts out, like 258).
+      let paceV2On = false; const v2 = {}; let ivsAll280 = [];
+      try {
+        const [tg280] = await db(`feature_toggle?select=enabled&key=eq.pace_v2`);
+        paceV2On = !tg280 || tg280.enabled !== false;
+        if (paceV2On && ids.length) {
+          const evRows280 = await dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&payload->>build_id=in.(${ids.join(",")})&at=gte.${windowStart}&order=at.asc,id.asc`);
+          const evBy280 = taskEvsFromLog280(evRows280, ids);
+          const testIds280 = new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id));
+          ivsAll280 = pairLineIvs258(events.filter((p) => !testIds280.has(p.employee_id)), now);
+          for (const b of Object.values(cabOf)) {
+            if (b.state !== "active" && b.state !== "rework") continue;
+            const st280 = new Date(b.started_at).getTime();
+            const ivs280 = ivsAll280.filter((iv) => iv.line === b.line_id).map((iv) => ({ ...iv, start: Math.max(iv.start, st280), end: Math.min(iv.end, now) })).filter((iv) => iv.end > iv.start);
+            v2[b.id] = paceEarned280(tasks.filter((t) => t.build_id === b.id), evBy280[b.id] || [], ivs280, now);
+          }
+        }
+      } catch (e280) { console.error("pace v2 failed (falling back to done-tap credit):", e280 && e280.message); paceV2On = false; }
 
       // Q113: the master chip — open during shop hours; outside them,
       // AFTER HOURS if anyone is on an approved session, else CLOSED.
@@ -9813,7 +9960,10 @@ http.createServer(async (req, res) => {
         const clipped = (intervals[l.id] || [])
           .map((iv) => ({ s: Math.max(iv.s, startMs), e: Math.min(iv.e, now) }))
           .filter((iv) => iv.e > iv.s);
-        const manHrs = clipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
+        // Block 280: with v2 on, coverage comes from the same crew intervals the credit uses (test-account punches out, like 258)
+        const manHrs = (paceV2On && v2[b.id])
+          ? (ivsAll280.filter((iv) => iv.line === l.id).map((iv) => ({ s: Math.max(iv.start, startMs), e: Math.min(iv.end, now) })).filter((iv) => iv.e > iv.s).reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000)
+          : clipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
         // Union for WALL covered hours (the Q57 day counter).
         const sorted = [...clipped].sort((x, y) => x.s - y.s);
         let wallMs = 0, curS = null, curE = null;
@@ -9823,13 +9973,20 @@ http.createServer(async (req, res) => {
         }
         if (curE !== null) wallMs += curE - curS;
         const wallHrs = wallMs / 3600000;
-        const behind = manHrs - a.done;
+        const e280 = (paceV2On && v2[b.id]) ? v2[b.id] : null;
+        const earned280 = e280 ? e280.earned : a.done;
+        const behind = manHrs - earned280;
         const color = manHrs === 0 ? "none" : behind > 4 ? "red" : behind >= 1 ? "amber" : "green";
         // File 17 voice: blame the cab, never the person.
         const status = manHrs === 0 ? "Waiting for first clock-in"
           : behind > 4 ? `Needs help — ${behind.toFixed(1)} hrs behind`
           : behind >= 1 ? `Running behind — ${behind.toFixed(1)} hrs`
           : behind <= -1 ? `${(-behind).toFixed(1)} hrs ahead` : "On pace";
+        // Block 280: the open step's own progress — a fact beside the verdict
+        // ("Step 8 · 9.5 of 16 h"), or why the number is climbing ("no step open").
+        const openLine280 = !e280 ? "" : e280.open.length
+          ? e280.open.map((o) => `Step ${o.no} · ${o.poured} of ${o.std} h${o.over ? ` (+${o.over} over)` : ""}`).join(" · ")
+          : ((onLine[l.id] || []).length ? "Clocked in — no step open" : "");
         const baseDays104 = daysOfTmpl[tmplOf[b.part_number]] || 0;
         // Block 104c (owner-rep audit): options extend the day count the same
         // way they extend the promise — total frozen hours over the family's
@@ -9870,6 +10027,7 @@ http.createServer(async (req, res) => {
         return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
             done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
+            earned_mh: fixJob ? "—" : Number(earned280).toFixed(1), open_line: fixJob || b.state === "rework" ? "" : openLine280,   // Block 280
             pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
             // Promised date is FIXED at start (Q103-6); remaining standard
             // man-hours is the honest v1 "how much is left" figure.
