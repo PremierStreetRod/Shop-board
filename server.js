@@ -1830,7 +1830,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
        pushes the cab straight to BODY themselves (Body can send it back
        with one tap if the fixes aren't right). -->
   <div class="note" style="background:#3a1200;border-color:#ff9f0a">
-    ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"} · fix within ${Number(build.rework_hours) || "—"} hrs
+    ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"}
     ${build.rework_note ? `<br><span style="opacity:.8">Manager's note: ${build.rework_note}</span>` : ""}
   </div>` : ""}
   ${inFix ? `
@@ -1840,7 +1840,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
        sends the cab to AWAITING INSPECTION for RE-INSPECTION (never straight to
        complete). Fix hours are their own bucket (0 standard hours). -->
   <div class="note" style="background:#12233a;border-color:#4a90d9">
-    ⟲ BACK FOR ONE MORE PASS — ${build.fix_reason || "see note"}${build.fix_hours ? ` · ${Number(build.fix_hours)} hrs set aside` : ""}
+    ⟲ BACK FOR ONE MORE PASS — ${build.fix_reason || "see note"}
     ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
   </div>` : ""}
   ${inFix && fixLane.offFix ? `
@@ -2747,7 +2747,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             + (f.cab ? '<span style="opacity:.8">Cab #' + f.cab + '</span>' : '')
             + (f.family ? '<span style="opacity:.8">' + f.family + '</span>' : '')
             + '<span style="opacity:.85">' + f.reason + '</span>'
-            + '<span class="s-' + f.color + '" style="font-weight:700">' + f.elapsed + ' of ' + (f.hours || "—") + ' hrs</span>'
+            + '<span style="font-weight:700;color:#8ec9ff">' + f.elapsed + ' crew-hrs on it so far</span>'
             + (f.techs && f.techs.length ? '<span style="font-weight:700">On it: ' + f.techs.join(' · ') + '</span>' : '<span style="opacity:.45">nobody on it right now</span>')
             + (f.line ? '<span style="opacity:.55">re-inspects on ' + f.line + '</span>' : '')
             + '</div>').join("")
@@ -3492,7 +3492,6 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
           ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}
         </select>
-        Hrs <input id="Trh-${w.id}" value="2" style="width:3.4em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
         <input id="Trn-${w.id}" placeholder="What needs fixing (shows on the tech's screen)"
           style="width:100%;margin-top:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
         <button class="btn gray" onclick="sendBack('${w.id}',this,'T')">Send back — rework</button>
@@ -3558,12 +3557,12 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${oc255(w.id, w.opts255)}
           <button class="btn" onclick="act('complete','${w.id}',this)">Inspected — sign off</button>
           <!-- The OTHER inspection outcome (files 11/18): send it back,
-               reason-coded (Q77 list), with a note + a time frame in hours. -->
+               reason-coded (Q77 list), with a note. Block 281: no time frame —
+               the board just measures the fix's actual crew-hours. -->
           <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
             <select id="rr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
               ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}
             </select>
-            Hrs <input id="rh-${w.id}" value="2" style="width:3.4em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
             <input id="rn-${w.id}" placeholder="What needs fixing (shows on the tech's screen)"
               style="width:100%;margin-top:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px">
             <button class="btn gray" onclick="sendBack('${w.id}',this)">Send back — rework</button>
@@ -3571,7 +3570,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         </div>`).join("")}
       ${(r.rework || []).map((w) => `
         <div style="border:1px dashed #ff9f0a;border-radius:10px;padding:10px;margin-bottom:8px">
-          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · IN REWORK — ${w.rework_reason || ""} (${Number(w.rework_hours) || "—"} hrs given)
+          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · IN REWORK — ${w.rework_reason || ""}
           <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
         </div>`).join("")}
       ${r.active ? `
@@ -3739,7 +3738,6 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
            to the inspection lane above for the checklist sign-off) and Cancel
            (opened in error; cab returns to production complete, all audited). -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
-        fix within <input class="num" id="fxh-${f.id}" value="${f.hours ?? ""}" style="width:70px"> hrs ·
         re-inspects on <select id="fxl-${f.id}">${fixjob.lines.map((l) => `<option value="${l.id}"${l.id === f.line_id ? " selected" : ""}>${l.name}</option>`).join("")}</select>
         <input id="fxn-${f.id}" value="${String(f.note || "").replace(/"/g, "&quot;")}" placeholder="note" style="min-width:220px">
         <button class="b" onclick="saveFix266('${f.id}',this)">Save</button>
@@ -3754,7 +3752,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <select id="fx-reason"><option value="" disabled selected>&mdash; why is it back? &mdash;</option>${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
       </p>
       <p>Re-inspects on <select id="fx-line"><option value="">&mdash; its original line &mdash;</option>${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
-        · fix within <input id="fx-hours" type="number" min="0" step="0.5" style="width:80px" placeholder="hrs"> hrs</p>
+</p>
       <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
       <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
       <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span>
@@ -4071,7 +4069,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     if(!document.getElementById("fx-reason").value){ document.getElementById("err").textContent = "Pick why it came back."; return; }
     var payload = { build_id: cab, kind: document.getElementById("fx-kind").value,
       reason: document.getElementById("fx-reason").value, line_id: document.getElementById("fx-line").value,
-      hours: document.getElementById("fx-hours").value, note: document.getElementById("fx-note").value };
+      note: document.getElementById("fx-note").value };   // Block 281: no time frame
     try {
       var r = await fetch("/api/build/fixjob", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
       var out = await r.json();
@@ -4091,8 +4089,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   function saveFix266(id, btn){
     btn.disabled = true;
     fixCall266("/api/build/fixjob-update", { build_id: id,
-      hours: document.getElementById("fxh-"+id).value,
-      note: document.getElementById("fxn-"+id).value,
+      note: document.getElementById("fxn-"+id).value,   // Block 281: no time frame
       line_id: document.getElementById("fxl-"+id).value });
   }
   function doneFix266(id){ fixCall266("/api/build/fixjob-done", { build_id: id }); }
@@ -4158,7 +4155,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         body: JSON.stringify({ build_id: id,
           reason: g153("rr-").value,
           note: g153("rn-").value,
-          hours: Number(g153("rh-").value),
+          // Block 281 (Daniel 9/27): no time frame — the board measures the actual fix time
           // Block 256: the boxes the manager DID tick ride the send-back and
           // are saved server-side — inspection work is never thrown away.
           opts_verified: Array.prototype.slice.call(document.querySelectorAll('.oc255[data-b="' + id + '"]:checked')).map(function (x) { return x.dataset.o; }),
@@ -9800,8 +9797,8 @@ http.createServer(async (req, res) => {
       // a month of real usage — corrupting pace math invisibly. Now the window
       // starts at the oldest live cab's start minus a 24h cushion (with the
       // sweeper running, no single interval can span longer than that).
-      const liveStarts = builds.filter((b) => b.state === "active" || b.state === "rework")
-        .map((b) => new Date(b.started_at).getTime()).filter((n) => !isNaN(n));
+      const liveStarts = builds.filter((b) => b.state === "active" || b.state === "rework" || b.state === "fix_job")
+        .map((b) => new Date(b.state === "fix_job" ? (b.fix_assigned_at || b.started_at) : b.started_at).getTime()).filter((n) => !isNaN(n));   // Block 281: fix jobs' punches must be in the window too
       const windowStart = new Date((liveStarts.length ? Math.min(...liveStarts) : Date.now() - 7 * 86400000) - 86400000).toISOString();
       // Block 230 (Daniel): the tile carries the cab's STEP counts — "14 of 34
       // steps done · 3 going right now" — the owner-walk-in activity number.
@@ -9929,14 +9926,15 @@ http.createServer(async (req, res) => {
       // board, whatever the production tiles are doing. Same wall-clock-vs-
       // frame countdown as the tile override; wording matches the TV-approved
       // "Returned for fix" copy. The never-displace tile rule is untouched.
+      // Block 281: the lane reports the ACTUAL fix-work crew-hours (Fix-work bucket punches carry
+      // the fix id — fixHoursByBuild, Block 127); no frame, no verdict, neutral color.
+      const fixHrs281 = fixHoursByBuild(events.filter((p) => !(new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id))).has(p.employee_id)));
       const fixjobs266 = builds.filter((b) => b.state === "fix_job").map((b) => {
-        const fxS = new Date(b.fix_assigned_at || b.started_at).getTime();
-        const elap = Math.max(0, (now - fxS) / 3600000);
-        const frm = Number(b.fix_hours) || 0;
+        const spent = fixHrs281[b.id] || 0;
         return { order: b.order_number, cab: b.cab_number || "", family: familyOf[b.part_number] || "",
           kind: b.fix_kind === "kickback" ? "kickback" : "customer return", reason: b.fix_reason || "",
-          hours: frm, elapsed: Math.round(elap * 10) / 10,
-          color: !frm ? "amber" : elap > frm ? "red" : elap > frm * 0.75 ? "amber" : "green",
+          hours: 0, elapsed: Math.round(spent * 10) / 10, spent: Math.round(spent * 10) / 10,
+          color: "none",
           techs: fixOn267[b.id] || [],
           line: (lines.find((l2) => l2.id === b.line_id) || {}).name || "" };
       });
@@ -10006,9 +10004,10 @@ http.createServer(async (req, res) => {
             .map((iv) => ({ s: Math.max(iv.s, rwStart), e: Math.min(iv.e, now) }))
             .filter((iv) => iv.e > iv.s);
           const rwHrs = rwClipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
-          const frame = Number(b.rework_hours) || 0;
-          rcolor = !frame ? "amber" : rwHrs > frame ? "red" : rwHrs > frame * 0.75 ? "amber" : "green";
-          rstatus = `In extra time — ${b.rework_reason || "fixes"} · ${rwHrs.toFixed(1)} of ${frame || "—"} hrs used`;
+          // Block 281 (Daniel 9/27): no time frame, no verdict — the tile just
+          // reports the actual crew-hours the fix has taken so far (neutral color).
+          rcolor = "none";
+          rstatus = `Sent back for fixes — ${b.rework_reason || "see note"} · ${rwHrs.toFixed(1)} crew-hrs on it so far`;
         }
         // Q85 FIX JOB OVERRIDE: a returned/kicked-back cab. Distinct badge + its
         // OWN deadline countdown = ELAPSED wall-time since the fix opened vs the
@@ -10018,11 +10017,10 @@ http.createServer(async (req, res) => {
         let fixJob = false;
         if (b.state === "fix_job") {
           fixJob = true; badge = "FIX JOB";
-          const fxStart = new Date(b.fix_assigned_at || b.started_at).getTime();
-          const elapsedH = Math.max(0, (now - fxStart) / 3600000);
-          const frame = Number(b.fix_hours) || 0;
-          rcolor = !frame ? "amber" : elapsedH > frame ? "red" : elapsedH > frame * 0.75 ? "amber" : "green";
-          rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${elapsedH.toFixed(1)} of ${frame || "—"} hrs`;
+          // Block 281: the Fix-work bucket's actual crew-hours (grab punches carry the fix id), no frame, neutral color.
+          const fxH281 = fixHrs281[b.id] || 0;
+          rcolor = "none";
+          rstatus = `Returned for fix — ${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""} · ${fxH281.toFixed(1)} crew-hrs on it so far`;
         }
         return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
           cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
@@ -10425,7 +10423,7 @@ http.createServer(async (req, res) => {
           // Block 267: name who's on the fix RIGHT NOW — the board feed already
           // computes it from the grab punches; match by order number.
           const bf267 = ((mgrBoard && mgrBoard.fixjobs) || []).find((x) => x.order === f.order_number);
-          return { id: f.id, line_id: f.line_id, order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: f.fix_hours, note: f.fix_note, spent: fxMap127[f.id] || 0, on: (bf267 && bf267.techs) || [] };
+          return { id: f.id, line_id: f.line_id, order: f.order_number, cab: f.cab_number, line: fxLineName[f.line_id] || ("Line " + f.line_id), kind: f.fix_kind, reason: f.fix_reason, hours: null /* Block 281: frames retired */, note: f.fix_note, spent: fxMap127[f.id] || 0, on: (bf267 && bf267.techs) || [] };
         }),
         completed: fxCompleted.map((c) => ({ id: c.id, order: c.order_number, cab: c.cab_number })),
         sendback: sendback207,
@@ -11078,7 +11076,7 @@ http.createServer(async (req, res) => {
       const when = claimed_at || new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "rework", rework_reason: reason, rework_note: note || null,
-        rework_hours: Number(hours) || null, rework_assigned_at: when,
+        rework_hours: null, rework_assigned_at: when,   // Block 281: no time frame — actual crew-hours are the measure
         inspection_claimed_by: null, inspection_claimed_at: null }) });   // Block 184: leaving inspection clears the claim
       const priors = await db(`task?select=id&build_id=eq.${build_id}&source=eq.rework`);
       await db("task", { method: "POST", body: JSON.stringify({
@@ -11087,7 +11085,7 @@ http.createServer(async (req, res) => {
         day_no: 0, man_hours: 0, is_background: false,
         source: "rework", state: "not_started", sort_order: 1000 + priors.length }) });
       logEvent("build.rework_assigned", empId, { build_id, order_number: b.order_number,
-        reason, note: note || "", hours: Number(hours) || null, at: when });
+        reason, note: note || "", hours: null, at: when });   // Block 281: frames retired
       // Block 256 (Daniel: production still pushes the cab to Body after
       // fixing a found miss): every checklist box the manager DID tick is
       // SAVED here, with their name — only lines that are really on the live
@@ -11114,7 +11112,7 @@ http.createServer(async (req, res) => {
       // "one more pass", "hrs given" becomes "hrs set aside".
       notify("build.rework_assigned", techsR.map((t) => t.id),
         `Order ${b.order_number} — one more pass`,
-        `A fix step is on the cab screen: ${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs set aside for it. Grab it when you're ready.`, "/home");
+        `A fix step is on the cab screen: ${reason}${note ? " — " + note : ""}. Grab it when you're ready.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -11147,7 +11145,7 @@ http.createServer(async (req, res) => {
       const when = claimed_at || new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "fix_job", line_id: lineId, fix_kind: kind, fix_reason: reason,
-        fix_note: note || null, fix_hours: Number(hours) || null, fix_assigned_at: when }) });
+        fix_note: note || null, fix_hours: null, fix_assigned_at: when }) });   // Block 281: no time frame
       const priors = await db(`task?select=id&build_id=eq.${build_id}&source=eq.fix`);
       await db("task", { method: "POST", body: JSON.stringify({
         build_id, display_no: `F${priors.length + 1}`,
@@ -11157,7 +11155,7 @@ http.createServer(async (req, res) => {
       // THE SIGN-OFF ESCAPE record (management scoreboard, Q85 report suite 5) —
       // a return AFTER manager sign-off, the number the inspection gate zeroes out.
       logEvent("build.fixjob_opened", empId, { build_id, order_number: b.order_number,
-        kind, reason, note: note || "", hours: Number(hours) || null, line_id: lineId, was_signed_off: true, at: when });
+        kind, reason, note: note || "", hours: null, line_id: lineId, was_signed_off: true, at: when });   // Block 281
       // The chosen line's techs hear it (Q106 sandbox holds delivery to owner-rep).
       const techsFx = await db(`employee?select=id&active=is.true&lines=cs.{${lineId}}`);
       // Block 223 (Daniel, 8/26): KID-GLOVES COPY — "kickback" is scoreboard
@@ -11166,7 +11164,7 @@ http.createServer(async (req, res) => {
       const [lnFx223] = await db(`line?select=name&id=eq.${lineId}`);
       notify("build.fixjob_opened", techsFx.map((t) => t.id),
         `Order ${b.order_number} is back${lnFx223 ? ` on ${lnFx223.name}` : ""}`,
-        `It needs a fix after sign-off: ${reason}${note ? " — " + note : ""}. ${Number(hours) || "?"} hrs set aside. The fix step is on the cab screen.`, "/home");
+        `It needs a fix after sign-off: ${reason}${note ? " — " + note : ""}. The fix step is on the cab screen.`, "/home");
       return json(200, { ok: true });
     }
 
@@ -11182,15 +11180,15 @@ http.createServer(async (req, res) => {
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,order_number,line_id,fix_hours,fix_note&id=eq.${build_id}`);
       if (!b || b.state !== "fix_job") return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
-      const patch266 = { fix_hours: Number(hours) || null, fix_note: String(note || "").trim().slice(0, 300) || null };
+      const patch266 = { fix_note: String(note || "").trim().slice(0, 300) || null };   // Block 281: the frame is gone; note + line only
       if (line_id !== undefined && line_id !== null && line_id !== "") {
         if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "That line isn't valid" });
         patch266.line_id = Number(line_id);
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patch266) });
       logEvent("build.fixjob_edited", empId, { build_id, order_number: b.order_number,
-        hours: patch266.fix_hours, note: patch266.fix_note || "", line_id: patch266.line_id ?? b.line_id,
-        was: { hours: b.fix_hours, note: b.fix_note || "", line_id: b.line_id } });
+        note: patch266.fix_note || "", line_id: patch266.line_id ?? b.line_id,   // Block 281: no frame
+        was: { note: b.fix_note || "", line_id: b.line_id } });
       return json(200, { ok: true });
     }
 
