@@ -1026,6 +1026,13 @@ sweepForgottenClockOuts();                       // boot sweep
     const t258 = await db("feature_toggle?select=key&key=eq.step_actuals");
     if (!t258.length) await db("feature_toggle", { method: "POST", body: JSON.stringify({ key: "step_actuals", enabled: true }) });
   } catch (e258) { console.error("step_actuals ensure failed:", e258.message); }
+  // Block 282: ONE-TIME ARCHIVE of the old step averages before the step
+  // rebuild (Daniel: "a pdf of existing cab data punches and averages would
+  // be great to keep on hand"). Runs the 258 engine for every family against
+  // whatever templates are live at boot and stores the result as JSON in
+  // step_actuals_archive — once per calendar day, skipped if the table isn't
+  // there yet. Claude reads the rows through the SQL editor and builds the PDF.
+  try { await archiveStepActuals282(); } catch (e282) { console.error("step actuals archive skipped:", e282 && e282.message); }
   // Block 280: pace_v2 seeds ON the same way (Daniel ruled ON with a one-tap revert).
   try {
     if (!DB_READY) return;
@@ -1751,6 +1758,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     t.state === "in_progress" && t.started_by ? `Started by ${people[t.started_by] || "?"} · ${phx(t.started_at)}${helpNames269(t).length ? ` · helping: ${helpNames269(t).join(" · ")}` : ""}` :
     t.state === "complete" && t.completed_by ? `Done by ${people[t.completed_by] || "?"} · ${phx(t.completed_at)}` : "";
   const days = [...new Set(tasks.map((t) => t.day_no))].sort((a, b) => a - b);
+  const showDayHeads282 = days.filter((d) => d > 0).length > 1;   // Block 282: days are gone on the new step lists — one ordered list, no "DAY n" headings
   // Block 124 (logic audit L4): "standard hours" counts only the real
   // (non-background) steps — the finish gate ignores background steps, so a
   // finishable cab reads a clean X of X, not X of a larger total.
@@ -1863,7 +1871,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     </div>`).join("")}
   </div>` : ""}
   ${days.map((d) => `
-    <div class="dayhead">${d === 0 ? (inFix ? "FIX — do these first" : "REWORK — fix these first") : `DAY ${d}`}</div>
+    ${d === 0 ? `<div class="dayhead">${inFix ? "FIX — do these first" : "REWORK — fix these first"}</div>` : showDayHeads282 ? `<div class="dayhead">DAY ${d}</div>` : ""}
     ${tasks.filter((t) => t.day_no === d).map((t) => `
       <button class="task ${t.state === "complete" ? "done" : t.state === "in_progress" ? "doing" : ""}"
               data-id="${t.id}" data-state="${t.state}">
@@ -1874,6 +1882,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
            right where it happened. Lives OUTSIDE the task button so a
            documentation tap never moves the check-off state. -->
       <div style="margin:-6px 0 10px 8px;font-size:.85rem">
+        ${t.detail ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #3a3a3c;border-radius:8px;color:#c7c7cc;cursor:pointer;white-space:nowrap" onclick="var d=this.nextElementSibling;var o=d.style.display!=='block';d.style.display=o?'block':'none';this.textContent=o?'− details':'+ details'">+ details</a><div style="display:none;margin:4px 0 8px;padding:8px 12px;border-left:3px solid #3a3a3c;color:#d1d1d6;font-size:.95rem;line-height:1.4;white-space:normal">${escH(t.detail)}</div>` : ""}
         ${whoLine(t) ? `<span style="opacity:.55">${whoLine(t)}</span> · ` : ""}${t.state === "in_progress" && (t.started_by === emp.id || emp.role === "manager" || emp.role === "admin") ? `<a style="display:inline-block;padding:2px 10px;margin:2px 6px 2px 0;border:1px solid #7a5900;border-radius:8px;color:#ffd60a;cursor:pointer;white-space:nowrap" onclick="unstart164('${t.id}')">&#8617; undo start</a> ` : ""}${
           // Block 269 (Daniel — the Andrew & Christopher door-hang): a SECOND
           // tech on a running step gets a real join instead of the trapped tap
@@ -2711,7 +2720,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
           \${l.closed ? \`<span style="float:right;background:#3a3a3c;color:#ddd;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">CLOSED</span>\` : ""}
           \${l.down && !l.closed ? \`<span style="float:right;background:#37485a;color:#cfe3f2;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">DOWN TODAY</span>\` : ""}
           \${l.cab && l.cab.badge ? \`<span style="float:right;background:#ff9f0a;color:#111;font-weight:800;border-radius:6px;padding:2px 8px;margin-left:8px">\${l.cab.badge}</span>\` : ""}
-          \${l.cab && l.cab.total_days ? \`<span class="day">DAY \${l.cab.day} of \${l.cab.total_days}</span>\` : ""}
+          \${l.cab && l.cab.day ? \`<span class="day">DAY \${l.cab.day} on the line</span>\` : ""}
           <h3>\${l.cab && l.cab.family ? l.name.split("—")[0].trim() + " — " + l.cab.family : l.name}</h3>
           \${l.cab ? \`<div style="font-size:1.3rem;font-weight:700">ORDER \${ol(l.cab.order)}</div>
             \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
@@ -3138,7 +3147,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div style="font-weight:700;margin-bottom:6px">${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%</div>
     <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-bottom:12px"><div style="background:#30d158;height:10px;border-radius:6px;width:${pct}%"></div></div>
     ${Object.keys(byDay).sort((a, b2) => Number(a) - Number(b2)).map((d) => `
-      <div style="opacity:.55;font-weight:700;margin-top:10px">${Number(d) === 0 ? "REWORK / FIX" : `DAY ${escH(d)}`}</div>
+      ${Number(d) === 0 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">REWORK / FIX</div>` : Object.keys(byDay).filter((k) => Number(k) > 0).length > 1 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">DAY ${escH(d)}</div>` : ""}
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)${t.day_end && t.day_end > t.day_no ? ` &middot; runs Days ${escH(t.day_no)}&ndash;${escH(t.day_end)}` : ""}</span></div>`).join("")}`).join("")}
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}
   ${activity230 ? `<div class="lane" style="border-color:#5ac8fa">
@@ -4235,7 +4244,7 @@ function meetingPage(now, board, awaiting, completed, out, proj = {}, isAdmin95 
     else if (l.down) line = `<span class="muted">Down — ${esc(l.down.reason || "")}</span>`;
     else if (!l.cab) line = `<span class="muted">Idle${l.ondeck ? ` — on deck: ${esc(l.ondeck.order)} (${esc(l.ondeck.family || "")})` : ""}</span>`;
     else { const pp = proj[l.cab.order];
-      line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.open_line ? ` · ${esc(l.cab.open_line)}` : ""}${l.cab.day ? ` · day ${l.cab.day}${l.cab.total_days ? `/${l.cab.total_days}` : ""}` : ""}${pp ? ` · ${projPhrase(pp)}` : ""}`; }
+      line = `<b>${esc(l.cab.order)}</b> ${esc(l.cab.family || "")} — ${esc(l.cab.status)}${l.cab.open_line ? ` · ${esc(l.cab.open_line)}` : ""}${l.cab.day ? ` · day ${l.cab.day} on the line` : ""}${pp ? ` · ${projPhrase(pp)}` : ""}`; }
     const techs = (l.techs && l.techs.length) ? ` <span class="muted">· ${l.techs.map(esc).join(", ")}</span>` : "";
     return `<div class="row"><span class="dot ${dot}"></span><b>${esc(l.name)}</b> — ${line}${techs}</div>`;
   }).join("") : `<div class="muted">No lines to show.</div>`}
@@ -4580,6 +4589,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   ${steps.map((s, i) => `<tr>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
     <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
+      <textarea id="sx-${s.id}" rows="2" placeholder="Full instruction the tech sees behind + details" style="display:block;width:95%;margin-top:3px;font-size:.8rem;background:#111;color:#ddd;border:1px solid #333;border-radius:6px;padding:4px 6px">${String(s.detail || "").replace(/</g, "&lt;")}</textarea>
       ${s.wh_callout
         ? `<div style="margin-top:3px"><input id="sw-${s.id}" value="${String(s.wh_callout).replace(/"/g, "&quot;")}" style="width:95%;font-size:.8rem;opacity:.85" title="Warehouse call-out — pushed to the warehouse crew the moment this step is started. Clear the text and Save to turn it off."> <small style="opacity:.5">&#128230; pushed to warehouse when started</small></div>`
         : `<a href="#" onclick="return wcal260('${s.id}',this)" style="font-size:.75rem;color:#8e8e93;text-decoration:none" title="Add a warehouse call-out — pushed to the warehouse crew when this step starts">&#128230;+</a>`}</td>
@@ -4598,7 +4608,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
   <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
-  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Day</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
+  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Lands after step</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
   ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
     const kids261 = optItems.filter((a) => a.alias_of === o.id);
     return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
@@ -4606,7 +4616,9 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
       ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
-    <td><input class="num" id="op-d-${o.id}" value="${o.day_no}"></td>
+    <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of day ${o.day_no} (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
+      <input type="hidden" id="op-d-${o.id}" value="${o.day_no}">
+      ${Number(o.man_hours) === 0 ? `<label style="display:block;font-size:.75rem;opacity:.75;margin-top:2px"><input type="checkbox" id="op-f-${o.id}"${o.show_on_floor ? " checked" : ""}> show on the floor as a reminder (0 h)</label>` : ""}</td>
     ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
     <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
@@ -4869,7 +4881,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function saveStep(id, btn){ var sw260 = document.getElementById("sw-"+id);   // Block 260: input only exists when a call-out is set (or just added)
     post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
-    name: v("sm-"+id), day_no: v("sd-"+id), man_hours: Number(v("sh-"+id)),
+    name: v("sm-"+id), day_no: v("sd-"+id), man_hours: Number(v("sh-"+id)), detail: v("sx-"+id),   // Block 282: the long instruction
     wh_callout: sw260 ? sw260.value : undefined }, btn); }
   function wcal260(id, a){ var d = document.createElement("div"); d.style.marginTop = "3px";
     d.innerHTML = '<input id="sw-'+id+'" placeholder="What should warehouse deliver when this step starts?" style="width:95%;font-size:.8rem"> <small style="opacity:.5">&#128230; then Save</small>';
@@ -4877,7 +4889,9 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
   function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
   function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: Number(v("op-new-day")) }, btn); }
-  function saveOpt(id, btn){ post("/api/admin/option", { action: "update", id, man_hours: Number(v("op-h-"+id)), day_no: Number(v("op-d-"+id)) }, btn); }
+  function saveOpt(id, btn){ var f282 = document.getElementById("op-f-"+id);
+    post("/api/admin/option", { action: "update", id, man_hours: Number(v("op-h-"+id)), day_no: Number(v("op-d-"+id)),
+      after_step: v("op-a-"+id) || null, show_on_floor: f282 ? f282.checked : undefined }, btn); }   // Block 282: anchor + reminder flag
   function toggleOpt(id, to, btn){ post("/api/admin/option", { action: to, id }, btn); }
   // Block 261: duplicate-wording links. "dup…" on the duplicate row opens a
   // picker of the family's other main options; confirming folds this row in
@@ -7769,6 +7783,25 @@ async function paceTapFact280(t, empId, kind) {
     }
   } catch (e) { console.error("pace tap fact failed:", e && e.message); }
 }
+async function archiveStepActuals282() {
+  if (!DB_READY) return;
+  const today = phxDate(Date.now());
+  const have = await db(`step_actuals_archive?select=id&taken_on=eq.${today}&limit=1`);
+  if (have.length) return;
+  const tmpls = await db("build_template?select=id,family,total_days");
+  for (const t of tmpls) {
+    const steps = await db(`step_template?select=id,display_no,name,man_hours,day_no,sort_order&template_id=eq.${t.id}&retired=is.false&order=sort_order`);
+    const opts = await db(`option_item?select=id,match_text,man_hours,day_no&family=eq.${encodeURIComponent(t.family)}&retired=is.false&alias_of=is.null&man_hours=gt.0&order=day_no,match_text`);
+    const act = await stepActuals258(t.family, steps, opts);
+    const pick = (kind, id) => { const r = act.rows[`${kind}:${id}`]; return r ? { std: r.std, n: r.n, median: r.median, lo: r.lo, hi: r.hi, samples: r.samples, excluded: r.excluded } : null; };
+    const payload = { family: t.family, total_days: t.total_days,
+      steps: steps.map((st) => ({ id: st.id, no: st.display_no, name: st.name, std: Number(st.man_hours), day: st.day_no, actual: pick("step", st.id) })),
+      options: opts.map((o) => ({ id: o.id, text: o.match_text, std: Number(o.man_hours), day: o.day_no, actual: pick("opt", o.id) })) };
+    await db("step_actuals_archive", { method: "POST", body: JSON.stringify({ taken_on: today, family: t.family, payload }) });
+  }
+  logEvent("template.actuals_archived", null, { taken_on: today, families: tmpls.length });
+  console.log(`[archive] step actuals archived for ${tmpls.length} families (${today})`);
+}
 // The whole family's actuals in one pass: every started build of the family,
 // its task windows through lineLabor258 against its line's crew, then the
 // two-test filter (15-min wall floor + graduated %-of-CURRENT-standard) and
@@ -8063,11 +8096,16 @@ async function resumeDownLine135(lineId, empId) {
 async function freezeAndStart(b, empId, startedAt) {
   await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", started_at: startedAt, queue_pinned: false }) });
   const [prod] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(b.part_number)}`);
-  const steps = await db(`step_template?select=display_no,name,day_no,day_end,man_hours,is_background,sort_order,wh_callout&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
+  const steps = await db(`step_template?select=id,display_no,name,detail,day_no,day_end,man_hours,is_background,sort_order,wh_callout&template_id=eq.${prod.template_id}&retired=is.false&order=sort_order`);
+  // Block 282: template steps freeze at sort_order×10 so an upgrade can land
+  // in the nine slots right BEHIND its anchor step (Daniel 9/27: "right after
+  // where they land in a cab build", never at the end of the day).
+  const anchorOf282 = {}; for (const st of steps) anchorOf282[st.id] = { day_no: st.day_no, sort: Number(st.sort_order) * 10 };
+  const anchorUsed282 = {};
   for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
     await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: st.display_no,
-      name: st.name, day_no: st.day_no, day_end: st.day_end ?? null, man_hours: st.man_hours, is_background: st.is_background,
-      source: "template", state: "not_started", sort_order: st.sort_order,
+      name: st.name, detail: st.detail ?? null, day_no: st.day_no, day_end: st.day_end ?? null, man_hours: st.man_hours, is_background: st.is_background,
+      source: "template", state: "not_started", sort_order: Number(st.sort_order) * 10,
       wh_callout: st.wh_callout ?? null }) });   // Block 260: the warehouse call-out freezes with the step
   // Block 94b: freeze the cab's UPGRADE OPTIONS in with the steps. Structured
   // options match the per-family library by exact normalized text and get real
@@ -8085,7 +8123,7 @@ async function freezeAndStart(b, empId, startedAt) {
       if (det94) {
         const famMap94 = {}; for (const x of prodsAll94) famMap94[String(x.part_number).toUpperCase()] = x.family;
         const fam94 = famMap94[String(b.part_number || "").toUpperCase()] || "";
-        const lib94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,alias_of&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
+        const lib94 = fam94 ? await db(`option_item?select=id,match_text,man_hours,day_no,alias_of,after_step,show_on_floor&family=eq.${encodeURIComponent(fam94)}&retired=is.false`) : [];
         // Block 119b: also collapse space BEFORE a colon — Coyote's raw text
         // (and library rows pasted from it) can read "Floor : Large Hump
         // Floor" while the rebuilt form reads "Floor: …"; both sides must
@@ -8115,6 +8153,13 @@ async function freezeAndStart(b, empId, startedAt) {
             // Block 102: a matched ZERO-hour entry is a KNOWN config choice
             // with no cab labor (year, floor style, bed hardware, scripts…) —
             // recognized for the signature: no task, no flag, no clock time.
+            // Block 282: WHERE the upgrade lands — right behind its anchor step
+            // (option_item.after_step). No anchor, or a retired anchor, falls
+            // back to the old end-of-its-day slot; never blocks a start.
+            const anc282 = hit.after_step && anchorOf282[hit.after_step] ? anchorOf282[hit.after_step] : null;
+            const place282 = anc282
+              ? { day_no: anc282.day_no, sort_order: anc282.sort + 1 + ((anchorUsed282[hit.after_step] = (anchorUsed282[hit.after_step] || 0) + 1) - 1) }
+              : { day_no: hit.day_no, sort_order: sort94++ };
             if (Number(hit.man_hours) > 0) {
               optCount94++;
               // Block 261: the task is NAMED by the library row that matched —
@@ -8123,8 +8168,17 @@ async function freezeAndStart(b, empId, startedAt) {
               // order's own wording still rides the signature (sig94, above)
               // and the sign-off checklist (optionList255 reads the order).
               await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
-                name: "UPGRADE — " + hit.match_text, day_no: hit.day_no, man_hours: hit.man_hours, is_background: false,
-                source: "option", state: "not_started", sort_order: sort94++ }) });
+                name: "UPGRADE — " + hit.match_text, day_no: place282.day_no, man_hours: hit.man_hours, is_background: false,
+                source: "option", state: "not_started", sort_order: place282.sort_order }) });
+            } else if (hit.show_on_floor) {
+              // Block 282 (Daniel 9/28): a 0-hour option flagged "show on the
+              // floor" becomes a BACKGROUND reminder line behind its anchor —
+              // visible on the step list, takes no crew hours, never sampled,
+              // never earns, never counted toward the open-steps cap.
+              optCount94++;
+              await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
+                name: "UPGRADE — " + hit.match_text, day_no: place282.day_no, man_hours: 0, is_background: true,
+                source: "option", state: "not_started", sort_order: place282.sort_order }) });
             }
           } else {
             flagCount94++;
@@ -9028,7 +9082,7 @@ http.createServer(async (req, res) => {
           // its nine build-dependent reads now land in ONE round trip.
           const mid209 = phxDayStart(phxDate(Date.now()));
           const [tasks, notes, tphotos, folks, prodMinRows212, cShots, progTogRows212, ph209, nt209q212, tn209q218] = await Promise.all([
-            db(`task?select=id,display_no,name,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at,helpers&build_id=eq.${build.id}&order=day_no,sort_order`),
+            db(`task?select=id,display_no,name,detail,day_no,day_end,man_hours,is_background,state,started_by,started_at,completed_by,completed_at,helpers&build_id=eq.${build.id}&order=day_no,sort_order`),   // Block 282: +detail
             // Per-task documentation (file 11) rides along with the task list.
             db(`task_note?select=task_id,note&build_id=eq.${build.id}&order=created_at`),
             db(`build_photo?select=id,task_id&build_id=eq.${build.id}&kind=eq.task&order=created_at`),
@@ -9992,7 +10046,7 @@ http.createServer(async (req, res) => {
         const tmb104 = tmplMh104[tmplOf[b.part_number]] || 0;
         const totalDays = (a.total > 0 && tmb104 > 0 && baseDays104 > 0)
           ? Math.max(baseDays104, Math.ceil(a.total / (tmb104 / baseDays104) - 1e-9)) : baseDays104;
-        const day = Math.min(Math.max(1, Math.ceil(wallHrs / 8 || 1)), totalDays || 99);
+        const day = Math.max(1, Math.ceil(wallHrs / 8 || 1));   // Block 282: elapsed wall-days on the line — no predicted target (crew size varies)
         // REWORK OVERRIDE (files 11/18): distinct badge + the cab's OWN
         // amber->red countdown against the manager's time frame — the normal
         // pace math stays out of it (rework hours are their own bucket, Q85).
@@ -12246,8 +12300,8 @@ self.addEventListener("notificationclick", (e) => {
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
       const [steps, optItems94, ahPhA, linesA108] = await Promise.all([
-        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
-        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only,alias_of&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],
+        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,detail,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
+        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only,alias_of,after_step,show_on_floor&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],   // Block 282
         ahRowsA.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [],
         ahRowsA.length ? db(`line?select=id,name`) : [],
       ]);
@@ -12786,9 +12840,22 @@ self.addEventListener("notificationclick", (e) => {
         if (row261.alias_of) return json(400, { ok: false, error: "This wording follows its main option — edit that one" });
         const hrs = Number(p.man_hours), day = Number(p.day_no);
         if (!(hrs >= 0 && hrs < 200) || !Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Hours/day look wrong" });
-        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ man_hours: hrs, day_no: day }) });
-        await db(`option_item?alias_of=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ man_hours: hrs, day_no: day }) });
-        logEvent("option.updated", adminId, { id: p.id, man_hours: hrs, day_no: day });
+        // Block 282: the anchor step (must be a live step of this family's template) + the 0h reminder flag
+        const patchO282 = { man_hours: hrs, day_no: day };
+        if (p.after_step !== undefined) {
+          if (p.after_step === null || p.after_step === "") patchO282.after_step = null;
+          else {
+            if (!isUuid(p.after_step)) return json(400, { ok: false, error: "Bad step reference" });
+            const [stA282] = await db(`step_template?select=id,template_id,retired&id=eq.${p.after_step}`);
+            const [tpA282] = stA282 ? await db(`build_template?select=id,family&id=eq.${stA282.template_id}`) : [null];
+            if (!stA282 || stA282.retired || !tpA282 || tpA282.family !== row261.family) return json(400, { ok: false, error: "Pick a live step from this cab's own list" });
+            patchO282.after_step = p.after_step;
+          }
+        }
+        if (p.show_on_floor !== undefined) patchO282.show_on_floor = Boolean(p.show_on_floor);
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify(patchO282) });
+        await db(`option_item?alias_of=eq.${p.id}`, { method: "PATCH", body: JSON.stringify(patchO282) });
+        logEvent("option.updated", adminId, { id: p.id, ...patchO282 });
         return json(200, { ok: true });
       }
       if (act === "retire" || act === "restore") {
@@ -12877,6 +12944,7 @@ self.addEventListener("notificationclick", (e) => {
         // template edit (Q97 freeze) — the live-cab seed is a one-time
         // config done by hand.
         if (p.wh_callout !== undefined) patch.wh_callout = String(p.wh_callout).trim().slice(0, 200) || null;
+        if (p.detail !== undefined) patch.detail = String(p.detail).trim().slice(0, 2000) || null;   // Block 282
         await db(`step_template?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify(patch) });
         logEvent("template.step_updated", adminId, { step_id: p.id, changes: patch });
         return json(200, { ok: true });
