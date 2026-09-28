@@ -1872,7 +1872,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   </div>` : ""}
   ${days.map((d) => `
     ${d === 0 ? `<div class="dayhead">${inFix ? "FIX — do these first" : "REWORK — fix these first"}</div>` : showDayHeads282 ? `<div class="dayhead">DAY ${d}</div>` : ""}
-    ${tasks.filter((t) => t.day_no === d).map((t) => `
+    ${tasks.filter((t) => t.day_no === d && !/^VOIDED — /.test(String(t.name))).map((t) => `
       <button class="task ${t.state === "complete" ? "done" : t.state === "in_progress" ? "doing" : ""}"
               data-id="${t.id}" data-state="${t.state}">
         <span class="no">${t.display_no}</span> ${t.name}${t.day_end && t.day_end > t.day_no ? ` <small style="opacity:.55">(runs Days ${t.day_no}&ndash;${t.day_end})</small>` : ""}
@@ -3057,7 +3057,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   const totalMh = tasks.filter((t) => !t.is_background).reduce((s, t) => s + Number(t.man_hours), 0);
   const pct = totalMh ? Math.round((doneMh / totalMh) * 100) : 0;
   const byDay = {};
-  for (const t of tasks) (byDay[t.day_no] = byDay[t.day_no] || []).push(t);
+  for (const t of tasks) { if (/^VOIDED — /.test(String(t.name))) continue; (byDay[t.day_no] = byDay[t.day_no] || []).push(t); }   // Block 284: voided extras stay out of sight
   const mark = (st) => st === "complete" ? "✓" : st === "in_progress" ? "⏳" : "·";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -3135,11 +3135,23 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
        way, and the whole lane disappears when it truly has nothing to say. -->
   ${(() => {
     const opts = tasks.filter((t) => t.source === "option");
+    const extras284 = tasks.filter((t) => t.source === "manual" && !/^VOIDED — /.test(String(t.name)));
     const cnote = note138(detail && detail.order.note ? detail.order.note : "");   // Block 138: scrubbed for the floor
-    if (!opts.length && !cnote) return "";
-    const above = opts.length
-      ? opts.map((o) => `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(o.name)} <span style="opacity:.5">(+${Number(o.man_hours)}h)</span></div>`).join("")
-      : tasks.length ? `<div style="opacity:.8;font-size:1.05rem">STOCK BUILD — no upgrade option steps on this cab.</div>` : "";
+    if (!opts.length && !extras284.length && !cnote) return "";
+    // Block 284 (Daniel 9/28 — "nor does it show us what step it falls after"):
+    // every upgrade and extra names the step it sits behind, read from the
+    // frozen order itself (the last template step before it).
+    const tmpl284 = tasks.filter((t) => t.source === "template").slice().sort((a, b) => Number(a.day_no) - Number(b.day_no) || Number(a.sort_order) - Number(b.sort_order));
+    const afterOf284 = (t) => { let last = null; for (const st of tmpl284) { if (Number(st.day_no) < Number(t.day_no) || (Number(st.day_no) === Number(t.day_no) && Number(st.sort_order) < Number(t.sort_order))) last = st; } return last ? `after step ${escH(last.display_no)} — ${escH(String(last.name).slice(0, 40))}` : (Number(t.sort_order) >= 9000 ? "end of the list" : "start of the list"); };
+    const above = (opts.length
+      ? opts.map((o) => `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(o.name)} <span style="opacity:.5">(+${Number(o.man_hours)}h · ${afterOf284(o)})</span></div>`).join("")
+      : tasks.length && !extras284.length ? `<div style="opacity:.8;font-size:1.05rem">STOCK BUILD — no upgrade option steps on this cab.</div>` : "")
+      + extras284.map((x) => canHours && x.state === "not_started"
+        ? `<div style="padding:5px 0;font-size:1.02rem;border-top:1px dashed var(--line);margin-top:4px">▸ EXTRA <span style="opacity:.5">(+${Number(x.man_hours)}h · ${afterOf284(x)})</span><br>
+             <span style="font-size:.9rem">Hrs <input id="xh-${x.id}" value="${Number(x.man_hours)}" style="width:56px"> After step ${stepPick283("xd-" + x.id)} Reason <input id="xr-${x.id}" value="${escH(String(x.name).replace(/^EXTRA — /, "")).replace(/"/g, "&quot;")}" style="min-width:200px">
+             <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:5px 10px;cursor:pointer" onclick="extraSave284('${x.id}',this)">Save</button>
+             <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#ff8fa3;padding:5px 10px;cursor:pointer" onclick="extraVoid284('${x.id}',this)">Remove</button></span></div>`
+        : `<div style="padding:3px 0;font-size:1.05rem">▸ ${escH(x.name)} <span style="opacity:.5">(+${Number(x.man_hours)}h · ${afterOf284(x)}${x.state !== "not_started" ? " · " + escH(x.state.replace("_", " ")) : ""})</span></div>`).join("");
     const noteRow = cnote ? `<div style="${above ? "margin-top:10px;padding-top:10px;border-top:1px solid var(--line);" : ""}font-size:1.02rem"><span style="color:#ffd60a;font-weight:800;letter-spacing:.04em;font-size:.8em">&#9873; COYOTE NOTE</span><br>${escH(cnote)}</div>` : "";
     return `<div class="lane" style="border-color:#C8102E">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">UPGRADES &amp; OPTIONS — what this cab gets</div>
@@ -3188,6 +3200,17 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
       .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; });
   }
+  // Block 284: an EXTRA is editable in place while it is not started (hours, the step it follows, the reason) and can be removed (voided, never deleted).
+  function extraSave284(tid, btn){ btn.disabled = true; var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
+    fetch("/api/build/extra", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "update", task_id: tid, hours: Number(g("xh-" + tid)), after_no: g("xd-" + tid) || null, reason: g("xr-" + tid) }) })
+      .then(function(r){ return r.json(); }).then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
+      .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; }); }
+  function extraVoid284(tid, btn){ if (!btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; }
+    btn.disabled = true;
+    fetch("/api/build/extra", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "void", task_id: tid }) })
+      .then(function(r){ return r.json(); }).then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
+      .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; }); }
   function addHrs(bid, fid, btn){ btn.disabled = true;
     var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
     fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -7803,6 +7826,33 @@ async function archiveStepActuals282() {
   logEvent("template.actuals_archived", null, { taken_on: today, families: tmpls.length });
   console.log(`[archive] step actuals archived for ${tmpls.length} families (${today})`);
 }
+// Block 283/284: where an EXTRA lands — right after the step the manager picked
+// (by display number). Started cab on the ×10 spacing → the slot behind the
+// frozen step after any upgrades/extras already there; not started → the same
+// slot from the live template (×10) so the freeze interleaves it; old-spacing
+// cab or unknown step → end of the list. Never throws.
+async function placeExtra283(buildId, partNumber, afterNo, excludeTaskId) {
+  let place = { day_no: 1, sort_order: 9500 };
+  try {
+    const tmplTasks = await db(`task?select=display_no,day_no,sort_order&build_id=eq.${buildId}&source=eq.template&order=sort_order`);
+    const others = (await db(`task?select=id,sort_order&build_id=eq.${buildId}&source=in.(option,manual)`)).filter((o) => o.id !== excludeTaskId);
+    let anchor = null, next = null;
+    if (tmplTasks.length) {
+      const i = tmplTasks.findIndex((t) => String(t.display_no) === afterNo);
+      if (i >= 0) { anchor = { day_no: tmplTasks[i].day_no, sort: Number(tmplTasks[i].sort_order) }; next = tmplTasks[i + 1] ? Number(tmplTasks[i + 1].sort_order) : anchor.sort + 10; }
+    } else {
+      const [prH] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(partNumber || "")}`);
+      const st = prH && prH.template_id ? await db(`step_template?select=display_no,day_no,sort_order&template_id=eq.${prH.template_id}&retired=is.false&order=sort_order`) : [];
+      const i = st.findIndex((t) => String(t.display_no) === afterNo);
+      if (i >= 0) { anchor = { day_no: st[i].day_no, sort: Number(st[i].sort_order) * 10 }; next = st[i + 1] ? Number(st[i + 1].sort_order) * 10 : anchor.sort + 10; }
+    }
+    if (anchor && next - anchor.sort >= 10) {
+      const used = others.filter((o) => Number(o.sort_order) > anchor.sort && Number(o.sort_order) < next).length;
+      place = { day_no: anchor.day_no, sort_order: Math.min(anchor.sort + 1 + used, next - 1) };
+    }
+  } catch (e283) { console.error("extra placement fell back to end of list:", e283 && e283.message); }
+  return place;
+}
 // The whole family's actuals in one pass: every started build of the family,
 // its task windows through lineLabor258 against its line's crew, then the
 // two-test filter (15-min wall floor + graduated %-of-CURRENT-standard) and
@@ -9650,7 +9700,7 @@ http.createServer(async (req, res) => {
       // Block 283: the live template's steps feed the "lands after step" picker for custom extras (works before the cab starts, too)
       const stepsTpl283 = prodO && prodO.template_id ? await db(`step_template?select=display_no,name&template_id=eq.${prodO.template_id}&retired=is.false&order=sort_order`) : [];
       const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
-      const tasksO = await db(`task?select=display_no,name,day_no,day_end,man_hours,state,is_background,source&build_id=eq.${bO.id}&order=day_no,sort_order`);
+      const tasksO = await db(`task?select=id,display_no,name,day_no,day_end,man_hours,state,is_background,source,sort_order&build_id=eq.${bO.id}&order=day_no,sort_order`);   // Block 284: +id,sort_order
       const prodAll86 = await db(`product?select=part_number`);
       const allowSet86 = new Set(prodAll86.map((p) => String(p.part_number).toUpperCase()));
       const coyOrd86 = bO.coyote_root || String(bO.order_number || "").split(".")[0];
@@ -12621,27 +12671,8 @@ self.addEventListener("notificationclick", (e) => {
       // any upgrades already there); not started yet → the same slot computed from
       // the live template, so the freeze interleaves it correctly; an old-spacing
       // cab, or no pick → end of the list (today's behavior). Never blocks.
-      let place283 = { day_no: 1, sort_order: 9500 }; const afterNo283 = String(p.after_no || "").trim();
-      if (!zeroFlag104 && afterNo283) {
-        try {
-          const tmplTasks = await db(`task?select=display_no,day_no,sort_order&build_id=eq.${p.build_id}&source=eq.template&order=sort_order`);
-          const others = await db(`task?select=sort_order&build_id=eq.${p.build_id}&source=in.(option,manual)`);
-          let anchor = null, next = null;
-          if (tmplTasks.length) {
-            const i = tmplTasks.findIndex((t) => String(t.display_no) === afterNo283);
-            if (i >= 0) { anchor = { day_no: tmplTasks[i].day_no, sort: Number(tmplTasks[i].sort_order) }; next = tmplTasks[i + 1] ? Number(tmplTasks[i + 1].sort_order) : anchor.sort + 10; }
-          } else {
-            const [prH] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(bH.part_number || "")}`);
-            const st = prH && prH.template_id ? await db(`step_template?select=display_no,day_no,sort_order&template_id=eq.${prH.template_id}&retired=is.false&order=sort_order`) : [];
-            const i = st.findIndex((t) => String(t.display_no) === afterNo283);
-            if (i >= 0) { anchor = { day_no: st[i].day_no, sort: Number(st[i].sort_order) * 10 }; next = st[i + 1] ? Number(st[i + 1].sort_order) * 10 : anchor.sort + 10; }
-          }
-          if (anchor && next - anchor.sort >= 10) {
-            const used = others.filter((o) => Number(o.sort_order) > anchor.sort && Number(o.sort_order) < next).length;
-            place283 = { day_no: anchor.day_no, sort_order: Math.min(anchor.sort + 1 + used, next - 1) };
-          }
-        } catch (e283) { console.error("extra placement fell back to end of list:", e283 && e283.message); }
-      }
+      const afterNo283 = String(p.after_no || "").trim();
+      const place283 = (!zeroFlag104 && afterNo283) ? await placeExtra283(p.build_id, bH.part_number, afterNo283, null) : { day_no: 1, sort_order: 9500 };
       if (!zeroFlag104) await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
         name: "EXTRA — " + reason, day_no: place283.day_no, man_hours: hrs, is_background: false,
         source: "manual", state: "not_started", sort_order: place283.sort_order }) });
@@ -12650,6 +12681,42 @@ self.addEventListener("notificationclick", (e) => {
       if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true, scope: scope104 }) });
       logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, after_step: afterNo283 || null, sort_order: place283.sort_order, reason, flag_id: p.flag_id || null, scope: scope104 });
       return json(200, { ok: true });
+    }
+
+    // Block 284 (Daniel 9/28): an EXTRA on a cab is editable in place while it
+    // is not started — hours, the step it follows, the reason — and can be
+    // REMOVED (voided: 0h, background, renamed "VOIDED — …", hidden from the
+    // floor list; never deleted — Q "cancel, never delete"). Manager/admin,
+    // audited both ways.
+    if (url.pathname === "/api/build/extra" && req.method === "POST") {
+      const empIdX = await liveSession(req);
+      if (!empIdX) return json(401, { ok: false, error: "Signed out" });
+      const [meX] = await db(`employee?select=role&id=eq.${empIdX}`);
+      if (!meX || (meX.role !== "admin" && meX.role !== "manager")) return json(403, { ok: false, error: "Managers and admins only" });
+      const p = await body(req);
+      if (!isUuid(p.task_id)) return json(400, { ok: false, error: "Bad step reference" });
+      const [tX] = await db(`task?select=id,build_id,name,man_hours,state,source,sort_order,day_no&id=eq.${p.task_id}`);
+      if (!tX || tX.source !== "manual") return json(404, { ok: false, error: "That isn't an added extra" });
+      if (tX.state !== "not_started") return json(400, { ok: false, error: "This extra has been started on the floor — finish or undo it there first" });
+      const [bX] = await db(`build?select=id,order_number,part_number&id=eq.${tX.build_id}`);
+      if (p.action === "void") {
+        await db(`task?id=eq.${tX.id}`, { method: "PATCH", body: JSON.stringify({ name: "VOIDED — " + String(tX.name).replace(/^EXTRA — /, ""), man_hours: 0, is_background: true, sort_order: 9900 }) });
+        logEvent("hours.voided", empIdX, { build_id: tX.build_id, order_number: bX ? bX.order_number : null, task_id: tX.id, was: { name: tX.name, hours: tX.man_hours, sort_order: tX.sort_order } });
+        return json(200, { ok: true });
+      }
+      if (p.action === "update") {
+        const hrs = Number(p.hours);
+        if (!(hrs > 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
+        const reason = String(p.reason || "").trim();
+        if (reason.length < 3) return json(400, { ok: false, error: "Give the reason — it shows on the cab and in the log" });
+        const afterNo = String(p.after_no || "").trim();
+        const place = afterNo ? await placeExtra283(tX.build_id, bX ? bX.part_number : "", afterNo, tX.id) : { day_no: 1, sort_order: 9500 };
+        await db(`task?id=eq.${tX.id}`, { method: "PATCH", body: JSON.stringify({ name: "EXTRA — " + reason, man_hours: hrs, day_no: place.day_no, sort_order: place.sort_order }) });
+        logEvent("hours.edited", empIdX, { build_id: tX.build_id, order_number: bX ? bX.order_number : null, task_id: tX.id, hours: hrs, after_step: afterNo || null, sort_order: place.sort_order, reason,
+          was: { name: tX.name, hours: tX.man_hours, sort_order: tX.sort_order } });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
     }
 
     // QUEUE PIN (block 89, owner-pin authority): an admin pins an upcoming cab
