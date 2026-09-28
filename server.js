@@ -3043,7 +3043,9 @@ async function optionList255(b, allow255 = null) {
   if (!det255 || !det255.features.length) return [];
   return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = []) => {
+  // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
+  const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
   // canFull tier (managers/admins/Warehouse/Accounting/office) sees verbatim.
   const note138 = (x) => canFull ? String(x == null ? "" : x) : scrubMoney138(x);
@@ -3111,7 +3113,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS A RULING \u2014 UPGRADE HOURS &amp; NOTE ITEMS</div>
     ${canHours
       ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : f.kind === "count" ? "cab count — verify" : f.kind === "stuck" ? "Coyote dropped the part — verify" : "option not in library"})</span><br>
-        Hrs <input id="fh-${f.id}" style="width:64px"> Day <input id="fd-${f.id}" style="width:50px" value="1"> Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
+        Hrs <input id="fh-${f.id}" style="width:64px"> After step ${stepPick283("fd-" + f.id)} Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
         <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button>
         <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'body_build')">Body/Build \u2014 push along</button>
         <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'none')">No action</button></div>`).join("")
@@ -3119,7 +3121,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   </div>` : ""}
   ${canHours ? `<div class="lane">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">ADD HOURS <span style="opacity:.5;font-weight:400;font-size:.8em">manager/admin · reason required · audited</span></div>
-    Hrs <input id="ah-h" style="width:64px"> Day <input id="ah-d" style="width:50px" value="1"> Reason <input id="ah-r" style="min-width:240px" placeholder="customer request / custom note…">
+    Hrs <input id="ah-h" style="width:64px"> After step ${stepPick283("ah-d")} Reason <input id="ah-r" style="min-width:240px" placeholder="customer request / custom note…">
     <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','',this)">Add to this cab's clock</button>
   </div>` : ""}
   ${isAdmin97 && b.state === "active" && b.started_at && new Date(new Date(b.started_at).getTime() - 7 * 3600000).toISOString().slice(0, 10) === new Date(Date.now() - 7 * 3600000).toISOString().slice(0, 10) ? `<div class="lane" style="border-color:#7a1d1d">
@@ -3180,7 +3182,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o104 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o104; }, 4000); return; }
     btn.disabled = true;
     fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ build_id: bid, flag_id: fid, hours: 0, day_no: 1, scope: scope138 || "other",
+      body: JSON.stringify({ build_id: bid, flag_id: fid, hours: 0, scope: scope138 || "other",
         reason: scope138 === "body_build" ? "Pushed along — Build/Body work, not the production floor" : "No action — nothing for the floor" }) })
       .then(function(r){ return r.json(); })
       .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
@@ -3190,7 +3192,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     var g = function(x){ var e = document.getElementById(x); return e ? e.value : ""; };
     fetch("/api/build/addhours", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ build_id: bid, flag_id: fid || undefined,
-        hours: Number(g(fid ? "fh-" + fid : "ah-h")), day_no: Number(g(fid ? "fd-" + fid : "ah-d")), reason: g(fid ? "fr-" + fid : "ah-r") }) })
+        hours: Number(g(fid ? "fh-" + fid : "ah-h")), after_no: g(fid ? "fd-" + fid : "ah-d") || null, reason: g(fid ? "fr-" + fid : "ah-r") }) })   // Block 283: after_no replaces day_no
       .then(function(r){ return r.json(); })
       .then(function(j){ if (j && j.ok) { location.reload(); } else { btn.disabled = false; btn.textContent = (j && j.error) || "failed"; } })
       .catch(function(){ btn.disabled = false; btn.textContent = "network hiccup"; });
@@ -4585,7 +4587,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <p>${tmpls.map((t) => t.id === tplId
     ? `<b style="color:var(--red)">${t.family}</b>`
     : `<a href="/admin?tpl=${t.id}#steps" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
-  <table><tr><th>#</th><th>Step</th><th>Day</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
+  <table><tr><th>#</th><th>Step</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
   ${steps.map((s, i) => `<tr>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
     <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
@@ -4593,7 +4595,6 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       ${s.wh_callout
         ? `<div style="margin-top:3px"><input id="sw-${s.id}" value="${String(s.wh_callout).replace(/"/g, "&quot;")}" style="width:95%;font-size:.8rem;opacity:.85" title="Warehouse call-out — pushed to the warehouse crew the moment this step is started. Clear the text and Save to turn it off."> <small style="opacity:.5">&#128230; pushed to warehouse when started</small></div>`
         : `<a href="#" onclick="return wcal260('${s.id}',this)" style="font-size:.75rem;color:#8e8e93;text-decoration:none" title="Add a warehouse call-out — pushed to the warehouse crew when this step starts">&#128230;+</a>`}</td>
-    <td><input class="num" id="sd-${s.id}" value="${s.day_end ? `${s.day_no},${s.day_end}` : s.day_no}"></td>
     <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
     ${act258 ? `<td>${actPill258(act258, "step", s.id, tplId)}</td>` : ""}
     <td><button class="b" onclick="saveStep('${s.id}',this)">Save</button></td>
@@ -4604,10 +4605,10 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a number appears at 2 cabs). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
   <p style="margin-top:10px">Add a step:
     <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
-    Day <input class="num" id="new-day" value="1" title="4, or 4,5 for a step that carries over"> Hrs <input class="num" id="new-hrs" value="1">
+    Hrs <input class="num" id="new-hrs" value="1">
     <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
-  <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; Day is where it lands in the build. These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
+  <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; "Lands after step" is where it sits in the build (a 0-hour option can be flagged to show on the floor as a reminder). These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
   <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Lands after step</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
   ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
     const kids261 = optItems.filter((a) => a.alias_of === o.id);
@@ -4616,7 +4617,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
       ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
       ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
-    <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of day ${o.day_no} (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
+    <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of the list (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
       <input type="hidden" id="op-d-${o.id}" value="${o.day_no}">
       ${Number(o.man_hours) === 0 ? `<label style="display:block;font-size:.75rem;opacity:.75;margin-top:2px"><input type="checkbox" id="op-f-${o.id}"${o.show_on_floor ? " checked" : ""}> show on the floor as a reminder (0 h)</label>` : ""}</td>
     ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
@@ -4626,7 +4627,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
   <p style="margin-top:10px">Add an option:
     <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
-    Hrs <input class="num" id="op-new-hrs" value="1"> Day <input class="num" id="op-new-day" value="1">
+    Hrs <input class="num" id="op-new-hrs" value="1">
     <button class="b" onclick="addOpt('${tplId}',this)">Add</button></p>
   <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>
   </div>
@@ -4881,14 +4882,14 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function saveStep(id, btn){ var sw260 = document.getElementById("sw-"+id);   // Block 260: input only exists when a call-out is set (or just added)
     post("/api/admin/step", { action: "update", id, display_no: v("sn-"+id),
-    name: v("sm-"+id), day_no: v("sd-"+id), man_hours: Number(v("sh-"+id)), detail: v("sx-"+id),   // Block 282: the long instruction
+    name: v("sm-"+id), day_no: "1", man_hours: Number(v("sh-"+id)), detail: v("sx-"+id),   // Block 282: the long instruction · Block 283: days are gone (always 1)
     wh_callout: sw260 ? sw260.value : undefined }, btn); }
   function wcal260(id, a){ var d = document.createElement("div"); d.style.marginTop = "3px";
     d.innerHTML = '<input id="sw-'+id+'" placeholder="What should warehouse deliver when this step starts?" style="width:95%;font-size:.8rem"> <small style="opacity:.5">&#128230; then Save</small>';
     a.parentNode.appendChild(d); a.style.display = "none"; return false; }
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
   function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
-  function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: Number(v("op-new-day")) }, btn); }
+  function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: 1 }, btn); }   // Block 283: days are gone — pick its anchor on the row after adding
   function saveOpt(id, btn){ var f282 = document.getElementById("op-f-"+id);
     post("/api/admin/option", { action: "update", id, man_hours: Number(v("op-h-"+id)), day_no: Number(v("op-d-"+id)),
       after_step: v("op-a-"+id) || null, show_on_floor: f282 ? f282.checked : undefined }, btn); }   // Block 282: anchor + reminder flag
@@ -4909,7 +4910,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function unDup261(id){ post("/api/admin/option", { action: "unalias", id }); return false; }
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
-    display_no: v("new-no"), name: v("new-name"), day_no: v("new-day"), man_hours: Number(v("new-hrs")) }, btn); }
+    display_no: v("new-no"), name: v("new-name"), day_no: "1", man_hours: Number(v("new-hrs")) }, btn); }   // Block 283: days are gone
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
   // Block 154 (D6): a #setup154 / #channels116 / #cabnums deep link opens the Setup fold.
   if (["#setup154", "#channels116", "#cabnums"].indexOf(location.hash) > -1) { var d154 = document.getElementById("setup154"); if (d154) { d154.open = true; setTimeout(function(){ var t154 = document.getElementById(location.hash.slice(1)); if (t154) t154.scrollIntoView(); }, 50); } }
@@ -9645,7 +9646,9 @@ http.createServer(async (req, res) => {
       const [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
       if (!bO) return send(404, "text/html; charset=utf-8",
         `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
-      const [prodO] = bO.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
+      const [prodO] = bO.part_number ? await db(`product?select=family,template_id&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
+      // Block 283: the live template's steps feed the "lands after step" picker for custom extras (works before the cab starts, too)
+      const stepsTpl283 = prodO && prodO.template_id ? await db(`step_template?select=display_no,name&template_id=eq.${prodO.template_id}&retired=is.false&order=sort_order`) : [];
       const [lnO] = bO.line_id ? await db(`line?select=name&id=eq.${bO.line_id}`) : [null];
       const tasksO = await db(`task?select=display_no,name,day_no,day_end,man_hours,state,is_background,source&build_id=eq.${bO.id}&order=day_no,sort_order`);
       const prodAll86 = await db(`product?select=part_number`);
@@ -9699,7 +9702,7 @@ http.createServer(async (req, res) => {
         for (const p2 of phA230) D230(p2.created_at).photos.push({ id: p2.id, hidden: !!p2.hidden, who: nm230[p2.uploaded_by] || "", step: p2.task_id ? (tn230[p2.task_id] || "step") : (p2.kind === "progress" ? "end of day" : p2.kind || "") });
         act230 = Object.values(days230).sort((a2, z2) => (a2.ds < z2.ds ? 1 : a2.ds > z2.ds ? -1 : 0));
       }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230));
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -12602,24 +12605,50 @@ self.addEventListener("notificationclick", (e) => {
       if (!meH || (meH.role !== "admin" && meH.role !== "manager")) return json(403, { ok: false, error: "Managers and admins only" });
       const p = await body(req);
       if (!isUuid(p.build_id)) return json(400, { ok: false, error: "Bad cab reference" });
-      const hrs = Number(p.hours), day = Number(p.day_no);
+      const hrs = Number(p.hours);
       // Block 104: 0 is a legal answer WHEN resolving a flag — it means
       // "confirmed: no shop labor" (ships loose / config choice). The flag
       // resolves, NO task is added, and the confirmation is audited.
       const zeroFlag104 = hrs === 0 && p.flag_id && isUuid(p.flag_id);
       if (!zeroFlag104 && !(hrs > 0 && hrs < 200)) return json(400, { ok: false, error: "Hours look wrong" });
-      if (!Number.isInteger(day) || day < 1 || day > 30) return json(400, { ok: false, error: "Day looks wrong" });
       const reason = String(p.reason || "").trim();
       if (reason.length < 3) return json(400, { ok: false, error: "Give the reason — it shows on the cab and in the log" });
-      const [bH] = await db(`build?select=id,order_number&id=eq.${p.build_id}`);
+      const [bH] = await db(`build?select=id,order_number,part_number&id=eq.${p.build_id}`);
       if (!bH) return json(404, { ok: false, error: "Cab not found" });
+      // Block 283 (Daniel 9/28): the extra lands right AFTER THE STEP the manager
+      // picks (by display number), whether the cab has started or not — days are
+      // gone. Started cab on the ×10 spacing → slot behind the frozen step (after
+      // any upgrades already there); not started yet → the same slot computed from
+      // the live template, so the freeze interleaves it correctly; an old-spacing
+      // cab, or no pick → end of the list (today's behavior). Never blocks.
+      let place283 = { day_no: 1, sort_order: 9500 }; const afterNo283 = String(p.after_no || "").trim();
+      if (!zeroFlag104 && afterNo283) {
+        try {
+          const tmplTasks = await db(`task?select=display_no,day_no,sort_order&build_id=eq.${p.build_id}&source=eq.template&order=sort_order`);
+          const others = await db(`task?select=sort_order&build_id=eq.${p.build_id}&source=in.(option,manual)`);
+          let anchor = null, next = null;
+          if (tmplTasks.length) {
+            const i = tmplTasks.findIndex((t) => String(t.display_no) === afterNo283);
+            if (i >= 0) { anchor = { day_no: tmplTasks[i].day_no, sort: Number(tmplTasks[i].sort_order) }; next = tmplTasks[i + 1] ? Number(tmplTasks[i + 1].sort_order) : anchor.sort + 10; }
+          } else {
+            const [prH] = await db(`product?select=template_id&part_number=eq.${encodeURIComponent(bH.part_number || "")}`);
+            const st = prH && prH.template_id ? await db(`step_template?select=display_no,day_no,sort_order&template_id=eq.${prH.template_id}&retired=is.false&order=sort_order`) : [];
+            const i = st.findIndex((t) => String(t.display_no) === afterNo283);
+            if (i >= 0) { anchor = { day_no: st[i].day_no, sort: Number(st[i].sort_order) * 10 }; next = st[i + 1] ? Number(st[i + 1].sort_order) * 10 : anchor.sort + 10; }
+          }
+          if (anchor && next - anchor.sort >= 10) {
+            const used = others.filter((o) => Number(o.sort_order) > anchor.sort && Number(o.sort_order) < next).length;
+            place283 = { day_no: anchor.day_no, sort_order: Math.min(anchor.sort + 1 + used, next - 1) };
+          }
+        } catch (e283) { console.error("extra placement fell back to end of list:", e283 && e283.message); }
+      }
       if (!zeroFlag104) await db("task", { method: "POST", body: JSON.stringify({ build_id: p.build_id, display_no: "X",
-        name: "EXTRA — " + reason, day_no: day, man_hours: hrs, is_background: false,
-        source: "manual", state: "not_started", sort_order: 9500 }) });
+        name: "EXTRA — " + reason, day_no: place283.day_no, man_hours: hrs, is_background: false,
+        source: "manual", state: "not_started", sort_order: place283.sort_order }) });
       const s138 = String(p.scope || "");   // Block 138: body_build = pushed along (kept for the future dept boards); none = no action
       const scope104 = zeroFlag104 ? (s138 === "other" || s138 === "body_build" ? s138 : "none") : "production";
       if (p.flag_id && isUuid(p.flag_id)) await db(`option_flag?id=eq.${p.flag_id}`, { method: "PATCH", body: JSON.stringify({ resolved: true, scope: scope104 }) });
-      logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, day_no: day, reason, flag_id: p.flag_id || null, scope: scope104 });
+      logEvent("hours.added", empIdH, { build_id: p.build_id, order_number: bH.order_number, hours: hrs, after_step: afterNo283 || null, sort_order: place283.sort_order, reason, flag_id: p.flag_id || null, scope: scope104 });
       return json(200, { ok: true });
     }
 
