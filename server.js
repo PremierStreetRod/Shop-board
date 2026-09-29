@@ -2650,7 +2650,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
   <!-- Block 101 (owner-rep): two surfaces, two layouts. The TV keeps the
        left-hand UPCOMING rail; the staff board (phones / iPads) tiles the
        LINES first, full width, and the upcoming queue reads BELOW them. -->
-  ${tv98 ? `<div style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
+  ${tv98 ? `<div id="tvmain" style="display:grid;grid-template-columns:minmax(230px,290px) 1fr;gap:0;align-items:start">
     <!-- Block 155 (owner-rep D9): the rail is a CLIPPED viewport that slowly
          auto-scrolls and loops, so every line's upcoming cabs cycle into
          view no matter how long the queue gets. Height reserves the top
@@ -2669,7 +2669,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
   <!-- Block 155 (owner-rep D9): the TV legend gets its OWN full-width strip
        (background + top border) instead of floating over the rail — content
        can never sit under it, and the rail viewport stops above it. -->
-  <div style="${tv98 ? "position:fixed;bottom:0;left:0;right:0;padding:14px 18px;background:#0b0b0d;border-top:1px solid #1f1f22;z-index:5;" : "padding:12px 18px 4px;text-align:center;"}font-size:.9rem;opacity:.75">
+  <div id="tvlegend" style="${tv98 ? "position:fixed;bottom:0;left:0;right:0;padding:14px 18px;background:#0b0b0d;border-top:1px solid #1f1f22;z-index:5;" : "padding:12px 18px 4px;text-align:center;"}font-size:.9rem;opacity:.75">
     <span style="color:#30d158">■</span> on pace &nbsp;
     <span style="color:#ffd60a">■</span> running behind &nbsp;
     <span style="color:#ff453a">■</span> needs help &nbsp;
@@ -2678,7 +2678,28 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
     <a href="/home" style="color:#8e8e93">&#8962; Home</a> &nbsp;·&nbsp;
     <a href="/logout" style="color:#8e8e93">Sign out</a>`}
   </div>
-  ${tv98 ? `<style>body{padding-bottom:56px}</style><div class="stamp" id="stamp" style="z-index:6"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
+  ${tv98 ? `<style>
+  /* Block 285 (Daniel, 9/29 — the 75" Samsung): the TV board sizes itself
+     from the SCREEN, not from Windows' scale setting. Root font = 1.1% of the
+     screen width (so a 4K TV at 100% and a 1080p feed at 200% look the same),
+     the page is one column that never scrolls (header → fix strip → rail+
+     tiles → legend), and the four line tiles are a fixed 2×2 that fills the
+     height. Nothing here touches the staff board. */
+  html{font-size:clamp(13px,1vw,40px)}
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden;padding-bottom:0}
+  body>.logo{margin-top:.6rem!important;flex:none}
+  #fixstrip{flex:none}
+  #tvmain{flex:1;min-height:0;grid-template-columns:15vw 1fr!important;grid-template-rows:minmax(0,1fr);align-items:stretch!important}
+  #railview{height:100%!important}
+  #rail{padding:.6rem .2rem .6rem .8rem!important}
+  .board{grid-template-columns:repeat(2,1fr)!important;grid-auto-rows:minmax(0,1fr);height:100%;min-height:0;padding:.5rem .9rem .5rem .5rem;gap:.8rem}
+  .tile{padding:1.2rem 1.5rem;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-radius:1rem;border-left-width:.5rem}
+  .tile h3{font-size:1.75rem;margin-bottom:.15rem}
+  .tile>div:first-of-type,.tile .status{font-size:1.15em}
+  .techs{margin-top:auto;padding-top:.5rem}
+  .day{font-size:1.1rem}
+  #tvlegend{position:static!important;flex:none;padding:.5rem 1.1rem!important;font-size:.95rem!important}
+</style><div class="stamp" id="stamp" style="z-index:6"></div>` : `<div id="stamp" style="text-align:center;padding:2px 18px 28px;opacity:.35;font-size:.85rem"></div>`}
   <!-- Q86: TV SLEEP overlay — a near-black dim screen shown outside working
        hours / on closed days (burn-in + power). Tap anywhere to peek for 20s. -->
   <div id="sleep" style="display:none;position:fixed;inset:0;background:#000;z-index:9999;text-align:center;cursor:pointer" onclick="peek()">
