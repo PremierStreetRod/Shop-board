@@ -5147,6 +5147,7 @@ async function reportData(startMs, endMs) {
   ]);
   const emps = empsAllR215.filter((e) => !isTestAcct215(e));   // Block 215: Zz Test-Account never reaches reports
   const ivs = workIntervals(events, nowMs);
+  const ivsPay287 = workIntervals(payRules248(events), nowMs);   // Block 287: the worksheet's rounded intervals, so Timecards can show what payroll will actually pay
   const lineName = {}; for (const l of lines) lineName[l.id] = l.name;
   // Latest sign-off per build (a rework loop can sign off twice — last wins).
   // Q86: WHO signed it off travels with the same last-wins rule — the actor plus
@@ -5240,6 +5241,16 @@ async function reportData(startMs, endMs) {
     if (iv.line === SHOP_LINE_ID) row.shop += hrs;
     if (iv.line === FIX_LINE_ID) row.fix += hrs;   // Block 125 (M3): Fix-work bucket
   }
+  // Block 287 (Daniel, after Kailey's 9/11-9/25 cross-check): "Paid hrs" on this page
+  // was the EXACT clock time (7.99) while the Pay Worksheet rounds every punch to the
+  // quarter (7.75) - two screens, two answers, and accounting reconciled by eye between
+  // them. The exact column stays (renamed "On clock"); PAID is now the worksheet's math.
+  for (const iv of ivsPay287) {
+    if (iv.end <= sinceMs || iv.start >= winEnd) continue;
+    const k = iv.emp + "|" + phxDate(Math.max(iv.start, sinceMs));
+    const row = tcMap[k]; if (!row) continue;
+    row.pay287 = (row.pay287 || 0) + overlapHrs(iv, sinceMs, winEnd);
+  }
   for (const ev of events) {
     // Q111 pt 2: corrected/added punches STAMP the day — no silent fixes.
     const tAll = new Date(ev.claimed_at).getTime();
@@ -5282,6 +5293,7 @@ async function reportData(startMs, endMs) {
         if (iv.line === FIX_LINE_ID) row.fix = Math.max(0, row.fix - o107);
       }
       row.paid = Math.max(0, row.paid - held107);
+      row.pay287 = Math.max(0, (row.pay287 || 0) - held107);   // Block 287: held after-hours time stays off PAID too
       // Block 110: a DECLINED session keeps its hours off for good — the
       // typed reason rides the timecard row so payroll sees why.
       if (sA.declined_by) {
@@ -5292,7 +5304,7 @@ async function reportData(startMs, endMs) {
       }
     }
   }
-  const timecards = Object.values(tcMap).map((r) => ({ ...r, flags: [...r.flags].join(" · ") }))
+  const timecards = Object.values(tcMap).map((r) => ({ ...r, pay: roundQ(r.pay287 || 0), flags: [...r.flags].join(" · ") }))   // Block 287: pay = worksheet rounding (quarter-hour)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
   // ON-TIME DELIVERY (Q26): of the cabs signed off in the window, how many
   // finished on or before their PROMISED date. promised_finish is a Phoenix
@@ -5458,17 +5470,17 @@ const reportsPage = (d, isAdmin = false, emp196 = null) => `<!doctype html>
     <h3>Labor — clocked hours per person</h3>
     ${d.labor.length ? `<table><tr><th>Name</th><th class="num">Hours</th><th class="num">Days present</th></tr>
       ${d.labor.map((r, i) => { const days = d.timecards.filter((t) => t.name === r.name); return `<tr class="drow" onclick="dtoggle('dl${i}')"><td>▸ ${r.name}${r.active ? "" : ' <span style="opacity:.4">(inactive)</span>'}</td><td class="num">${h1(r.hrs)}</td><td class="num">${r.days}</td></tr>
-      <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Paid</th><th class="num">Shop</th><th class="num">Fix</th><th>Notes</th></tr>
-        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
+      <tr id="dl${i}" class="drill"><td colspan="3"><table><tr><th>Date</th><th>In</th><th>Out</th><th class="num">On clock</th><th class="num">Paid</th><th class="num">Shop</th><th class="num">Fix</th><th>Notes</th></tr>
+        ${days.map((t) => `<tr><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num"><b>${h1(t.pay)}</b></td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table></td></tr>`; }).join("")}</table>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">Coaching and coverage view — never shown on the floor board (file 12 privacy rule).</div>`
     : `<div style="opacity:.6">No clocked hours in this period.</div>`}
   </div>
   <div class="lane">
     <a class="csv" href="/reports.csv?which=timecards&${d.qs}">⬇ CSV</a>
     <h3>Timecards — payroll (Q111)</h3>
-    ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th class="num">Fix work</th><th>Notes</th></tr>
-      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table>
-      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Paid = time on the clock (lunch is already out; waiting on a kit stays in). Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. Fix work = paid hours on a returned/kickback cab, tied to that order. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
+    ${d.timecards.length ? `<table><tr><th>Person</th><th>Date</th><th>First in</th><th>Last out</th><th class="num">On clock</th><th class="num">Paid hrs</th><th class="num">Shop time</th><th class="num">Fix work</th><th>Notes</th></tr>
+      ${d.timecards.map((t) => `<tr><td>${t.name}</td><td>${t.date}</td><td>${phxHM(new Date(t.firstIn).toISOString()).slice(11)}</td><td>${phxHM(new Date(t.lastOut).toISOString()).slice(11)}</td><td class="num">${h1(t.paid)}</td><td class="num"><b>${h1(t.pay)}</b></td><td class="num">${t.shop ? h1(t.shop) : "—"}</td><td class="num">${t.fix ? h1(t.fix) : "—"}</td><td style="opacity:.7">${t.flags}${t.tcfix ? ` <a href="${t.tcfix}" style="color:#8e8e93">Fix punches</a>` : ""}</td></tr>`).join("")}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">On clock = exact time on the clock, to the minute (lunch is already out; waiting on a kit stays in). <b>Paid hrs = the Pay Worksheet's number</b> — the same punches rounded to the quarter-hour by the payroll rules (6-down/7-up, shop-open snap, lunch by its length); this is what goes to payroll. Shop time = the non-billable bucket — meetings, cleanup, in-house fabrication. Fix work = paid hours on a returned/kickback cab, tied to that order. "auto-closed" = the day-end sweeper closed a forgotten punch — worth a glance before payroll.</div>`
     : `<div style="opacity:.6">No punches in this period.</div>`}
   </div>
   <div class="lane">
@@ -5508,9 +5520,9 @@ function reportCsv(which, d) {
     return row(["Employee", "Clocked hours", "Days present"]) +
       d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
   if (which === "timecards")
-    return row(["Employee", "Date", "First in", "Last out", "Paid hours", "Shop-time hours", "Fix-work hours", "Notes / flags"]) +
+    return row(["Employee", "Date", "First in", "Last out", "On-clock hours (exact)", "Paid hours (worksheet rounding)", "Shop-time hours", "Fix-work hours", "Notes / flags"]) +
       d.timecards.map((t) => row([t.name, t.date, phxHM(new Date(t.firstIn).toISOString()),
-        phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.shop), h1(t.fix), t.flags])).join("");
+        phxHM(new Date(t.lastOut).toISOString()), h1(t.paid), h1(t.pay), h1(t.shop), h1(t.fix), t.flags])).join("");
   return row(["Order #", "Cab #", "Product", "Line", "Standard hours", "Actual hours", "Variance %", "Started", "Signed off", "Signed off by", "Admin sign-off"]) +
     d.cabs.map((c) => row([c.order, c.cab, c.part, c.line, h1(c.std), h1(c.actual), c.varPct, c.started, c.completed, c.by, c.byAdmin ? "yes" : ""])).join("");
 }
@@ -7132,16 +7144,38 @@ function roundPunch235(iso) {
 // (incl. 8/11–8/25) and compare against the physical punch-clock sheet.
 function payRules248(events) {
   const out = []; const prevOut248 = {};   // exact last clock-out per person
+  const lastR287 = {};   // Block 287: the last ROUNDED punch per person — the pay clock never runs backwards
+  // Block 287: a rule can move a punch later than the NEXT punch's own rounding
+  // (lunch return pushed to 12:15, then a quick out/in at 12:05 rounds to 12:00;
+  // or a 6:50 clock-in snapped to 7:00 followed by an out that rounds to 6:45).
+  // The old pairing let that interval go negative and the window clamp turned it
+  // into FREE time (Aaron 9/25 and Andrew 9/14 each got a quarter-hour the rules
+  // never meant to give). Now every rounded punch is at least the one before it
+  // on the same day, so a backwards pair is simply zero-length.
+  const push287 = (ev, iso) => {
+    let r = Date.parse(iso); const l = lastR287[ev.employee_id];
+    if (l !== undefined && phxDate(l) === phxDate(r) && r < l) r = l;
+    lastR287[ev.employee_id] = r;
+    out.push({ ...ev, claimed_at: new Date(r).toISOString() });
+  };
   for (const ev of events) {
     const t = new Date(ev.claimed_at).getTime();
-    if (ev.kind !== "clock_in") { out.push({ ...ev, claimed_at: roundPunch235(ev.claimed_at) }); prevOut248[ev.employee_id] = t; continue; }
+    if (ev.kind !== "clock_in") { push287(ev, roundPunch235(ev.claimed_at)); prevOut248[ev.employee_id] = t; continue; }
     let adj = null;
     const po = prevOut248[ev.employee_id];
     if (po !== undefined && phxDate(po) === phxDate(t)) {
       const gap = t - po;
-      if (gap >= 45 * 60000 && gap <= 60 * 60000) {
-        const gm = Math.round(gap / 60000);
-        adj = Date.parse(roundPunch235(new Date(po).toISOString())) + (gm <= 48 ? 45 : 60) * 60000;
+      // Block 287 (Kailey's cross-check, 9/30): the rule no longer stops at 60.
+      // A 62-minute lunch used to fall through to two independent roundings
+      // (out 11:03 -> 11:00, in 12:05 -> 12:15) and cost 75 minutes; ten of her
+      // thirteen circled days were exactly that. Now ANY same-day gap of 45+
+      // minutes is docked by its LENGTH, rounded like a punch: 45-48 -> 45,
+      // 49-66 -> 60, then 6-down/7-up on the quarter (67-81 -> 75, 82-96 -> 90 ...).
+      // Anchored on the rounded clock-out, so where :07 falls can't matter.
+      if (gap >= 45 * 60000) {
+        const gm = Math.floor(gap / 60000);   // whole minutes, seconds ignored — exactly how a punch is read
+        const dock287 = gm <= 48 ? 45 : gm <= 66 ? 60 : (gm % 15 <= 6 ? Math.floor(gm / 15) * 15 : Math.floor(gm / 15) * 15 + 15);
+        adj = Date.parse(roundPunch235(new Date(po).toISOString())) + dock287 * 60000;
       }
     }
     if (adj === null) {
@@ -7152,7 +7186,7 @@ function payRules248(events) {
         adj = mi <= 48 ? base : base + 15 * 60000;
       }
     }
-    out.push({ ...ev, claimed_at: adj !== null ? new Date(adj).toISOString() : roundPunch235(ev.claimed_at) });
+    push287(ev, adj !== null ? new Date(adj).toISOString() : roundPunch235(ev.claimed_at));
   }
   return out;
 }
@@ -7313,7 +7347,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
-  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Two shop rules ride on top: a morning clock-in during the <b>5:45&ndash;6:00 or 6:45&ndash;7:00 windows</b> pays from :45 only through :48 — from :49 it pays from the hour; and a <b>45&ndash;60 minute lunch</b> counts by its length — 45&ndash;48 minutes docks 45, 49 or more docks the full hour (shorter or longer lunches unchanged). Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Two shop rules ride on top: a morning clock-in during the <b>5:45&ndash;6:00 or 6:45&ndash;7:00 windows</b> pays from :45 only through :48 — from :49 it pays from the hour; and a <b>lunch of 45 minutes or more</b> counts by its length, not by where each punch happens to fall — 45&ndash;48 minutes docks 45, 49&ndash;66 docks the hour, and longer lunches round to the quarter the same way a punch does (67&ndash;81 → 75, 82&ndash;96 → 90). A rule never moves a punch past the one after it, so a quick out/in right after a rule-moved punch is simply zero time. Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
     <span style="opacity:.55">Pay period:</span>
     <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
