@@ -8654,7 +8654,12 @@ async function kitVerifyNudge222(buildId) {
     if (!real222.length) return;
     const done222 = real222.filter((t) => t.state === "complete").length;
     if (done222 / real222.length < 0.75) return;
-    const [next222] = await db(`build?select=id,order_number,cab_number,kit_status&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast&limit=1`);
+    // Block 286 (Eric's text, 9/30): the nudge named 23738 "on deck" while the board
+    // and the warehouse queue both showed 23794. Every other queue read in the app
+    // breaks queue_pos ties (and the all-NULL case — Line 2 had four NULLs) on
+    // created_at; this one didn't, so Postgres handed back whichever NULL row it
+    // felt like. Same order clause as the board's on-deck now, nothing else changed.
+    const [next222] = await db(`build?select=id,order_number,cab_number,kit_status&line_id=eq.${b.line_id}&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc&limit=1`);
     if (!next222) return;                                                        // nothing on deck
     if (next222.kit_status === "verified" || next222.kit_status === "short") return;
     const dup222 = await db(`event_log?select=id&event_type=eq.warehouse.verify_kit&payload->>build_id=eq.${buildId}&limit=1`);
