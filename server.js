@@ -2228,6 +2228,13 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 const whTime288 = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); if (isNaN(d.getTime())) return "";
   let h = d.getUTCHours(); const m = String(d.getUTCMinutes()).padStart(2, "0"); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return h + ":" + m + " " + ap; };
 const whEsc288 = (x) => escH(x).split('"').join("&quot;");
+// Block 289 (Daniel, 10/13): "the up and down buttons arent very explanitory. someone
+// who doesnt know what those are may get in trouble by pressing them." Audit: a
+// move was ONE tap, fired instantly, and re-ordered what production builds next
+// (and un-pulls a kit if the on-deck cab changes). Now the button says what it
+// does (Build sooner / Build later) and the first tap spells out the exact
+// swap (Build 23697 BEFORE 23659? Tap again) — same /api/kit/move call after.
+const whOrd289 = (o) => String(o == null ? "" : o).replace(/[^A-Za-z0-9. -]/g, "");
 const whRow288 = (q, i, r, canAct) => {
   const dis = canAct ? "" : " disabled";
   const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
@@ -2244,8 +2251,8 @@ const whRow288 = (q, i, r, canAct) => {
           ${isOk ? `<button class="b"${dis} onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo verify</button>` : ""}
           ${!isShort ? `<button class="b red"${dis} onclick="openNote288('${q.id}',true)">Mark short</button>` : `<button class="b"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
           <button class="b mv"${dis} onclick="openNote288('${q.id}',false)">${q.kit_note ? "Edit note" : "Add note"}</button>
-          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv"${dis} title="Move this cab earlier in the line-up" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">&#9650; Up</button>` : ""}
-          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv"${dis} title="Move this cab later in the line-up" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">&#9660; Down</button>` : ""}
+          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot earlier" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} BEFORE ${whOrd289(r.queue[i - 1].order_number)}? Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this))">&#9650; Build sooner</button>` : ""}
+          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot later" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} AFTER ${whOrd289(r.queue[i + 1].order_number)}?${i === pullIdx && q.kit_pull_started_at ? " Cancels the pull." : ""} Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this))">&#9660; Build later</button>` : ""}
         </div>
         ${q.kit_note ? `<div class="qnote${isShort ? " sh" : ""}">${isShort ? "Missing: " : "Note: "}${whEsc288(q.kit_note)}</div>` : ""}
         ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div class="qnote" style="color:#ffd60a">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
@@ -2343,7 +2350,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
     ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
     ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
-    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order</div>
+    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first)</div>
       ${r.queue.map((q, i) => whRow288(q, i, r, clockedIn || emp.role === "manager" || emp.role === "admin")).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
   </div>`).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
@@ -2375,6 +2382,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     const i = document.getElementById("kn-" + id); if (i) i.focus(); }
   function closeNote288(id){ const p = document.getElementById("np-" + id); if (p) p.style.display = "none"; }
   function noteOpen288(){ return [...document.querySelectorAll(".np")].some(function(p){ return p.style.display !== "none"; }); }
+  function armMv288(btn, msg, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const o = btn.innerHTML; btn.textContent = msg; btn.style.borderColor = "#ffd60a"; btn.style.color = "#ffd60a"; setTimeout(function(){ btn.dataset.armed = ""; btn.innerHTML = o; btn.style.borderColor = ""; btn.style.color = ""; }, 5000); } }
   function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   async function post(url, payload, btn){
     if (btn) btn.disabled = true;
