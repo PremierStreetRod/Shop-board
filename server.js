@@ -2216,28 +2216,102 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
 // see every line's state + what's on deck, verify kits (the three-state
 // gate), reorder the upcoming queue, and run the two-step pull task whose
 // "Delivered" tap starts the cab's clock on production's side.
+// ---------- Block 288 (Daniel, 10/13): THE WAREHOUSE SCREEN, READABLE ----------
+// Looks only — every button posts to the same endpoint with the same payload
+// and the same rules as before (audited first: clock gate, pin rules, on-deck
+// pull, two-step deliver). What changed: one compact row per waiting cab, the
+// next cab stands out, the status is a colour, the buttons say what they do,
+// the parts note stays tucked away until it is needed (Mark short opens it —
+// that is the second tap the old "Sure? Tap again" used to be), the queue is
+// greyed out while a warehouse tech is off the clock (the server refused those
+// taps anyway), and the pull time reads shop time instead of UTC.
+const whTime288 = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); if (isNaN(d.getTime())) return "";
+  let h = d.getUTCHours(); const m = String(d.getUTCMinutes()).padStart(2, "0"); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return h + ":" + m + " " + ap; };
+const whEsc288 = (x) => escH(x).split('"').join("&quot;");
+const whRow288 = (q, i, r, canAct) => {
+  const dis = canAct ? "" : " disabled";
+  const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
+  const isNext = i === (pullIdx < 0 ? 0 : pullIdx);
+  const busy = r.active || r.awaiting[0] || r.rework[0];
+  const isShort = q.kit_status === "short", isOk = q.kit_status === "verified";
+  return `<div class="qr${isNext ? " next" : ""}">
+        <div class="qpos">${isNext ? "&#9654;" : i + 1}</div>
+        <div class="qinfo">${isNext ? `<span class="tag blu">NEXT UP</span>` : ""}<span class="o">Order ${q.order_number}</span>${q.family ? `<span class="f">${whEsc288(q.family)}</span>` : ""}
+          <span class="s">${q.cab_number ? `Cab #${q.cab_number}` : ""}${q.cab_number && q.part_number ? " &middot; " : ""}${q.part_number || ""}</span></div>
+        <div class="qst">${isOk ? '<span class="chip ok">&#10003; Kit verified</span>' : isShort ? '<span class="chip short">Short &mdash; parts missing</span>' : '<span class="chip unv">Not checked yet</span>'}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; Held by the office</span>' : ""}</div>
+        <div class="qact">
+          ${!isOk ? `<button class="b grn"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">${isShort ? "Parts are here &mdash; verify kit" : isNext ? "Verify kit &mdash; all parts here" : "Verify kit"}</button>` : ""}
+          ${isOk ? `<button class="b"${dis} onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo verify</button>` : ""}
+          ${!isShort ? `<button class="b red"${dis} onclick="openNote288('${q.id}',true)">Mark short</button>` : `<button class="b"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
+          <button class="b mv"${dis} onclick="openNote288('${q.id}',false)">${q.kit_note ? "Edit note" : "Add note"}</button>
+          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv"${dis} title="Move this cab earlier in the line-up" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">&#9650; Up</button>` : ""}
+          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv"${dis} title="Move this cab later in the line-up" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">&#9660; Down</button>` : ""}
+        </div>
+        ${q.kit_note ? `<div class="qnote${isShort ? " sh" : ""}">${isShort ? "Missing: " : "Note: "}${whEsc288(q.kit_note)}</div>` : ""}
+        ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div class="qnote" style="color:#ffd60a">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
+        <div class="np" id="np-${q.id}" style="display:none">
+          <div class="nplab">What's missing, and when is it expected? <span style="opacity:.6">(stays with warehouse)</span></div>
+          <input id="kn-${q.id}" maxlength="200" value="${whEsc288(q.kit_note)}" placeholder="e.g. LH drip rail — due Thursday">
+          <div class="npb">${!isShort ? `<button class="b redsolid nps"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this)">Mark short &mdash; alert the office</button>` : ""}
+            <button class="b npn"${dis} onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button>
+            <button class="b mv" onclick="closeNote288('${q.id}')">Cancel</button></div>
+        </div>
+        ${i === pullIdx && (q.kit_status === "verified" || q.kit_status === "short") ? `
+          <div class="pull"${isShort ? ' style="border-color:#ff9f0a"' : ""}>${isShort ? `<div style="color:#ff9f0a;font-weight:700;margin-bottom:8px">SHORT — parts still missing${q.kit_note ? `: ${String(q.kit_note).replace(/[&<>"]/g, "")}` : ""}. Delivering starts the cab anyway — management gets notified, and this cab stays on the still-owed list below until the parts arrive.</div>` : ""}${q.kit_pull_started_at
+            ? (busy
+              ? `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep" style="color:#ffd60a"><b>Step 2 waits</b> &mdash; line busy: ORDER ${busy.order_number} is still on it (${String(busy.state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</div>
+               <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
+              : `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep"><b>Step 2</b> &mdash; when it's all on the line:</div>
+               <button class="b grn big"${dis} onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${isShort ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}</button>
+               <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
+            : `<div class="pstep"><b>Step 1</b> &mdash; when you begin gathering this kit:</div><button class="b grn big"${dis} onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">${isShort ? "Pull started — gathering what we have" : "Pull started — gathering the kit"}</button>`}
+          </div>` : ""}
+      </div>`;
+};
 const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-  .lane h3{margin:0 0 8px}
+  .lane h3{margin:0 0 10px;font-size:1.15rem}
   .qrow{padding:6px 0;border-bottom:1px solid var(--line)}
-  .chip{display:inline-block;border-radius:8px;padding:2px 10px;font-size:.8rem;font-weight:700;margin-left:8px}
-  .ok{background:#1d3a24;color:#30d158}.short{background:#3a1200;color:#ff9f0a}.unv{background:#3a3a3c;color:#aaa}
-  .b{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;font-size:.85rem;cursor:pointer;margin-left:6px}
-  .b.grn{background:#1d3a24}.b.red{background:var(--red)}
-  .pull{border:1px solid #30d158;border-radius:10px;padding:10px;margin-top:8px}
+  .chip{display:inline-block;border-radius:8px;padding:3px 10px;font-size:.8rem;font-weight:700;white-space:nowrap}
+  .ok{background:#1d3a24;color:#30d158}.short{background:#3a1200;color:#ff9f0a}.unv{background:#3a3a3c;color:#c7c7cc}
+  .b{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:8px 13px;font-size:.88rem;cursor:pointer;margin-left:6px;min-height:38px}
+  .b.grn{background:#1f5a30}.b.red{background:#3a1512;color:#ff8a80;border:1px solid #7a2a22}.b.redsolid{background:var(--red)}
+  .b.mv{background:transparent;border:1px solid #48484a;color:#aeaeb2}
+  .b.big{padding:12px 18px;font-size:.98rem;font-weight:700}
+  .b:disabled{opacity:.35;cursor:not-allowed}
+  .now{background:#16281b;border-left:4px solid #30d158;border-radius:8px;padding:10px 12px;margin-bottom:6px}
+  .tag{display:block;font-size:.7rem;font-weight:800;letter-spacing:.08em;color:#30d158;margin-bottom:2px}.tag.blu{color:#64a8ff}
+  .qhead{margin:16px 0 2px;font-size:.75rem;font-weight:800;letter-spacing:.08em;color:#8e8e93;text-transform:uppercase}
+  .qr{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:11px 0;border-top:1px solid var(--line)}
+  .qr.next{border:1px solid #3d6ea8;background:#141f2e;border-radius:12px;padding:12px;margin:8px 0}
+  .qr.next + .qr{border-top:none}
+  .qpos{flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:#3a3a3c;color:#c7c7cc;font-weight:800;font-size:.85rem;display:flex;align-items:center;justify-content:center}
+  .qr.next .qpos{background:#3d6ea8;color:#fff}
+  .qinfo{flex:1 1 190px;min-width:0}
+  .qinfo .o{font-weight:800;font-size:1.03rem}.qinfo .f{font-weight:600;margin-left:8px;color:#e5e5ea}.qinfo .s{display:block;color:#8e8e93;font-size:.8rem;margin-top:2px}
+  .qst{flex:0 0 auto}
+  .qact{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+  .qact .b,.np .b,.pull .b{margin-left:0}
+  .qnote{flex:1 1 100%;font-size:.85rem;color:#c7c7cc}.qnote.sh{color:#ff9f0a;font-weight:600}
+  .np{flex:1 1 100%;background:#111;border:1px solid var(--line);border-radius:10px;padding:12px}
+  .nplab{font-size:.88rem;font-weight:600}
+  .np input{width:100%;box-sizing:border-box;background:#000;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:16px;margin:8px 0}
+  .npb{display:flex;flex-wrap:wrap;gap:6px}
+  .pull{flex:1 1 100%;border:1px solid #30d158;border-radius:10px;padding:12px}
+  .pstep{margin-bottom:8px;font-size:.92rem}
+  .ro288{background:#3a2f10;color:#ffd60a;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-weight:700;text-align:center}
 </style></head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
-  <h2>Warehouse — ${emp.first_name}</h2>
   <div class="lane">
     ${clockedIn
-      ? `<b>ON THE CLOCK — Warehouse</b><br><span style="opacity:.6;font-size:.9rem">Clocking out — what kind?</span><br>
+      ? `<span style="opacity:.75;font-size:.9rem;font-weight:600">Clocking out? Pick what kind:</span><br>
          ${ah.open ? `<div id="ahwrapW107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:8px auto 4px;max-width:560px;text-align:left">
            <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
            <input id="wrapW106" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px">
@@ -2261,36 +2335,16 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
            <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
          </div>` : ""}`}
   </div>
+  ${!clockedIn && emp.role !== "manager" && emp.role !== "admin" ? `<div class="ro288">You're not clocked in &mdash; you can read the line-up, but the buttons stay off until you clock in.</div>` : ""}
   ${rows.map((r) => `
   <div class="lane">
     <h3>${r.line.name}</h3>
-    ${r.active ? `<div style="opacity:.8">Working now: <b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} (${r.active.state.replace(/_/g, " ")})</div>` : ""}
+    ${r.active ? `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}</div>` : ""}
     ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
     ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
     ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
-    ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Up next (top goes first):</div>
-      ${r.queue.map((q, i) => `<div class="qrow"><b>ORDER ${q.order_number}</b>${q.cab_number ? ` · Cab #${q.cab_number}` : ""} · ${q.part_number || ""}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; HELD — front office</span>' : ""}
-        ${q.kit_status === "verified" ? '<span class="chip ok">KIT ✓ VERIFIED</span>' : q.kit_status === "short" ? '<span class="chip short">SHORT — missing parts</span>' : '<span class="chip unv">NOT VERIFIED</span>'}
-        ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div style="margin-top:6px;color:#ffd60a;font-size:.85rem">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
-        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px">
-          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this)">▲</button>` : ""}
-          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b" onclick="post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this)">▼</button>` : ""}
-          ${q.kit_status !== "verified" ? `<button class="b grn" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts ✓</button>` : ""}
-          ${q.kit_status === "verified" ? `<button class="b" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo verify</button>` : ""}
-          ${q.kit_status !== "short" ? `<button class="b red" onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this))">Short</button>` : `<button class="b" onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
-        </div>
-        <div style="margin-top:6px"><input id="kn-${q.id}" value="${String(q.kit_note || "").replace(/"/g, "&quot;")}" placeholder="parts note — what's short, when it's expected (stays with warehouse)" style="width:60%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:.8rem"> <button class="b" onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button></div>
-        ${i === ((r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0) && (q.kit_status === "verified" || q.kit_status === "short") ? `
-          <div class="pull"${q.kit_status === "short" ? ' style="border-color:#ff9f0a"' : ""}>${q.kit_status === "short" ? `<div style="color:#ff9f0a;font-weight:700;margin-bottom:6px">SHORT — parts still missing${q.kit_note ? `: ${String(q.kit_note).replace(/[&<>"]/g, "")}` : ""}. Delivering starts the cab anyway — management gets notified, and this cab stays on the still-owed list below until the parts arrive.</div>` : ""}${q.kit_pull_started_at
-            ? ((r.active || r.awaiting[0] || r.rework[0])
-              ? `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC. <span style="color:#ffd60a">Line busy — ORDER ${(r.active || r.awaiting[0] || r.rework[0]).order_number} is still on it (${String((r.active || r.awaiting[0] || r.rework[0]).state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</span>
-               <button class="b" onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
-              : `Pull started ${q.kit_pull_started_at.slice(11, 16)} UTC — deliver when it's all on the line:
-               <button class="b grn" onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${q.kit_status === "short" ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}</button>
-               <button class="b" onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
-            : `<button class="b grn" onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">${q.kit_status === "short" ? "Pull started — gathering what we have" : "Pull started — gathering the kit"}</button>`}
-          </div>` : ""}
-      </div>`).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
+    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order</div>
+      ${r.queue.map((q, i) => whRow288(q, i, r, clockedIn || emp.role === "manager" || emp.role === "admin")).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
   </div>`).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
     <h3>Started short — parts still owed</h3>
@@ -2313,6 +2367,14 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   // Same sturdy patterns as the consoles: two-tap arm on anything that
   // changes another team's world; plain posts; full reload on success.
   function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
+  // Block 288: the parts note lives in a tucked-away panel. "Mark short" opens
+  // it with the red confirm showing; "Add note" opens it with Save note only.
+  function openNote288(id, asShort){ const p = document.getElementById("np-" + id); if (!p) return;
+    p.style.display = "block"; const s = p.querySelector(".nps"); if (s) s.style.display = asShort ? "" : "none";
+    const n = p.querySelector(".npn"); if (n) n.textContent = asShort ? "Save note only" : "Save note";
+    const i = document.getElementById("kn-" + id); if (i) i.focus(); }
+  function closeNote288(id){ const p = document.getElementById("np-" + id); if (p) p.style.display = "none"; }
+  function noteOpen288(){ return [...document.querySelectorAll(".np")].some(function(p){ return p.style.display !== "none"; }); }
   function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   async function post(url, payload, btn){
     if (btn) btn.disabled = true;
@@ -2394,6 +2456,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   setInterval(() => { const f = document.activeElement, wp107 = document.getElementById("ahwrapW107");
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp107 && wp107.style.display !== "none") return;
+    if (noteOpen288()) return;   // Block 288: an open parts-note panel is mid-task
     location.reload(); }, 60000); // the board keeps itself fresh — never mid-typing
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
   // reorders a line (queue_pos) or a cab changes state, reflect it here within
@@ -2401,7 +2464,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   // /api/queue/state version hash the White Board polls, so the two screens
   // never fork. Skips a cycle while a field is focused (60s backstop covers it).
   var QVER=null;
-  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')){location.reload();}}}).catch(function(){});}
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
 </script></body></html>`;
 
@@ -9057,7 +9120,7 @@ http.createServer(async (req, res) => {
       if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
         // Block 212 (v201 SPEED): independent reads fired together.
-        const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254] = await Promise.all([
+        const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254, prodW288] = await Promise.all([
           db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
           db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
           db(`line?select=id,name&enabled=is.true&order=id`),
@@ -9071,8 +9134,11 @@ http.createServer(async (req, res) => {
           // short and hasn't had the parts confirmed since. Shorts are rare;
           // this list is naturally tiny (any growth is itself the signal).
           db(`build?select=id,order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),
+          db(`product?select=part_number,family`).catch(() => []),   // Block 288: plain cab type on each row (display only — a failed read just leaves it blank)
         ]);
         const [lastW] = lastWRows;
+        const famW288 = Object.fromEntries((prodW288 || []).map((p) => [p.part_number, p.family]));
+        buildsW.forEach((b) => { b.family = famW288[b.part_number] || ""; });
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
           awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
