@@ -4114,6 +4114,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${tcard191.selEmp ? `
     <div style="margin-bottom:12px"><span style="opacity:.65">Reason on the record for changes:</span><br>
       <input id="tcc-note" value="punch clock correction" maxlength="200" style="width:100%;max-width:420px;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:1rem"></div>
+    <div style="opacity:.6;font-size:.88rem;margin:-4px 0 12px"><b>Save</b> fixes a time. <b>Remove stint</b> takes a whole IN&rarr;OUT off the day (kept in the record, never deleted). <b>Add hours</b> puts a missing one back.</div>
     <style>
       /* Block 293 (Daniel's audit of Kailey's screen): quieter cards. Save stays
          dim until a time actually changes; Remove is small and outlined at the
@@ -4122,6 +4123,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       .tcs293{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
       .tcs293 .sv{opacity:.45;transition:opacity .15s}.tcs293 .sv.lit{opacity:1;background:#1d5a2d!important}
       .tcs293 .rm{margin-left:auto;background:transparent!important;border:1px solid #5a1d1d!important;color:#ff8a80!important;padding:5px 10px!important;font-size:.85rem!important}
+      .tcs293 .rm.armed294{color:#ffd60a!important;border-color:#ffd60a!important}
       .tco293{background:none;border:none;color:#8e8e93;cursor:pointer;font-size:.9rem;padding:0;text-decoration:underline dotted}
       .tcd293>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;opacity:.85}
       .tcd293>summary::-webkit-details-marker{display:none}.tcd293[open]>summary{display:none}
@@ -4158,15 +4160,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         ${s.out ? `OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">— still on the clock</span>`}
         <button class="btn gray sv" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this,'${s.mids.join(",")}')">Save</button>
         ${s.out ? (s.midIds.length
-          ? `<button class="btn rm" onclick="armM(this,()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this))">Remove</button>`
-          : `<button class="btn rm" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>`) : ""}
+          ? `<button class="btn rm" title="Takes this whole IN→OUT off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove stint</button>`
+          : `<button class="btn rm" title="Takes this whole IN→OUT off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove stint</button>`) : ""}
       </div>`).join("")}
       ${d.orphans.length ? `<div style="opacity:.6;font-size:.85rem;margin-top:10px">The extra punches below are usually an accidental double-tap — they don't count toward hours. Remove clears them.</div>` : ""}
       ${d.orphans.map((o) => `
       <div class="tcs293">
         extra ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <button class="btn gray sv" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${o.id}','${o.hhmm}']],this)">Save</button>
-        <button class="btn rm" onclick="armM(this,()=>tccVoidOne('${d.ds}','${o.id}',this))">Remove</button>
+        <button class="btn rm" title="Clears this one stray punch (kept in the record, not deleted)" onclick="armR294(this,'the extra ${o.kind === "clock_in" ? "IN" : "OUT"} at ${tcc12_293(o.hhmm)}',()=>tccVoidOne('${d.ds}','${o.id}',this,'the extra ${o.kind === "clock_in" ? "IN" : "OUT"} at ${tcc12_293(o.hhmm)}'))">Remove extra punch</button>
       </div>`).join("")}
       <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
         Add hours: IN <input type="time" id="tccai-${d.ds}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
@@ -4411,21 +4413,21 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   }
   // Block 192: Remove is ONE atomic server call now (void_pair) — the old
   // two-call version could die halfway and strand a half-removed stint.
-  async function tccRemove(ds, inId, outId, btn) {
+  async function tccRemove(ds, inId, outId, btn, what294) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return location.reload();
+    if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "the stint") + " — hours updated");
     btn.disabled = false;
   }
   // Block 199: Remove for a stint that spans line moves — the whole punch
   // chain (edges + interior switch pairs) voids as ONE atomic action.
-  async function tccRemoveRun(ds, idsCsv, btn) {
+  async function tccRemoveRun(ds, idsCsv, btn, what294) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void_run", ids: idsCsv.split(","), note: tccNote() })) return location.reload();
+    if (await tccCall(ds, { action: "void_run", ids: idsCsv.split(","), note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "the stint") + " — hours updated");
     btn.disabled = false;
   }
-  async function tccVoidOne(ds, id, btn) {
+  async function tccVoidOne(ds, id, btn, what294) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void", punch_id: id, note: tccNote() })) return location.reload();
+    if (await tccCall(ds, { action: "void", punch_id: id, note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "the extra punch") + " — hours updated");
     btn.disabled = false;
   }
   async function tccAdd(ds, btn) {
@@ -4555,6 +4557,13 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
   function tccLit293(inp){ var row = inp.closest(".tcs293"); if (!row) return; var sv = row.querySelector(".sv"); if (sv) sv.classList.add("lit"); }   // Block 293: Save lights up once a time changes
+  // Block 294 (Daniel: "WHAT is its function… very unexplanatory"): the arm tap
+  // names exactly what goes — "Remove 7:00 AM–11:00 AM? Tap again" — and after
+  // the reload the day card says what happened instead of silently refreshing.
+  function armR294(btn, what, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const o294 = btn.textContent; btn.textContent = "Remove " + what + "? Tap again"; btn.classList.add("armed294"); setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o294; btn.classList.remove("armed294"); }, 5000); } }
+  function tccDone294(ds, msg){ try { sessionStorage.setItem("tccdone294", JSON.stringify({ ds, msg })); } catch (e) {} location.reload(); }
+  (function(){ try { const r = JSON.parse(sessionStorage.getItem("tccdone294") || "null"); sessionStorage.removeItem("tccdone294"); if (!r) return;
+    const el = document.getElementById("tccmsg-" + r.ds); if (el) { el.style.color = "#30d158"; el.textContent = "\u2713 " + r.msg; el.scrollIntoView({ block: "center" }); setTimeout(() => { el.textContent = ""; el.style.color = "#ff6b5e"; }, 8000); } } catch (e) {} })();
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   // Q85: open a fix job on a returned/kicked-back cab.
   async function openFix(){
