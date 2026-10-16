@@ -3832,6 +3832,18 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
       : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
     <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — your checked boxes are SAVED, and the rework note fills in for you.</div>
   </div>`;
+// ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
+// clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
+// button is for catching it sooner. Audited (who forced it is logged).
+// Block 293: pulled out as a helper so the Accounting console can place it
+// LAST (Daniel: "she doesn't care who's on the clock... move it below").
+const tcc12_293 = (hhmm) => { if (!hhmm) return ""; const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`; };   // Block 293: folded-day summaries read 7:00 AM–11:00 AM
+const ocLane293 = (onClock) => onClock.length ? `
+  <div class="lane" id="oc"><h3>On the clock</h3>
+    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
+  </div>` : "";
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -3877,15 +3889,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   </div>`}
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : acct189 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— time &amp; pay</span>` : ""}</h2>
-  ${!insp188 && onClock.length ? `
-  <!-- ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
-       clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
-       button is for catching it sooner. Audited (who forced it is logged). -->
-  <div class="lane" id="oc"><h3>On the clock</h3>
-    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
-      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
-  </div>` : ""}
+  ${!insp188 && !acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM (after the timecard editor) — Kailey doesn't work from it -->
   ${!insp188 && !acct189 && longRunners.length ? `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
@@ -4096,13 +4100,36 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     <p style="margin:0 0 12px">
       <select style="font-size:1.1rem;padding:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:10px" onchange="if(this.value)location.href='/manager?tc_emp='+this.value">
         <option value="">— pick a person —</option>
-        ${tcard191.emps.map((e) => `<option value="${e.id}"${tcard191.selEmp === e.id ? " selected" : ""}>${e.first_name} ${e.last_name}${e.pay_type === "salary" ? " — salary" : e.pay_type === "na" ? " — owner" : ""}</option>`).join("")}
+        ${(() => { /* Block 293 (Daniel): three groups, each alphabetical — hourly (her whole job), then salaried, then owners */
+          const opt = (e) => `<option value="${e.id}"${tcard191.selEmp === e.id ? " selected" : ""}>${e.first_name} ${e.last_name}${e.pay_type === "salary" ? " — salary" : e.pay_type === "na" ? " — owner" : ""}</option>`;
+          const byName = (a, b) => (a.first_name + " " + a.last_name).localeCompare(b.first_name + " " + b.last_name);
+          const hourly = tcard191.emps.filter((e) => e.pay_type !== "salary" && e.pay_type !== "na").sort(byName);
+          const salaried = tcard191.emps.filter((e) => e.pay_type === "salary").sort(byName);
+          const owners = tcard191.emps.filter((e) => e.pay_type === "na").sort(byName);
+          return hourly.map(opt).join("")
+            + (salaried.length ? `<option disabled>── salaried ──</option>` + salaried.map(opt).join("") : "")
+            + (owners.length ? `<option disabled>── owners ──</option>` + owners.map(opt).join("") : ""); })()}
       </select>
     </p>
     ${tcard191.selEmp ? `
     <div style="margin-bottom:12px"><span style="opacity:.65">Reason on the record for changes:</span><br>
       <input id="tcc-note" value="punch clock correction" maxlength="200" style="width:100%;max-width:420px;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:1rem"></div>
-    ${tcard191.days.map((d) => `
+    <style>
+      /* Block 293 (Daniel's audit of Kailey's screen): quieter cards. Save stays
+         dim until a time actually changes; Remove is small and outlined at the
+         right edge (still two-tap armed); sick/vacation tuck behind one line on
+         worked days; days older than the last five fold to a one-line summary. */
+      .tcs293{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+      .tcs293 .sv{opacity:.45;transition:opacity .15s}.tcs293 .sv.lit{opacity:1;background:#1d5a2d!important}
+      .tcs293 .rm{margin-left:auto;background:transparent!important;border:1px solid #5a1d1d!important;color:#ff8a80!important;padding:5px 10px!important;font-size:.85rem!important}
+      .tco293{background:none;border:none;color:#8e8e93;cursor:pointer;font-size:.9rem;padding:0;text-decoration:underline dotted}
+      .tcd293>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;opacity:.85}
+      .tcd293>summary::-webkit-details-marker{display:none}.tcd293[open]>summary{display:none}
+    </style>
+    ${tcard191.days.map((d, i293) => { const fold293 = i293 >= 5 && d.ds !== tcard191.selDate && !d.open;   /* Block 293: last 5 days open; older days fold unless targeted from the oddities lane */
+      const summ293 = d.stints.map((s) => `${tcc12_293(s.in.hhmm)}–${s.out ? tcc12_293(s.out.hhmm) : "open"}`).join(", ");
+      return `
+    ${fold293 ? `<details class="tcd293"><summary><b>${d.dow} ${d.ds.slice(5).replace("-", "/")}</b><span style="opacity:.8">${d.hours ? `${d.hours} hrs` : d.off216 ? (/sick/i.test(d.off216.reason) ? "&#129298; sick" : /vacation/i.test(d.off216.reason) ? "&#127796; vacation" : "time off") : "no hours"}${summ293 ? ` &middot; ${summ293}` : ""}</span><span style="opacity:.5;font-size:.85rem">tap to open</span></summary>` : ""}
     <div style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px${d.stints.length || d.orphans.length ? "" : ";opacity:.7"}">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap">
         <b style="font-size:1.1rem">${d.dow} ${d.ds.slice(5).replace("-", "/")}</b>
@@ -4114,7 +4141,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <span style="color:${/vacation/i.test(d.off216.reason) ? "#5eaeff" : "#30d158"};font-weight:700">${/sick/i.test(d.off216.reason) ? `&#129298; SICK recorded — ${d.off216.offHrs} hrs on the worksheet` : /vacation/i.test(d.off216.reason) ? `&#127796; VACATION recorded — ${d.off216.offHrs} hrs on the worksheet` : `Time off recorded — ${String(d.off216.reason).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))} (${d.off216.offHrs} hrs)`}</span>
         <button class="b" style="padding:5px 12px" onclick="tccSickCancel216('${d.off216.id}','${d.ds}',this)">Remove</button>
       </div>` : `
-      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${d.stints.length || d.orphans.length ? `<div style="margin-top:8px"><button class="tco293" onclick="var x=document.getElementById('tccoff-${d.ds}');x.style.display=x.style.display==='none'?'flex':'none'">&#129298; Sick &middot; &#127796; Vacation</button></div>` : ""}
+      <div id="tccoff-${d.ds}" style="margin-top:8px;display:${d.stints.length || d.orphans.length ? "none" : "flex"};align-items:center;gap:8px;flex-wrap:wrap">
         <span style="opacity:.75">&#129298; Sick time:</span>
         <input id="tccsh-${d.ds}" type="number" value="8" min="0.25" max="8" step="0.25" style="width:4.5em;font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <span style="opacity:.75">hrs</span>
@@ -4125,20 +4153,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccVac235('${d.ds}',this)">Add vacation</button>
       </div>`}
       ${d.stints.map((s) => `
-      <div style="margin-top:10px">
-        IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
-        ${s.out ? `&nbsp;OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">&nbsp;— still on the clock</span>`}
-        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this,'${s.mids.join(",")}')">Save times</button>
+      <div class="tcs293">
+        IN <input type="time" id="tcct-${s.in.id}" value="${s.in.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        ${s.out ? `OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">— still on the clock</span>`}
+        <button class="btn gray sv" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this,'${s.mids.join(",")}')">Save</button>
         ${s.out ? (s.midIds.length
-          ? `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this))">Remove</button>`
-          : `<button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>`) : ""}
+          ? `<button class="btn rm" onclick="armM(this,()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this))">Remove</button>`
+          : `<button class="btn rm" onclick="armM(this,()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this))">Remove</button>`) : ""}
       </div>`).join("")}
       ${d.orphans.length ? `<div style="opacity:.6;font-size:.85rem;margin-top:10px">The extra punches below are usually an accidental double-tap — they don't count toward hours. Remove clears them.</div>` : ""}
       ${d.orphans.map((o) => `
-      <div style="margin-top:10px">
-        extra ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
-        <button class="btn gray" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${o.id}','${o.hhmm}']],this)">Save</button>
-        <button class="btn" style="padding:8px 16px;margin-top:0" onclick="armM(this,()=>tccVoidOne('${d.ds}','${o.id}',this))">Remove</button>
+      <div class="tcs293">
+        extra ${o.kind === "clock_in" ? "IN" : "OUT"} <input type="time" id="tcct-${o.id}" value="${o.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
+        <button class="btn gray sv" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${o.id}','${o.hhmm}']],this)">Save</button>
+        <button class="btn rm" onclick="armM(this,()=>tccVoidOne('${d.ds}','${o.id}',this))">Remove</button>
       </div>`).join("")}
       <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
         Add hours: IN <input type="time" id="tccai-${d.ds}" step="60" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
@@ -4156,10 +4184,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <input id="tccds-${d.ds}" type="time" value="07:00" step="900" style="font-size:1rem;padding:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">
         <button class="b" style="padding:5px 12px;opacity:.85" onclick="tccDay238('${d.ds}',this)">Add day</button>
       </div>`}
-    </div>`).join("")}
+    </div>${fold293 ? `</details>` : ""}`; }).join("")}
     <div style="opacity:.55;font-size:.9rem">Times are Phoenix. A day with lunch is two rows — add 07:00–11:00, then 12:00–16:00. <b>Whole day</b> is for anyone who doesn't punch a clock (Scott): one tap enters the day as normal worked hours from the start time you set. Every change lands on the timecard with your reason. You can reach back through all of LAST pay period; anything older needs Daniel.</div>
     ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see this pay period and last pay period of hours.</div>`}
   </div>` : ""}
+  ${acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Kailey's On-the-clock lane lives at the bottom -->
   ${!insp188 && tc ? `
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
        clock can retire. Pick a person and a Phoenix day; MOVE a punch that
@@ -4525,6 +4554,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     btn.disabled = false;
   }
   // Q113: close/reopen a line — two-tap armed, since it stops clock-ins.
+  function tccLit293(inp){ var row = inp.closest(".tcs293"); if (!row) return; var sv = row.querySelector(".sv"); if (sv) sv.classList.add("lit"); }   // Block 293: Save lights up once a time changes
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   // Q85: open a fix job on a returned/kicked-back cab.
   async function openFix(){
@@ -11015,7 +11045,7 @@ http.createServer(async (req, res) => {
               off216: to216 ? { id: to216.id, reason: to216.reason || "time off", offHrs: to216.hours != null ? Number(to216.hours) : 8 } : null });
           }
         }
-        tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191 };
+        tcard191 = { emps: tcEmps, selEmp: tcEmpSel, defLine: defLine189 || SHOP_LINE_ID, days: days191, selDate: url.searchParams.get("tc_date") || "" };   // Block 293: a day targeted from the oddities lane never folds
       }
       // Block 215 (Daniel): the PAYROLL ODDITIES scan for the accounting view —
       // the tcard editor's alternation math run over EVERYONE's last 14 days so
