@@ -2340,7 +2340,7 @@ const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
       var shared = /(^|; )sb_shared_ui=1/.test(document.cookie || "");
       if (a && autoOut && shared) {
         var left = 4, line = document.createElement("div"); line.style.cssText = "font-size:.9rem;font-weight:400;margin-top:6px;opacity:.9";
-        var tick = function(){ line.innerHTML = "Back to sign-in in " + left + "\u2026 &nbsp; <a href=\"#\" id=\"stay292\" style=\"color:#fff;text-decoration:underline\">Stay signed in</a>"; var st = document.getElementById("stay292"); if (st) st.onclick = function(ev){ ev.preventDefault(); clearInterval(tm); a.remove(); }; };
+        var tick = function(){ line.innerHTML = 'Back to sign-in in ' + left + '\u2026 &nbsp; <a href="#" id="stay292" style="color:#fff;text-decoration:underline">Stay signed in</a>'; var st = document.getElementById("stay292"); if (st) st.onclick = function(ev){ ev.preventDefault(); clearInterval(tm); a.remove(); }; };
         a.appendChild(line); tick();
         var tm = setInterval(function(){ left--; if (left <= 0) { clearInterval(tm); location.replace("/logout"); return; } tick(); }, 1000);
       } else if (a) setTimeout(function(){ a.remove(); }, 4000);
