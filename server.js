@@ -4114,7 +4114,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${tcard191.selEmp ? `
     <div style="margin-bottom:12px"><span style="opacity:.65">Reason on the record for changes:</span><br>
       <input id="tcc-note" value="punch clock correction" maxlength="200" style="width:100%;max-width:420px;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:1rem"></div>
-    <div style="opacity:.6;font-size:.88rem;margin:-4px 0 12px"><b>Save</b> fixes a time. <b>Remove stint</b> takes a whole IN&rarr;OUT off the day (kept in the record, never deleted). <b>Add hours</b> puts a missing one back.</div>
+    <div style="opacity:.6;font-size:.88rem;margin:-4px 0 12px"><b>Save</b> fixes a time. <b>Remove this IN/OUT</b> takes that whole IN&rarr;OUT pair off the day (kept in the record, never deleted). <b>Add hours</b> puts a missing one back.</div>
     <style>
       /* Block 293 (Daniel's audit of Kailey's screen): quieter cards. Save stays
          dim until a time actually changes; Remove is small and outlined at the
@@ -4160,8 +4160,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         ${s.out ? `OUT <input type="time" id="tcct-${s.out.id}" value="${s.out.hhmm}" step="60" oninput="tccLit293(this)" style="font-size:1.05rem;padding:8px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px">` : `<span style="color:#30d158;font-weight:700">— still on the clock</span>`}
         <button class="btn gray sv" style="padding:8px 16px;margin-top:0" onclick="tccSave('${d.ds}',[['${s.in.id}','${s.in.hhmm}']${s.out ? `,['${s.out.id}','${s.out.hhmm}']` : ""}],this,'${s.mids.join(",")}')">Save</button>
         ${s.out ? (s.midIds.length
-          ? `<button class="btn rm" title="Takes this whole IN→OUT off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove stint</button>`
-          : `<button class="btn rm" title="Takes this whole IN→OUT off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove stint</button>`) : ""}
+          ? `<button class="btn rm" title="Takes this whole IN→OUT pair off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemoveRun('${d.ds}','${[s.in.id, ...s.midIds, s.out.id].join(",")}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove this IN/OUT</button>`
+          : `<button class="btn rm" title="Takes this whole IN→OUT pair off the day (kept in the record, not deleted)" onclick="armR294(this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}',()=>tccRemove('${d.ds}','${s.in.id}','${s.out.id}',this,'${tcc12_293(s.in.hhmm)}–${tcc12_293(s.out.hhmm)}'))">Remove this IN/OUT</button>`) : ""}
       </div>`).join("")}
       ${d.orphans.length ? `<div style="opacity:.6;font-size:.85rem;margin-top:10px">The extra punches below are usually an accidental double-tap — they don't count toward hours. Remove clears them.</div>` : ""}
       ${d.orphans.map((o) => `
@@ -4399,7 +4399,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       const vo = (document.getElementById("tcct-" + pairs[1][0]) || {}).value;
       if ((vi && vi > mm[0]) || (vo && vo < mm[mm.length - 1])) {
         const m199 = document.getElementById("tccmsg-" + ds);
-        if (m199) m199.textContent = "This stint has a line move at " + (vi && vi > mm[0] ? mm[0] : mm[mm.length - 1]) + " inside it — keep IN before it and OUT after it. Wrong altogether? Remove the stint, then Add the right hours.";
+        if (m199) m199.textContent = "This IN/OUT has a line move at " + (vi && vi > mm[0] ? mm[0] : mm[mm.length - 1]) + " inside it — keep IN before it and OUT after it. Wrong altogether? Remove this IN/OUT, then Add the right hours.";
         return;
       }
     }
@@ -4415,14 +4415,14 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   // two-call version could die halfway and strand a half-removed stint.
   async function tccRemove(ds, inId, outId, btn, what294) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "the stint") + " — hours updated");
+    if (await tccCall(ds, { action: "void_pair", in_id: inId, out_id: outId, note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "that IN/OUT") + " — hours updated");
     btn.disabled = false;
   }
   // Block 199: Remove for a stint that spans line moves — the whole punch
   // chain (edges + interior switch pairs) voids as ONE atomic action.
   async function tccRemoveRun(ds, idsCsv, btn, what294) {
     btn.disabled = true;
-    if (await tccCall(ds, { action: "void_run", ids: idsCsv.split(","), note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "the stint") + " — hours updated");
+    if (await tccCall(ds, { action: "void_run", ids: idsCsv.split(","), note: tccNote() })) return tccDone294(ds, "Removed " + (what294 || "that IN/OUT") + " — hours updated");
     btn.disabled = false;
   }
   async function tccVoidOne(ds, id, btn, what294) {
