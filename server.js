@@ -892,7 +892,11 @@ async function acctEditNotice221(actorId, what221, whoId221, day221, link221) {
     const acctE = (await db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`)).map((a) => a.id).filter((id) => id !== actorId);
     if (!acctE.length) return;
     const ids221 = [...new Set([actorId, whoId221].filter(Boolean))];
-    const ppl = await db(`employee?select=id,first_name,last_name&id=in.(${ids221.join(",")})`);
+    const ppl = await db(`employee?select=id,first_name,last_name,pay_type&id=in.(${ids221.join(",")})`);
+    // Block 291: a SALARIED person's punches are a time LOG, not pay data —
+    // editing Daniel's own log must not ring Kailey's "Pay data changed" bell.
+    const who221 = ppl.find((x) => x.id === whoId221);
+    if (who221 && (who221.pay_type === "salary" || who221.pay_type === "na")) return;
     const nm = (id) => { const p = ppl.find((x) => x.id === id); return p ? `${p.first_name} ${((p.last_name || "")[0] || "")}.` : "someone"; };
     notify("payroll.edited", acctE, `Pay data changed — ${nm(whoId221)}`,
       `${nm(actorId)} ${what221} for ${nm(whoId221)}${day221 ? ` (${day221})` : ""}. Already on the timecard and worksheet — worth a glance if it changes pay.`,
@@ -1008,7 +1012,7 @@ async function sweepForgottenClockOuts() {
           if (mkt290) {
             notify("mtime.auto_out", [ev.employee_id],
               "Your Marketing clock closed itself at 11:59 PM",
-              `No clock-out was recorded for ${phxDate(inMs)} — the day closed it at midnight. If that's not when you stopped, fix the time from your My time page (Time corrections).`,
+              `No clock-out was recorded for ${phxDate(inMs)} — the day closed it at midnight. If that's not when you stopped, fix the time right on your Salaried Time page.`,
               `/mytime`);
             console.log("sweeper: auto clock-out (marketing, quiet)", ev.employee_id, "opened", ev.claimed_at);
             continue;
@@ -2513,42 +2517,64 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
 </script></body></html>`;
 
 // Block 290: the MARKETING clock card — top of Daniel's first screen, phone-first.
-// One big button, already set to where he is (the shop's IP decides the
-// default; a small toggle flips it). Clocked in: "On the clock since …",
-// a "What I'm working on" box that autosaves to this stint, and ONE clock-out
-// button that reopens the same text as the recap. No lunch, no sick, no
-// after-hours questionnaire — none of it applies to him (ruled 10/16).
+// Block 291 (Daniel's screenshots, 10/16: "a bit LOUD and taking up too much
+// space"): the card is now a SLIM STRIP — a status line with a dot, two small
+// buttons, neutral background. The recap box is hidden until "+ note" or
+// "Clock out" (which opens it with "Clock out now" / skip), so the recap
+// moment survives but the box only shows at the two moments it matters.
+// Same endpoints, same behavior — looks only.
 const phx12_290 = (iso) => { const d = new Date(new Date(iso).getTime() - PHX_OFFSET_MS); let h = d.getUTCHours(); const m = String(d.getUTCMinutes()).padStart(2, "0"); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return `${h}:${m} ${ap}`; };
 // "Friday, 10/16/26" — the day name FIRST so weekend work reads at a glance (Daniel, 10/16).
 const dayLabel290 = (ymd) => { const d = new Date(ymd + "T00:00:00Z"); const dn = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getUTCDay()]; return `${dn}, ${ymd.slice(5, 7)}/${ymd.slice(8, 10)}/${ymd.slice(2, 4)}`; };
+const dayShort291 = (ymd) => { const d = new Date(ymd + "T00:00:00Z"); const dn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()]; return `${dn} ${ymd.slice(5, 7)}/${ymd.slice(8, 10)}`; };
 const mtimeCard290 = (m) => {
   if (!m) return "";
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const whereWord = (w) => (w === "remote" ? "Remote" : "At the shop");
-  return `<style>.mtb290{border:none;border-radius:12px;color:#fff;padding:14px 26px;font-weight:800;cursor:pointer;margin:4px;font-size:1.15rem}.mtw290{background:#2c2c2e;color:#9a9aa0;border:1px solid #3a3a3c;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:700}.mtw290.on{background:#0a3d62;color:#fff;border-color:#2f81f7}</style>
-  <div id="mtcard290" style="margin:4px auto 16px;max-width:560px;padding:14px 16px;border-radius:14px;${m.clockedIn ? "background:#1d5a2d;border:2px solid #30d158" : "background:#2c2c2e;border:2px solid #3a3a3c"}">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
-      <b style="letter-spacing:.04em;font-size:.85rem;opacity:.85">MY TIME — MARKETING</b>
-      <a href="/mytime" style="color:#cfe9ff;font-size:.85rem">My time log &rarr;</a>
+  const other = m.where === "remote" ? "shop" : "remote";
+  return `<style>
+    .mts291{margin:2px auto 14px;max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;font-size:.95rem}
+    .mts291 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .mts291 .dot{width:10px;height:10px;border-radius:50%;background:${m.clockedIn ? "#30d158;box-shadow:0 0 6px #30d158" : "#6e6e73"};flex:none}
+    .mts291 .st{flex:1;min-width:160px}
+    .mts291 .b{border:none;border-radius:9px;color:#fff;padding:7px 12px;font-weight:700;cursor:pointer;font-size:.9rem}
+    .mts291 .b.in{background:#1d5a2d}.mts291 .b.out{background:#5a1d1d}.mts291 .b.ghost{background:transparent;border:1px solid #3a3a3c;color:#c7c7cc;font-weight:600}
+    .mts291 .lnk{color:#8e8e93;font-size:.85rem;cursor:pointer;text-decoration:underline;background:none;border:none;padding:0}
+    .mts291 .pane{display:none;margin-top:8px}.mts291 .pane.open{display:block}
+    .mts291 textarea{width:100%;box-sizing:border-box;min-height:70px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:9px;padding:8px;font-size:16px;font-family:inherit}
+    .mts291 .sv{font-size:.78rem;opacity:.55;min-height:1em;margin-top:2px}
+    .mts291 .err{color:#ff6b5e;font-size:.85rem;min-height:1em;margin:4px 0 0}
+  </style>
+  <div id="mtcard290" class="mts291">
+    <div class="row">
+      <span class="dot"></span>
+      ${m.clockedIn
+        ? `<span class="st"><b>On the clock</b> since ${phx12_290(m.since)} &middot; ${whereWord(m.where)}</span>
+           <button class="b ghost" onclick="mtPane291('note')">+ note</button>
+           <button class="b out" onclick="mtPane291('out')">Clock out</button>`
+        : `<span class="st"><b>Off the clock</b> <a href="/mytime" style="color:#8e8e93;font-size:.85rem;margin-left:6px">Salaried time &rarr;</a></span>
+           <button class="b in" onclick="mtIn290(this)">Clock in &mdash; <span id="mtwl290">${whereWord(m.where)}</span></button>
+           <button class="lnk" onclick="mtWhere290(window.__mtw290 === 'remote' ? 'shop' : 'remote')" id="mtsw291">switch to ${whereWord(other)}</button>`}
     </div>
     ${m.clockedIn ? `
-    <div style="margin-top:8px;font-size:1.2rem;font-weight:800">On the clock since ${phx12_290(m.since)} &middot; ${whereWord(m.where)}</div>
-    <div style="margin-top:10px;opacity:.85;font-size:.9rem">What I'm working on <span style="opacity:.6">(saves as you type)</span></div>
-    <textarea id="mtnote290" maxlength="2000" placeholder="A line or a paragraph — what these hours went to." style="width:100%;box-sizing:border-box;min-height:84px;margin-top:4px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:10px;padding:10px;font-size:16px;font-family:inherit">${esc(m.note)}</textarea>
-    <div id="mtsaved290" style="font-size:.8rem;opacity:.6;min-height:1em;margin-top:2px"></div>
-    <div style="text-align:center;margin-top:8px"><button class="mtb290" style="background:#5a1d1d" onclick="mtOut290(this)">CLOCK OUT</button></div>`
-    : `
-    <div style="margin-top:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
-      <button class="mtw290 ${m.where === "shop" ? "on" : ""}" data-mtw="shop" onclick="mtWhere290('shop')">&#127970; At the shop</button>
-      <button class="mtw290 ${m.where === "remote" ? "on" : ""}" data-mtw="remote" onclick="mtWhere290('remote')">&#127968; Remote</button>
-    </div>
-    <div style="text-align:center;margin-top:10px"><button class="mtb290" style="background:#1d5a2d;padding:16px 34px" onclick="mtIn290(this)">CLOCK IN &mdash; <span id="mtwl290">${whereWord(m.where)}</span></button></div>
-    <div style="text-align:center;font-size:.8rem;opacity:.6;margin-top:4px">${m.atShopIp ? "You're on the shop network, so At the shop is pre-picked." : "You're off the shop network, so Remote is pre-picked."} Flip it if that's wrong.</div>`}
-    <p id="mterr290" style="text-align:center;color:#ff6b5e;min-height:1em;margin:6px 0 0"></p>
+    <div id="mtpane291" class="pane">
+      <div style="font-size:.85rem;opacity:.75;margin-bottom:4px"><span id="mtpl291">What I'm working on</span> <span style="opacity:.6">(saves as you type)</span></div>
+      <textarea id="mtnote290" maxlength="2000" placeholder="A line or a paragraph — what these hours went to.">${esc(m.note)}</textarea>
+      <div class="sv" id="mtsaved290"></div>
+      <div id="mtoutrow291" style="display:none;margin-top:6px;text-align:right">
+        <button class="lnk" onclick="mtPane291('close')" style="margin-right:12px">cancel</button>
+        <button class="b out" onclick="mtOut290(this)">Clock out now</button>
+      </div>
+    </div>` : ""}
+    <p id="mterr290" class="err"></p>
   </div>
   <script>
     window.__mtw290 = ${JSON.stringify(m.where)};
-    function mtWhere290(w){ window.__mtw290 = w; document.querySelectorAll('.mtw290').forEach(function(b){ b.classList.toggle('on', b.dataset.mtw === w); }); var l = document.getElementById('mtwl290'); if (l) l.textContent = (w === 'remote' ? 'Remote' : 'At the shop'); }
+    function mtWhere290(w){ window.__mtw290 = w; var l = document.getElementById('mtwl290'); if (l) l.textContent = (w === 'remote' ? 'Remote' : 'At the shop'); var s = document.getElementById('mtsw291'); if (s) s.textContent = 'switch to ' + (w === 'remote' ? 'At the shop' : 'Remote'); }
+    function mtPane291(mode){ var p = document.getElementById('mtpane291'), r = document.getElementById('mtoutrow291'), l = document.getElementById('mtpl291'); if (!p) return;
+      if (mode === 'close') { p.classList.remove('open'); r.style.display = 'none'; return; }
+      p.classList.add('open'); r.style.display = mode === 'out' ? 'block' : 'none'; l.textContent = mode === 'out' ? 'Recap this stint (optional)' : "What I'm working on";
+      var t = document.getElementById('mtnote290'); if (t && mode === 'out') t.focus(); }
     async function mtPost290(u, p, b){ if (b) b.disabled = true; try { var r = await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }); var o = await r.json(); if (o.ok) return o; document.getElementById('mterr290').textContent = o.error || 'Something went wrong'; } catch (e) { document.getElementById('mterr290').textContent = 'Network hiccup — try again'; } if (b) b.disabled = false; return null; }
     async function mtIn290(b){ var o = await mtPost290('/api/mtime/in', { where: window.__mtw290, claimed_at: new Date().toISOString() }, b); if (o) location.reload(); }
     async function mtOut290(b){ var t = document.getElementById('mtnote290'); var o = await mtPost290('/api/mtime/out', { note: t ? t.value : '', claimed_at: new Date().toISOString() }, b); if (o) location.reload(); }
@@ -2556,36 +2582,84 @@ const mtimeCard290 = (m) => {
       t.addEventListener('input', function(){ clearTimeout(tm); document.getElementById('mtsaved290').textContent = '…'; tm = setTimeout(async function(){ if (t.value === last) { document.getElementById('mtsaved290').textContent = ''; return; } var o = await mtPost290('/api/mtime/note', { note: t.value }); if (o) { last = t.value; document.getElementById('mtsaved290').textContent = 'Saved'; } }, 900); }); })();
   </script>`;
 };
-// Block 290: the MY TIME page — one block per day ("Friday, 10/16/26" — day
-// name first so weekend work stands out), stints with exact hours and where,
-// the recap beneath each. Print-styled: nav/buttons vanish, white page.
+// Block 290/291: the SALARIED TIME page — one block per day ("Friday, 10/16/26" —
+// day name first so weekend work stands out), stints with exact hours and
+// where, the recap beneath each. Block 291 (Daniel): renamed "Salaried Time";
+// admins + the Accounting manager can EDIT TIMES right here (move / remove /
+// add a stint) through the SAME audited /api/punch/correct the timecard editor
+// uses; the shop/remote split shows for Marketing only (nobody else works
+// remote); and the printout is a dedicated one-page layout — tight rows, no
+// boxes — instead of the screen cards.
 const mytimePage290 = (d) => {
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const t1 = (h) => (Math.round(h * 10) / 10).toFixed(1);
   const whereWord = (w, ln) => (w === "remote" ? "Remote" : w === "shop" ? "At the shop" : (ln || "Shop"));
   const p = d.period, tg = d.target;
   const name = tg ? `${tg.first_name} ${tg.last_name || ""}`.trim() : "";
-  const qsEmp = d.viewer && tg ? `&emp=${tg.id}` : "";
+  const qsEmp = tg ? `&emp=${tg.id}` : "";
+  const split = Boolean(d.splitWhere);   // Block 291: shop/remote only for Marketing
+  const canT = Boolean(d.canEditTimes);
   const isWknd = (ymd) => { const w = new Date(ymd + "T00:00:00Z").getUTCDay(); return w === 0 || w === 6; };
-  const picker = d.viewer && d.people.length ? `<div class="np290">Whose log: <select id="mtemp290" onchange="location.href='/mytime?${esc(p.qs)}&emp='+this.value">
+  const hhmm = (ms) => { const x = new Date(ms - PHX_OFFSET_MS); return `${String(x.getUTCHours()).padStart(2, "0")}:${String(x.getUTCMinutes()).padStart(2, "0")}`; };
+  const mdy = (ymd) => `${ymd.slice(5, 7)}/${ymd.slice(8, 10)}/${ymd.slice(0, 4)}`;
+  const linePick = (sel) => split
+    ? `<select class="ln291"><option value="${MKT_SHOP_LINE_290}" ${sel !== "remote" ? "selected" : ""}>At the shop</option><option value="${MKT_REMOTE_LINE_290}" ${sel === "remote" ? "selected" : ""}>Remote</option></select>`
+    : `<input type="hidden" class="ln291" value="${d.defaultLine}">`;
+  const picker = d.people.length ? `<div class="np290">Whose log: <select id="mtemp290" onchange="location.href='/mytime?${esc(p.qs)}&emp='+this.value">
       ${d.people.map((e) => `<option value="${e.id}" ${tg && e.id === tg.id ? "selected" : ""}>${esc(e.first_name + " " + (e.last_name || ""))} — ${esc(e.department || "")}</option>`).join("")}
     </select></div>` : "";
+  const stintRow = (day, s) => `
+      <div class="st290" data-in="${s.inId}" data-out="${s.outId || ""}" data-date="${day.date}">
+        <div class="stl290">
+          <span class="vw291">${phx12_290(new Date(s.start).toISOString())} &rarr; ${s.live ? `<span class="live290">still on the clock</span>` : phx12_290(new Date(s.end).toISOString())}
+            &middot; ${t1(s.hrs)} h${split ? ` &middot; <span class="wh290 ${s.where}">${whereWord(s.where, s.lineName)}</span>` : ""}${s.auto ? ` <span class="tag290 warn">closed by the system at midnight</span>` : ""}
+            ${canT ? `<button class="ed291" onclick="edOpen291(this)" title="Edit times">&#9998; edit</button>` : ""}</span>
+          ${canT ? `<span class="edr291" style="display:none">
+            IN <input type="time" class="ti291" value="${hhmm(s.start)}"> OUT <input type="time" class="to291" value="${s.live ? "" : hhmm(s.end)}" ${s.live ? 'placeholder="still open"' : ""}>
+            <button class="pb290 sm" onclick="edSave291(this)">Save</button>
+            <button class="pb290 sm red" onclick="edRemove291(this)">Remove</button>
+            <button class="lnk291" onclick="edClose291(this)">cancel</button>
+          </span>` : ""}
+        </div>
+        ${d.canEditNote
+          ? `<textarea class="nt290" data-cid="${s.inId}" maxlength="2000" placeholder="Recap — what these hours went to (saves as you type)">${esc(s.note)}</textarea><div class="sv290" data-for="${s.inId}">${s.edited ? `edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}` : ""}</div>`
+          : (s.note ? `<p class="np290t">${esc(s.note).replace(/\n/g, "<br>")}</p>${s.edited ? `<div class="sv290">edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}</div>` : ""}` : `<p class="np290t none">No recap written.</p>`)}
+      </div>`;
+  const addRow = (ymd) => canT ? `
+      <div class="add291" data-date="${ymd}">
+        <button class="lnk291" onclick="this.nextElementSibling.style.display='inline';this.style.display='none'">+ add a stint</button>
+        <span style="display:none">IN <input type="time" class="ti291"> OUT <input type="time" class="to291"> ${linePick(d.lastWhere)}
+          <button class="pb290 sm" onclick="edAdd291(this)">Add</button> <button class="lnk291" onclick="this.parentElement.style.display='none';this.parentElement.previousElementSibling.style.display='inline'">cancel</button></span>
+      </div>` : "";
   const daysHtml = d.days.length ? d.days.map((day) => `
     <section class="day290 ${isWknd(day.date) ? "wk" : ""}">
       <div class="dh290"><b>${dayLabel290(day.date)}</b>${isWknd(day.date) ? ` <span class="tag290">weekend</span>` : ""}<span class="dhrs290">${t1(day.hrs)} h</span></div>
-      ${day.stints.map((s) => `
-      <div class="st290">
-        <div class="stl290">${phx12_290(new Date(s.start).toISOString())} &rarr; ${s.live ? `<span class="live290">still on the clock</span>` : phx12_290(new Date(s.end).toISOString())}
-          &middot; ${t1(s.hrs)} h &middot; <span class="wh290 ${s.where}">${whereWord(s.where, s.lineName)}</span>${s.auto ? ` <span class="tag290 warn">closed by the system at midnight</span>` : ""}</div>
-        ${d.canEdit
-          ? `<textarea class="nt290" data-cid="${s.inId}" maxlength="2000" placeholder="Recap — what these hours went to (saves as you type)">${esc(s.note)}</textarea><div class="sv290" data-for="${s.inId}">${s.edited ? `edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}` : ""}</div>`
-          : (s.note ? `<p class="np290t">${esc(s.note).replace(/\n/g, "<br>")}</p>${s.edited ? `<div class="sv290">edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}</div>` : ""}` : `<p class="np290t none">No recap written.</p>`)}
-      </div>`).join("")}
+      ${day.stints.map((s) => stintRow(day, s)).join("")}
+      ${addRow(day.date)}
     </section>`).join("") : `<p class="muted" style="text-align:center;margin:30px 0">No hours logged in this pay period${tg ? " for " + esc(name) : ""}.</p>`;
+  // Block 291: a day with NO punches can still get one (a forgotten remote evening)
+  const addDay = canT && tg ? `<div class="noprint290" style="margin:14px 0 4px;text-align:center">
+      <span style="opacity:.6">Add hours on another day:</span> <input type="date" id="addd291" min="${esc(p.from)}" max="${esc(p.to)}" value="${esc(p.to <= phxDate(Date.now()) ? p.to : phxDate(Date.now()))}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:5px">
+      IN <input type="time" id="addi291" class="ti291"> OUT <input type="time" id="addo291" class="to291"> ${linePick(d.lastWhere).replace('class="ln291"', 'class="ln291" id="addl291"')}
+      <button class="pb290 sm" onclick="edAddDay291(this)">Add</button></div>` : "";
+  // ---- PRINT layout (Block 291): one page. Tight rows, no boxes, recap clamped to 2 lines.
+  const printRows = d.days.map((day) => day.stints.map((s, i) => `<tr class="${isWknd(day.date) ? "wk" : ""}">
+        <td class="pd">${i === 0 ? dayShort291(day.date) + (isWknd(day.date) ? ' <span class="pw">wknd</span>' : "") : ""}</td>
+        <td class="pt">${phx12_290(new Date(s.start).toISOString())} &ndash; ${s.live ? "open" : phx12_290(new Date(s.end).toISOString())}</td>
+        <td class="ph">${t1(s.hrs)}</td>
+        ${split ? `<td class="pwh">${s.where === "remote" ? "Remote" : s.where === "shop" ? "Shop" : esc(s.lineName || "")}</td>` : ""}
+        <td class="pn">${esc(s.note || "")}</td>
+        <td class="pdt">${i === 0 ? t1(day.hrs) : ""}</td></tr>`).join("")).join("");
+  const printHtml = `<div class="print291">
+    <div class="ph1"><b>Salaried Time Log</b> &mdash; ${esc(name)} <span class="muted">&middot; ${esc(p.rangeText)} &middot; exact hours</span></div>
+    <div class="ph2">Total <b>${t1(d.tot.all)} h</b>${split ? ` &nbsp;&middot;&nbsp; At the shop <b>${t1(d.tot.shop)} h</b> &nbsp;&middot;&nbsp; Remote <b>${t1(d.tot.remote)} h</b>` : ""}${d.tot.other > 0.005 && split ? ` &nbsp;&middot;&nbsp; Other <b>${t1(d.tot.other)} h</b>` : ""}</div>
+    <table class="ptab"><thead><tr><th>Day</th><th>In &ndash; out</th><th class="ph">Hrs</th>${split ? "<th>Where</th>" : ""}<th>Recap</th><th class="pdt">Day</th></tr></thead><tbody>${printRows || `<tr><td colspan="6" class="muted">No hours logged in this period.</td></tr>`}</tbody></table>
+    <div class="pf">Hours log for salaried staff &mdash; separate from the hourly Pay Worksheet; never feeds payroll. Printed ${dayShort291(phxDate(Date.now()))} ${phx12_290(new Date().toISOString())}.</div>
+  </div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — My time${name ? " · " + esc(name) : ""}</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Salaried Time Log${name ? " — " + esc(name) : ""}</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:10px}.muted{opacity:.6}
   .per290 a{color:#8e8e93;margin-right:10px}.per290 a.on{color:#fff;font-weight:800;text-decoration:underline}
@@ -2603,16 +2677,30 @@ const mytimePage290 = (d) => {
   .nt290{width:100%;box-sizing:border-box;min-height:64px;margin-top:6px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:10px;padding:8px;font-size:16px;font-family:inherit}
   .sv290{font-size:.78rem;opacity:.55;min-height:1em}
   .np290t{margin:6px 0 2px;white-space:normal;line-height:1.45}.np290t.none{opacity:.45;font-style:italic}
-  .pb290{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer}
+  .pb290{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer}.pb290.sm{padding:5px 10px;font-size:.85rem}.pb290.red{background:#5a1d1d}
+  .ed291{background:none;border:1px solid #3a3a3c;color:#8e8e93;border-radius:7px;padding:1px 7px;font-size:.78rem;cursor:pointer;margin-left:8px}
+  .lnk291{background:none;border:none;color:#8e8e93;text-decoration:underline;cursor:pointer;font-size:.85rem;padding:0 4px}
+  .edr291 input[type=time],.add291 input[type=time],#addi291,#addo291{background:#111;color:#fff;border:1px solid var(--line);border-radius:7px;padding:4px;font-size:15px}
+  .ln291{background:#111;color:#fff;border:1px solid var(--line);border-radius:7px;padding:4px;font-size:15px}
+  .add291{margin-top:8px;font-size:.9rem;opacity:.9}
+  .edmsg291{color:#ff6b5e;font-size:.85rem;min-height:1em}
+  .print291{display:none}
   @media print{
-    body{background:#fff!important;color:#000!important}.wrap{max-width:100%!important}
-    .noprint290,.logo,details,script{display:none!important}
-    .hd290,.day290{background:#fff!important;border-color:#bbb!important;break-inside:avoid}
-    .day290.wk{background:#fff!important;border-color:#b58900!important}
-    .tag290{color:#000!important;border-color:#000!important}.wh290.shop,.wh290.remote,.wh290.other{color:#000!important}
-    .nt290{border:none!important;background:#fff!important;color:#000!important;padding:0!important;min-height:0!important;resize:none}
-    .nt290::placeholder{color:transparent!important}.nt290:placeholder-shown{display:none!important}
-    .sv290,.live290{color:#000!important}a{color:#000!important;text-decoration:none}
+    @page{size:letter;margin:0.5in}
+    body{background:#fff!important;color:#000!important;font-size:10pt}
+    .wrap{max-width:100%!important;padding:0!important;margin:0!important}
+    .noprint290,.logo,details,script,.hd290,.day290,.muted.noprint290{display:none!important}
+    .print291{display:block;color:#000}
+    .print291 .ph1{font-size:13pt;margin:0 0 2pt}.print291 .ph1 .muted{font-size:10pt;opacity:.7}
+    .print291 .ph2{font-size:10.5pt;margin:0 0 6pt;padding-bottom:4pt;border-bottom:1.5px solid #000}
+    .ptab{width:100%;border-collapse:collapse;font-size:9.5pt}
+    .ptab th{text-align:left;font-size:8pt;letter-spacing:.04em;text-transform:uppercase;color:#444;border-bottom:1px solid #999;padding:2pt 4pt}
+    .ptab td{padding:2.5pt 4pt;border-bottom:1px solid #ddd;vertical-align:top;line-height:1.25}
+    .ptab td.pd{white-space:nowrap;font-weight:700;width:11%}.ptab td.pt{white-space:nowrap;width:20%}.ptab td.ph,.ptab th.ph{text-align:right;width:6%;font-variant-numeric:tabular-nums}
+    .ptab td.pwh{width:9%}.ptab td.pn{color:#222;font-size:9pt;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .ptab td.pdt,.ptab th.pdt{text-align:right;width:7%;font-weight:700;font-variant-numeric:tabular-nums}
+    .ptab tr.wk td{background:#f7f1dc}.pw{font-size:7.5pt;font-weight:400;color:#8a6d00;letter-spacing:.05em;text-transform:uppercase}
+    .pf{margin-top:8pt;font-size:8pt;color:#555;border-top:1px solid #ccc;padding-top:4pt}
   }
 </style></head>
 <body><div class="wrap" style="max-width:820px">
@@ -2632,24 +2720,51 @@ const mytimePage290 = (d) => {
     ${picker}
   </div>
   <div class="hd290">
-    <h2>${esc(name || "My time")}</h2>
+    <h2>Salaried Time Log${name ? " — " + esc(name) : ""}</h2>
     <div style="opacity:.75">${esc(p.label)} &middot; ${esc(p.rangeText)} <span style="opacity:.6">(Phoenix dates &middot; exact hours, not rounded for pay)</span></div>
     <div class="tot290">
       <div><span style="opacity:.6">Total</span><b>${t1(d.tot.all)} h</b></div>
-      <div><span style="opacity:.6">At the shop</span><b style="color:#30d158">${t1(d.tot.shop)} h</b></div>
+      ${split ? `<div><span style="opacity:.6">At the shop</span><b style="color:#30d158">${t1(d.tot.shop)} h</b></div>
       <div><span style="opacity:.6">Remote</span><b style="color:#5ac8fa">${t1(d.tot.remote)} h</b></div>
-      ${d.tot.other > 0.005 ? `<div><span style="opacity:.6">Other lines</span><b>${t1(d.tot.other)} h</b></div>` : ""}
+      ${d.tot.other > 0.005 ? `<div><span style="opacity:.6">Other lines</span><b>${t1(d.tot.other)} h</b></div>` : ""}` : ""}
     </div>
+    ${canT ? `<div class="edmsg291" id="edmsg291"></div>` : ""}
   </div>
   ${daysHtml}
-  <p class="muted noprint290" style="font-size:.85rem;margin-top:18px">This is an hours log for salaried staff — it is separate from the hourly Pay Worksheet and never feeds payroll. ${d.canEdit ? `Wrong time on a punch? <a href="/manager#timecorrections" style="color:#8e8e93">Time corrections</a>.` : ""}</p>
+  ${addDay}
+  ${printHtml}
+  <p class="muted noprint290" style="font-size:.85rem;margin-top:18px">This is an hours log for salaried staff — it is separate from the hourly Pay Worksheet and never feeds payroll.${canT ? " Time edits here are audited exactly like the timecard editor's." : ""}</p>
 </div>
 <script>
+  var TGT291 = ${JSON.stringify(tg ? tg.id : "")};
   function mtGo290(){ var f=document.getElementById("mt-from").value, t=document.getElementById("mt-to").value; if(!f||!t) return; location.href="/mytime?from="+f+"&to="+t+${JSON.stringify(qsEmp)}; }
   (function(){ document.querySelectorAll('.nt290').forEach(function(t){ var tm=null, last=t.value; var sv=document.querySelector('.sv290[data-for="'+t.dataset.cid+'"]');
     t.addEventListener('input', function(){ clearTimeout(tm); if (sv) sv.textContent='…'; tm=setTimeout(async function(){ if (t.value===last) { if (sv) sv.textContent=''; return; }
       try { var r=await fetch('/api/mtime/note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:t.value,clock_in_id:t.dataset.cid})}); var o=await r.json(); if (sv) sv.textContent = o.ok ? 'Saved' : (o.error||'Could not save'); if (o.ok) last=t.value; }
       catch(e){ if (sv) sv.textContent='Network hiccup — try again'; } }, 900); }); }); })();
+  // Block 291: time edits — the SAME audited /api/punch/correct the timecard editor uses.
+  var NOTE291 = "salaried time log correction";
+  function edMsg291(m){ var e=document.getElementById('edmsg291'); if (e) e.textContent = m || ''; }
+  function phxIso291(date, hhmm){ return date + 'T' + hhmm + ':00-07:00'; }
+  async function edPost291(p, b){ if (b) b.disabled = true; try { var r = await fetch('/api/punch/correct',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({ note: NOTE291 }, p))}); var o = await r.json(); if (o.ok) return o; edMsg291(o.error || 'Could not save'); } catch(e){ edMsg291('Network hiccup — try again'); } if (b) b.disabled = false; return null; }
+  function edOpen291(b){ var st=b.closest('.st290'); st.querySelector('.vw291').style.display='none'; st.querySelector('.edr291').style.display='inline'; edMsg291(''); }
+  function edClose291(b){ var st=b.closest('.st290'); st.querySelector('.vw291').style.display='inline'; st.querySelector('.edr291').style.display='none'; }
+  async function edSave291(b){ var st=b.closest('.st290'), d=st.dataset.date, ti=st.querySelector('.ti291').value, to=st.querySelector('.to291').value;
+    if (!ti) return edMsg291('IN time is needed');
+    var inId=st.dataset.in, outId=st.dataset.out, ok=true;
+    if (inId && ti !== st.querySelector('.ti291').defaultValue) ok = !!(await edPost291({ action:'move', punch_id:inId, new_at: new Date(phxIso291(d,ti)).toISOString() }, b));
+    if (ok && outId && to && to !== st.querySelector('.to291').defaultValue) ok = !!(await edPost291({ action:'move', punch_id:outId, new_at: new Date(phxIso291(d,to)).toISOString() }, b));
+    if (ok && !outId && to) { edMsg291('This stint is still open — clock out from the home screen first, then adjust the time here.'); b.disabled=false; return; }
+    if (ok) location.reload(); }
+  async function edRemove291(b){ var st=b.closest('.st290'); if (!confirm('Remove this stint? It is voided (kept in the audit trail), never deleted.')) return;
+    var p = st.dataset.out ? { action:'void_pair', in_id: st.dataset.in, out_id: st.dataset.out } : { action:'void', punch_id: st.dataset.in };
+    if (await edPost291(p, b)) location.reload(); }
+  async function edAdd291(b){ var w=b.parentElement, d=w.closest('.add291').dataset.date, ti=w.querySelector('.ti291').value, to=w.querySelector('.to291').value, ln=w.querySelector('.ln291').value;
+    if (!ti || !to) return edMsg291('Both IN and OUT are needed for a past stint');
+    if (await edPost291({ action:'add', employee_id: TGT291, line_id: Number(ln), in_at: new Date(phxIso291(d,ti)).toISOString(), out_at: new Date(phxIso291(d,to)).toISOString() }, b)) location.reload(); }
+  async function edAddDay291(b){ var d=document.getElementById('addd291').value, ti=document.getElementById('addi291').value, to=document.getElementById('addo291').value, ln=document.getElementById('addl291').value;
+    if (!d || !ti || !to) return edMsg291('Date, IN and OUT are all needed');
+    if (await edPost291({ action:'add', employee_id: TGT291, line_id: Number(ln), in_at: new Date(phxIso291(d,ti)).toISOString(), out_at: new Date(phxIso291(d,to)).toISOString() }, b)) location.reload(); }
 </script></body></html>`;
 };
 const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
@@ -3525,10 +3640,10 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "My time (salaried log)"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/changes", "Order changes"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];   // Block 233 (Ross/Daniel): "Changes" (the Coyote push-to-push diff) is PLUMBING — off the top nav row, into the Tools drawer where the other pipeline pages live
   const tools = tools95 === "time"
-    ? [["/payroll", "Pay Worksheet"], ["/mytime", "Marketing time log"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed · Block 290: + the salaried hours log (read-only, so Kailey can answer Rob)
+    ? [["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed · Block 290: + the salaried hours log (read-only, so Kailey can answer Rob)
     : isAdmin
     ? daily95
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
@@ -11036,50 +11151,57 @@ http.createServer(async (req, res) => {
       const [me] = await db(`employee?select=id,first_name,last_name,role,department,pay_type,must_change_pin&id=eq.${empId}`);
       if (!me) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      // Block 291 (Daniel): admins + the Accounting manager ONLY. The Block-290
+      // "salaried person sees their own" door is CLOSED — "jason shouldnt be
+      // able to read it at all." Viewers may also EDIT TIMES (audited).
       const viewer290 = me.role === "admin" || (me.role === "manager" && me.department === "Accounting");
-      const selfOk290 = me.pay_type === "salary";
-      if (!viewer290 && !selfOk290) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      if (!viewer290) { res.writeHead(302, { Location: "/home" }); return res.end(); }
       const reqEmp = String(url.searchParams.get("emp") || "");
-      let target = null;
-      const people290 = viewer290 ? await db(`employee?select=id,first_name,last_name,department,pay_type&active=is.true&pay_type=eq.salary&order=first_name,last_name`) : [];
-      if (viewer290 && reqEmp && isUuid(reqEmp)) target = people290.find((p) => p.id === reqEmp) || null;
-      if (!target && selfOk290) target = me;
-      if (!target && viewer290) target = people290.find((p) => isMktDept290(p.department)) || people290[0] || null;
-      if (!target) return send(200, "text/html; charset=utf-8", mytimePage290({ me, viewer: viewer290, people: people290, target: null, period: payPeriod(url.searchParams), days: [], tot: { shop: 0, remote: 0, other: 0, all: 0 }, canEdit: false, lineNames: {} }));
+      const people290 = await db(`employee?select=id,first_name,last_name,department,pay_type&active=is.true&pay_type=eq.salary&order=first_name,last_name`);
+      let target = (reqEmp && isUuid(reqEmp)) ? people290.find((e) => e.id === reqEmp) || null : null;
+      if (!target) target = people290.find((e) => isMktDept290(e.department)) || people290[0] || null;
       const period = payPeriod(url.searchParams);
+      const DEPT_LINE291 = { "Body Shop": 13, "Build": 12, "Accounting": 16, "Warehouse": 9 };
+      const base291 = { me, viewer: true, people: people290, period, canEditTimes: true, lineNames: {} };
+      if (!target) return send(200, "text/html; charset=utf-8", mytimePage290({ ...base291, target: null, days: [], tot: { shop: 0, remote: 0, other: 0, all: 0 }, canEditNote: false, splitWhere: false, defaultLine: SHOP_LINE_ID, lastWhere: "shop" }));
       const nowMs = Date.now();
       const [evs, linesAll290] = await Promise.all([
         dbAll252(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${target.id}&claimed_at=gte.${new Date(period.startMs - 2 * 86400000).toISOString()}&claimed_at=lt.${new Date(period.endMs).toISOString()}&order=claimed_at.asc,id.asc`),
         db(`line?select=id,name`),
       ]);
       const lineNames290 = Object.fromEntries(linesAll290.map((l) => [l.id, l.name]));
-      // Pair punches into stints, keeping the clock-in id (the recap's key).
+      // Pair punches into stints, keeping BOTH ids (the recap's key + the editor's handles).
       const stints = []; let open = null;
       for (const ev of evs) {
         const t = new Date(ev.claimed_at).getTime();
         if (ev.kind === "clock_in") { open = { inId: ev.id, lineId: ev.line_id, start: t }; continue; }
-        if (open) { stints.push({ ...open, end: t, auto: ev.kind === "clock_out_auto" }); open = null; }
+        if (open) { stints.push({ ...open, outId: ev.id, end: t, auto: ev.kind === "clock_out_auto" }); open = null; }
       }
-      if (open) stints.push({ ...open, end: nowMs, live: true });
+      if (open) stints.push({ ...open, outId: null, end: nowMs, live: true });
       const ids290 = stints.map((s) => s.inId);
       const notes290 = ids290.length ? await dbAll252(`work_log?select=clock_in_id,note,updated_at,created_at&clock_in_id=in.(${ids290.join(",")})`) : [];
       const noteBy290 = Object.fromEntries(notes290.map((n) => [n.clock_in_id, n]));
-      const days = {}; const tot = { shop: 0, remote: 0, other: 0, all: 0 };
+      const days = {}; const tot = { shop: 0, remote: 0, other: 0, all: 0 }; let lastWhere291 = "shop";
       for (const s of stints) {
         const a = Math.max(s.start, period.startMs), b = Math.min(s.end, period.endMs);
         if (b <= a) continue;
         const hrs = (b - a) / 3600000;
         const d = phxDate(a);
         const where = Number(s.lineId) === MKT_REMOTE_LINE_290 ? "remote" : Number(s.lineId) === MKT_SHOP_LINE_290 ? "shop" : "other";
+        if (where !== "other") lastWhere291 = where;
         tot[where] += hrs; tot.all += hrs;
         (days[d] = days[d] || { date: d, hrs: 0, stints: [] });
         days[d].hrs += hrs;
         const n = noteBy290[s.inId];
-        days[d].stints.push({ inId: s.inId, start: a, end: b, hrs, where, lineName: lineNames290[s.lineId] || "", live: Boolean(s.live), auto: Boolean(s.auto),
+        days[d].stints.push({ inId: s.inId, outId: s.outId, start: a, end: b, hrs, where, lineName: lineNames290[s.lineId] || "", live: Boolean(s.live), auto: Boolean(s.auto),
           note: n ? n.note : "", edited: n && n.updated_at && n.created_at && n.updated_at !== n.created_at ? n.updated_at : null });
       }
       const dayList = Object.values(days).sort((x, y) => (x.date < y.date ? -1 : 1));
-      return send(200, "text/html; charset=utf-8", mytimePage290({ me, viewer: viewer290, people: people290, target, period, days: dayList, tot, canEdit: target.id === me.id, lineNames: lineNames290 }));
+      return send(200, "text/html; charset=utf-8", mytimePage290({ ...base291, target, days: dayList, tot, lineNames: lineNames290,
+        canEditNote: target.id === me.id,                       // the recap stays the person's own words
+        splitWhere: isMktDept290(target.department),            // Block 291: shop/remote only means something for Marketing
+        defaultLine: DEPT_LINE291[target.department] || SHOP_LINE_ID,
+        lastWhere: lastWhere291 }));
     }
 
     if (url.pathname === "/payroll" || url.pathname === "/payroll.csv" || url.pathname === "/payroll.xlsx") {
