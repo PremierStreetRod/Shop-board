@@ -2687,17 +2687,24 @@ const mytimePage290 = (d) => {
   .print291{display:none}
   @media print{
     @page{size:letter;margin:0.5in}
-    body{background:#fff!important;color:#000!important;font-size:10pt}
+    /* Block 291b (Daniel's iPad print: page 2 blank): the shared sheet gives body
+       min-height:100vh — on paper that is one FULL page before any content, so
+       the header margin alone spilled a sliver onto a second sheet. Zero it,
+       let the page be as tall as its content, and hide the floating bell/gear. */
+    html,body{min-height:0!important;height:auto!important;overflow:visible!important}
+    body{background:#fff!important;color:#000!important;font-size:10pt;margin:0!important}
+    body>a[href="/inbox"],body>a[href="/settings"],body>div[style*="position:fixed"]{display:none!important}
     .wrap{max-width:100%!important;padding:0!important;margin:0!important}
+    .print291{break-after:avoid;page-break-after:avoid}.print291 .pf{break-inside:avoid}
     .noprint290,.logo,details,script,.hd290,.day290,.muted.noprint290{display:none!important}
     .print291{display:block;color:#000}
     .print291 .ph1{font-size:13pt;margin:0 0 2pt}.print291 .ph1 .muted{font-size:10pt;opacity:.7}
     .print291 .ph2{font-size:10.5pt;margin:0 0 6pt;padding-bottom:4pt;border-bottom:1.5px solid #000}
-    .ptab{width:100%;border-collapse:collapse;font-size:9.5pt}
+    .ptab{width:100%;border-collapse:collapse;font-size:9pt}
     .ptab th{text-align:left;font-size:8pt;letter-spacing:.04em;text-transform:uppercase;color:#444;border-bottom:1px solid #999;padding:2pt 4pt}
-    .ptab td{padding:2.5pt 4pt;border-bottom:1px solid #ddd;vertical-align:top;line-height:1.25}
+    .ptab td{padding:1.5pt 4pt;border-bottom:1px solid #ddd;vertical-align:top;line-height:1.2}
     .ptab td.pd{white-space:nowrap;font-weight:700;width:11%}.ptab td.pt{white-space:nowrap;width:20%}.ptab td.ph,.ptab th.ph{text-align:right;width:6%;font-variant-numeric:tabular-nums}
-    .ptab td.pwh{width:9%}.ptab td.pn{color:#222;font-size:9pt;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .ptab td.pwh{width:9%}.ptab td.pn{color:#222;font-size:8.5pt;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .ptab td.pdt,.ptab th.pdt{text-align:right;width:7%;font-weight:700;font-variant-numeric:tabular-nums}
     .ptab tr.wk td{background:#f7f1dc}.pw{font-size:7.5pt;font-weight:400;color:#8a6d00;letter-spacing:.05em;text-transform:uppercase}
     .pf{margin-top:8pt;font-size:8pt;color:#555;border-top:1px solid #ccc;padding-top:4pt}
