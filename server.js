@@ -77,6 +77,27 @@ const SHOP_LINE_ID = 10;
 // (clock_event.fix_build_id) so the hours roll up per order. Any tech can grab a
 // fix; grabbing one moves the clock here.
 const FIX_LINE_ID = 15;
+// Block 290 (Daniel, 10/16): MARKETING TIME LOG — the owner is cracking down,
+// salaried people clock too. Daniel works at the shop AND remotely, so his
+// department gets TWO dept-time lines (migration 0067, same disabled-line
+// pattern as 9/10/12/13/16): 17 = at the shop, 18 = remote. "Where" is simply
+// which line the punch is on. This is a LOG, not a timecard: he is
+// pay_type=salary (Block 200) so payroll never sees him; the Marketing lane
+// carries NO after-hours governance (his evenings and weekends are normal),
+// skips the shop-Wi-Fi clock gate (remote is the point), and a forgotten
+// punch closes quietly at midnight and tells only him.
+const MKT_SHOP_LINE_290 = 17;
+const MKT_REMOTE_LINE_290 = 18;
+const MKT_LINES_290 = new Set([MKT_SHOP_LINE_290, MKT_REMOTE_LINE_290]);
+const isMktDept290 = (dept) => dept === "Marketing";
+// One recap per stint (work_log.clock_in_id is UNIQUE): write it if new,
+// otherwise update the text + stamp. Audited as mtime.note.
+async function upsertWorkLog290(empId, clockInId, note) {
+  const [row] = await db(`work_log?select=id&clock_in_id=eq.${clockInId}&limit=1`);
+  if (row) await db(`work_log?id=eq.${row.id}`, { method: "PATCH", body: JSON.stringify({ note, updated_at: new Date().toISOString() }) });
+  else await db("work_log", { method: "POST", body: JSON.stringify({ employee_id: empId, clock_in_id: clockInId, note }) });
+  logEvent("mtime.note", empId, { clock_in_id: clockInId, chars: note.length, edit: Boolean(row) });
+}
 
 // ---------- tiny helpers ----------
 // Ask Supabase for rows. `path` is the REST query string.
@@ -944,7 +965,11 @@ async function sweepForgottenClockOuts() {
       // leaves at 4:10 just clocks out normally (outs are never blocked).
       // Evening opt-in sessions keep their own +8h cap; nobody crosses midnight.
       const hardStop205 = end + 3600000;
-      const closeAt = Math.min(inMs >= end ? inMs + 8 * 3600000 : hardStop205, mid148);
+      // Block 290: a MARKETING punch (lines 17/18) has no shop day to end —
+      // Daniel's evenings and weekends are normal hours. Leave it alone until
+      // 11:59 PM of its own day (the never-cross-midnight rule still holds).
+      const mkt290 = MKT_LINES_290.has(Number(ev.line_id));
+      const closeAt = mkt290 ? mid148 : Math.min(inMs >= end ? inMs + 8 * 3600000 : hardStop205, mid148);
       if (now < closeAt + SWEEP_GRACE_MS) continue; // still plausibly working — leave it
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: ev.employee_id, line_id: ev.line_id, kind: "clock_out_auto",
@@ -977,6 +1002,17 @@ async function sweepForgottenClockOuts() {
         // auto-close already sends its own held-hours notice above.)
         try {
           const [whoA148] = await db(`employee?select=first_name,last_name,pay_type&id=eq.${ev.employee_id}`);
+          // Block 290: a Marketing-lane punch closes QUIETLY — the notice goes
+          // to the PERSON only (Daniel's ruling), never admins or accounting.
+          // It's his log, not payroll; he fixes it himself in the corrector.
+          if (mkt290) {
+            notify("mtime.auto_out", [ev.employee_id],
+              "Your Marketing clock closed itself at 11:59 PM",
+              `No clock-out was recorded for ${phxDate(inMs)} — the day closed it at midnight. If that's not when you stopped, fix the time from your My time page (Time corrections).`,
+              `/mytime`);
+            console.log("sweeper: auto clock-out (marketing, quiet)", ev.employee_id, "opened", ev.claimed_at);
+            continue;
+          }
           // Block 201 (owner, day 4, Jason's text): a SALARIED person or an
           // OWNER forgetting to clock out is not a payroll problem — "him and
           // other salaried people, like myself DO NOT need to clock in or
@@ -2476,13 +2512,154 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   qpoll();setInterval(qpoll,6000);
 </script></body></html>`;
 
-const watcherPage = (emp, clk = null) => `<!doctype html>
+// Block 290: the MARKETING clock card — top of Daniel's first screen, phone-first.
+// One big button, already set to where he is (the shop's IP decides the
+// default; a small toggle flips it). Clocked in: "On the clock since …",
+// a "What I'm working on" box that autosaves to this stint, and ONE clock-out
+// button that reopens the same text as the recap. No lunch, no sick, no
+// after-hours questionnaire — none of it applies to him (ruled 10/16).
+const phx12_290 = (iso) => { const d = new Date(new Date(iso).getTime() - PHX_OFFSET_MS); let h = d.getUTCHours(); const m = String(d.getUTCMinutes()).padStart(2, "0"); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return `${h}:${m} ${ap}`; };
+// "Friday, 10/16/26" — the day name FIRST so weekend work reads at a glance (Daniel, 10/16).
+const dayLabel290 = (ymd) => { const d = new Date(ymd + "T00:00:00Z"); const dn = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getUTCDay()]; return `${dn}, ${ymd.slice(5, 7)}/${ymd.slice(8, 10)}/${ymd.slice(2, 4)}`; };
+const mtimeCard290 = (m) => {
+  if (!m) return "";
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const whereWord = (w) => (w === "remote" ? "Remote" : "At the shop");
+  return `<style>.mtb290{border:none;border-radius:12px;color:#fff;padding:14px 26px;font-weight:800;cursor:pointer;margin:4px;font-size:1.15rem}.mtw290{background:#2c2c2e;color:#9a9aa0;border:1px solid #3a3a3c;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:700}.mtw290.on{background:#0a3d62;color:#fff;border-color:#2f81f7}</style>
+  <div id="mtcard290" style="margin:4px auto 16px;max-width:560px;padding:14px 16px;border-radius:14px;${m.clockedIn ? "background:#1d5a2d;border:2px solid #30d158" : "background:#2c2c2e;border:2px solid #3a3a3c"}">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
+      <b style="letter-spacing:.04em;font-size:.85rem;opacity:.85">MY TIME — MARKETING</b>
+      <a href="/mytime" style="color:#cfe9ff;font-size:.85rem">My time log &rarr;</a>
+    </div>
+    ${m.clockedIn ? `
+    <div style="margin-top:8px;font-size:1.2rem;font-weight:800">On the clock since ${phx12_290(m.since)} &middot; ${whereWord(m.where)}</div>
+    <div style="margin-top:10px;opacity:.85;font-size:.9rem">What I'm working on <span style="opacity:.6">(saves as you type)</span></div>
+    <textarea id="mtnote290" maxlength="2000" placeholder="A line or a paragraph — what these hours went to." style="width:100%;box-sizing:border-box;min-height:84px;margin-top:4px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:10px;padding:10px;font-size:16px;font-family:inherit">${esc(m.note)}</textarea>
+    <div id="mtsaved290" style="font-size:.8rem;opacity:.6;min-height:1em;margin-top:2px"></div>
+    <div style="text-align:center;margin-top:8px"><button class="mtb290" style="background:#5a1d1d" onclick="mtOut290(this)">CLOCK OUT</button></div>`
+    : `
+    <div style="margin-top:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
+      <button class="mtw290 ${m.where === "shop" ? "on" : ""}" data-mtw="shop" onclick="mtWhere290('shop')">&#127970; At the shop</button>
+      <button class="mtw290 ${m.where === "remote" ? "on" : ""}" data-mtw="remote" onclick="mtWhere290('remote')">&#127968; Remote</button>
+    </div>
+    <div style="text-align:center;margin-top:10px"><button class="mtb290" style="background:#1d5a2d;padding:16px 34px" onclick="mtIn290(this)">CLOCK IN &mdash; <span id="mtwl290">${whereWord(m.where)}</span></button></div>
+    <div style="text-align:center;font-size:.8rem;opacity:.6;margin-top:4px">${m.atShopIp ? "You're on the shop network, so At the shop is pre-picked." : "You're off the shop network, so Remote is pre-picked."} Flip it if that's wrong.</div>`}
+    <p id="mterr290" style="text-align:center;color:#ff6b5e;min-height:1em;margin:6px 0 0"></p>
+  </div>
+  <script>
+    window.__mtw290 = ${JSON.stringify(m.where)};
+    function mtWhere290(w){ window.__mtw290 = w; document.querySelectorAll('.mtw290').forEach(function(b){ b.classList.toggle('on', b.dataset.mtw === w); }); var l = document.getElementById('mtwl290'); if (l) l.textContent = (w === 'remote' ? 'Remote' : 'At the shop'); }
+    async function mtPost290(u, p, b){ if (b) b.disabled = true; try { var r = await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }); var o = await r.json(); if (o.ok) return o; document.getElementById('mterr290').textContent = o.error || 'Something went wrong'; } catch (e) { document.getElementById('mterr290').textContent = 'Network hiccup — try again'; } if (b) b.disabled = false; return null; }
+    async function mtIn290(b){ var o = await mtPost290('/api/mtime/in', { where: window.__mtw290, claimed_at: new Date().toISOString() }, b); if (o) location.reload(); }
+    async function mtOut290(b){ var t = document.getElementById('mtnote290'); var o = await mtPost290('/api/mtime/out', { note: t ? t.value : '', claimed_at: new Date().toISOString() }, b); if (o) location.reload(); }
+    (function(){ var t = document.getElementById('mtnote290'); if (!t) return; var tm = null, last = t.value;
+      t.addEventListener('input', function(){ clearTimeout(tm); document.getElementById('mtsaved290').textContent = '…'; tm = setTimeout(async function(){ if (t.value === last) { document.getElementById('mtsaved290').textContent = ''; return; } var o = await mtPost290('/api/mtime/note', { note: t.value }); if (o) { last = t.value; document.getElementById('mtsaved290').textContent = 'Saved'; } }, 900); }); })();
+  </script>`;
+};
+// Block 290: the MY TIME page — one block per day ("Friday, 10/16/26" — day
+// name first so weekend work stands out), stints with exact hours and where,
+// the recap beneath each. Print-styled: nav/buttons vanish, white page.
+const mytimePage290 = (d) => {
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const t1 = (h) => (Math.round(h * 10) / 10).toFixed(1);
+  const whereWord = (w, ln) => (w === "remote" ? "Remote" : w === "shop" ? "At the shop" : (ln || "Shop"));
+  const p = d.period, tg = d.target;
+  const name = tg ? `${tg.first_name} ${tg.last_name || ""}`.trim() : "";
+  const qsEmp = d.viewer && tg ? `&emp=${tg.id}` : "";
+  const isWknd = (ymd) => { const w = new Date(ymd + "T00:00:00Z").getUTCDay(); return w === 0 || w === 6; };
+  const picker = d.viewer && d.people.length ? `<div class="np290">Whose log: <select id="mtemp290" onchange="location.href='/mytime?${esc(p.qs)}&emp='+this.value">
+      ${d.people.map((e) => `<option value="${e.id}" ${tg && e.id === tg.id ? "selected" : ""}>${esc(e.first_name + " " + (e.last_name || ""))} — ${esc(e.department || "")}</option>`).join("")}
+    </select></div>` : "";
+  const daysHtml = d.days.length ? d.days.map((day) => `
+    <section class="day290 ${isWknd(day.date) ? "wk" : ""}">
+      <div class="dh290"><b>${dayLabel290(day.date)}</b>${isWknd(day.date) ? ` <span class="tag290">weekend</span>` : ""}<span class="dhrs290">${t1(day.hrs)} h</span></div>
+      ${day.stints.map((s) => `
+      <div class="st290">
+        <div class="stl290">${phx12_290(new Date(s.start).toISOString())} &rarr; ${s.live ? `<span class="live290">still on the clock</span>` : phx12_290(new Date(s.end).toISOString())}
+          &middot; ${t1(s.hrs)} h &middot; <span class="wh290 ${s.where}">${whereWord(s.where, s.lineName)}</span>${s.auto ? ` <span class="tag290 warn">closed by the system at midnight</span>` : ""}</div>
+        ${d.canEdit
+          ? `<textarea class="nt290" data-cid="${s.inId}" maxlength="2000" placeholder="Recap — what these hours went to (saves as you type)">${esc(s.note)}</textarea><div class="sv290" data-for="${s.inId}">${s.edited ? `edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}` : ""}</div>`
+          : (s.note ? `<p class="np290t">${esc(s.note).replace(/\n/g, "<br>")}</p>${s.edited ? `<div class="sv290">edited ${dayLabel290(phxDate(new Date(s.edited).getTime()))} ${phx12_290(s.edited)}</div>` : ""}` : `<p class="np290t none">No recap written.</p>`)}
+      </div>`).join("")}
+    </section>`).join("") : `<p class="muted" style="text-align:center;margin:30px 0">No hours logged in this pay period${tg ? " for " + esc(name) : ""}.</p>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — My time${name ? " · " + esc(name) : ""}</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:10px}.muted{opacity:.6}
+  .per290 a{color:#8e8e93;margin-right:10px}.per290 a.on{color:#fff;font-weight:800;text-decoration:underline}
+  .np290{margin:6px 0 10px}.np290 select{background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:16px}
+  .hd290{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:10px 0 16px}
+  .hd290 h2{margin:0 0 2px}.tot290{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px}.tot290 div{min-width:110px}.tot290 b{font-size:1.4rem;display:block}
+  .day290{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:10px 0;background:var(--card)}
+  .day290.wk{border-color:#7a5900;background:#2a2410}
+  .dh290{display:flex;align-items:baseline;gap:8px;font-size:1.1rem}.dhrs290{margin-left:auto;font-weight:800}
+  .tag290{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid #ffd60a;color:#ffd60a;border-radius:6px;padding:1px 6px}
+  .tag290.warn{border-color:#ff6b5e;color:#ff6b5e}
+  .st290{border-top:1px solid var(--line);padding:8px 0 4px;margin-top:6px}.stl290{opacity:.9}
+  .wh290.shop{color:#30d158;font-weight:700}.wh290.remote{color:#5ac8fa;font-weight:700}.wh290.other{color:#c7c7cc;font-weight:700}
+  .live290{color:#30d158;font-weight:700}
+  .nt290{width:100%;box-sizing:border-box;min-height:64px;margin-top:6px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:10px;padding:8px;font-size:16px;font-family:inherit}
+  .sv290{font-size:.78rem;opacity:.55;min-height:1em}
+  .np290t{margin:6px 0 2px;white-space:normal;line-height:1.45}.np290t.none{opacity:.45;font-style:italic}
+  .pb290{background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer}
+  @media print{
+    body{background:#fff!important;color:#000!important}.wrap{max-width:100%!important}
+    .noprint290,.logo,details,script{display:none!important}
+    .hd290,.day290{background:#fff!important;border-color:#bbb!important;break-inside:avoid}
+    .day290.wk{background:#fff!important;border-color:#b58900!important}
+    .tag290{color:#000!important;border-color:#000!important}.wh290.shop,.wh290.remote,.wh290.other{color:#000!important}
+    .nt290{border:none!important;background:#fff!important;color:#000!important;padding:0!important;min-height:0!important;resize:none}
+    .nt290::placeholder{color:transparent!important}.nt290:placeholder-shown{display:none!important}
+    .sv290,.live290{color:#000!important}a{color:#000!important;text-decoration:none}
+  }
+</style></head>
+<body><div class="wrap" style="max-width:820px">
+  <div class="logo">SHOP <span>BOARD</span></div>
+  <div class="noprint290">${nav196(d.me)}</div>
+  <div class="noprint290">
+    <div class="lane per per290" style="line-height:2.1">
+      <span style="opacity:.55">Pay period:</span>
+      <a href="/mytime?preset=this${qsEmp}" class="${p.preset === "this" ? "on" : ""}">Current</a>
+      <a href="/mytime?preset=last${qsEmp}" class="${p.preset === "last" ? "on" : ""}">Last</a>
+      <span style="opacity:.55;margin-left:10px">Custom:</span>
+      From <input type="date" id="mt-from" value="${esc(p.from)}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+      To <input type="date" id="mt-to" value="${esc(p.to)}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px">
+      <button class="pb290" onclick="mtGo290()" style="${p.preset === "custom" ? "outline:2px solid #30d158" : ""}">Show</button>
+      <button class="pb290" onclick="window.print()" style="margin-left:14px;background:#1d5a2d;font-weight:700">&#128424; Print / Save as PDF</button>
+    </div>
+    ${picker}
+  </div>
+  <div class="hd290">
+    <h2>${esc(name || "My time")}</h2>
+    <div style="opacity:.75">${esc(p.label)} &middot; ${esc(p.rangeText)} <span style="opacity:.6">(Phoenix dates &middot; exact hours, not rounded for pay)</span></div>
+    <div class="tot290">
+      <div><span style="opacity:.6">Total</span><b>${t1(d.tot.all)} h</b></div>
+      <div><span style="opacity:.6">At the shop</span><b style="color:#30d158">${t1(d.tot.shop)} h</b></div>
+      <div><span style="opacity:.6">Remote</span><b style="color:#5ac8fa">${t1(d.tot.remote)} h</b></div>
+      ${d.tot.other > 0.005 ? `<div><span style="opacity:.6">Other lines</span><b>${t1(d.tot.other)} h</b></div>` : ""}
+    </div>
+  </div>
+  ${daysHtml}
+  <p class="muted noprint290" style="font-size:.85rem;margin-top:18px">This is an hours log for salaried staff — it is separate from the hourly Pay Worksheet and never feeds payroll. ${d.canEdit ? `Wrong time on a punch? <a href="/manager#timecorrections" style="color:#8e8e93">Time corrections</a>.` : ""}</p>
+</div>
+<script>
+  function mtGo290(){ var f=document.getElementById("mt-from").value, t=document.getElementById("mt-to").value; if(!f||!t) return; location.href="/mytime?from="+f+"&to="+t+${JSON.stringify(qsEmp)}; }
+  (function(){ document.querySelectorAll('.nt290').forEach(function(t){ var tm=null, last=t.value; var sv=document.querySelector('.sv290[data-for="'+t.dataset.cid+'"]');
+    t.addEventListener('input', function(){ clearTimeout(tm); if (sv) sv.textContent='…'; tm=setTimeout(async function(){ if (t.value===last) { if (sv) sv.textContent=''; return; }
+      try { var r=await fetch('/api/mtime/note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:t.value,clock_in_id:t.dataset.cid})}); var o=await r.json(); if (sv) sv.textContent = o.ok ? 'Saved' : (o.error||'Could not save'); if (o.ok) last=t.value; }
+      catch(e){ if (sv) sv.textContent='Network hiccup — try again'; } }, 900); }); }); })();
+</script></body></html>`;
+};
+const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
+  ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
   <h2>Welcome, ${emp.first_name}.</h2>
   ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
@@ -2598,6 +2775,7 @@ const watcherPage = (emp, clk = null) => `<!doctype html>
 const LINK_FALLBACK_234 = {
   "timecard.long_day": "/manager#timecorrections",   // deep tc_emp link is lost on old rows; the corrections lane still is the action surface
   "clock.auto_out": "/manager#timecorrections",
+  "mtime.auto_out": "/mytime",   // Block 290: the Marketing clock's quiet midnight close — his own log page
   "payroll.period_end": "/payroll?preset=last", "payroll.week40": "/payroll",
   "payroll.edited": "/manager#timecorrections",
   "sync.iface_add": "/reconcile", "sync.iface_drop": "/reconcile", "kit.short": "/reconcile",
@@ -3347,10 +3525,10 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true) => {   // Block 
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "My time (salaried log)"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/changes", "Order changes"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];   // Block 233 (Ross/Daniel): "Changes" (the Coyote push-to-push diff) is PLUMBING — off the top nav row, into the Tools drawer where the other pipeline pages live
   const tools = tools95 === "time"
-    ? [["/payroll", "Pay Worksheet"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed
+    ? [["/payroll", "Pay Worksheet"], ["/mytime", "Marketing time log"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed · Block 290: + the salaried hours log (read-only, so Kailey can answer Rob)
     : isAdmin
     ? daily95
     : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
@@ -7294,7 +7472,7 @@ async function payrollData(startMs, endMs) {
   // Block 212 (v201 SPEED): the five reads are independent — one round trip
   // (same queries verbatim; isWorkDay below rides the cached calendar).
   const [empsAll215, events, ahSess111, offRows, auto148] = await Promise.all([
-    db(`employee?select=id,first_name,last_name,active,pay_type&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner
+    db(`employee?select=id,first_name,last_name,active,pay_type,department&active=is.true&order=first_name,last_name`),   // Block 200: pay_type splits hourly vs salary/owner · Block 290: department keeps Marketing off the salaried footnote
     dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at,voided&voided=is.false&claimed_at=gte.${new Date(startMs - 2 * 86400000).toISOString()}&claimed_at=lt.${new Date(endMs).toISOString()}&order=claimed_at.asc,id.asc`),   // Block 252: WINDOWED (2-day margin for overnight spill) + PAGED — the unbounded fetch hit Supabase's silent 1,000-row cap on Tue 9/1 and payroll went blind to everything after
 
     db(`after_hours_session?select=employee_id,started_at,ended_at,signed_off_by,declined_by,decline_reason&started_at=lt.${new Date(endMs).toISOString()}&order=started_at.asc`),
@@ -7381,7 +7559,11 @@ async function payrollData(startMs, endMs) {
   // employees." They come OUT of the tables and totals; anyone of them who
   // did punch is listed by name below as informational only, so a salaried
   // manager's punches can never inflate the pay run.
-  const salNotes = rows.filter((r) => r.payType === "salary" || r.payType === "na")
+  // Block 290 (Daniel's ruling 8): MARKETING's punches are a separate log
+  // (/mytime) — they never appear on Kailey's sheet, not even as a footnote
+  // (it would confuse her cross-check against the hourly punches).
+  const deptOf290 = {}; for (const e of emps) deptOf290[e.id] = e.department || "";
+  const salNotes = rows.filter((r) => (r.payType === "salary" || r.payType === "na") && !isMktDept290(deptOf290[r.id]))
     .map((r) => ({ name: r.name, label: r.payType === "salary" ? "salary" : "owner", hrs: roundQ(r.reg + r.ot) }));
   const hourlyRows = rows.filter((r) => r.payType !== "salary" && r.payType !== "na");
   const totals = hourlyRows.reduce((a, r) => ({ reg: a.reg + r.reg, ot: a.ot + r.ot, sick: a.sick + r.sick, vac: a.vac + r.vac, unpaid: a.unpaid + r.unpaid, ahx: a.ahx + r.ahx, total: a.total + r.total }), { reg: 0, ot: 0, sick: 0, vac: 0, unpaid: 0, ahx: 0, total: 0 });
@@ -9193,6 +9375,22 @@ http.createServer(async (req, res) => {
         // (migration 0050), same pattern. Marketing/admins stay off the clock.
         const DEPT_LINE92 = { "Body Shop": 13, "Build": 12, "Accounting": 16 };
         let clk92 = null;
+        // Block 290: MARKETING gets its own card (shop / remote, no lunch, no
+        // after-hours, a recap box) — not the floor-style DEPT_LINE92 card.
+        let mt290 = null;
+        if (isMktDept290(emp.department)) {
+          const [lastMRows, hereRows290] = await Promise.all([
+            db(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+            Promise.resolve(onShopNetwork(req)),
+          ]);
+          const [lastM] = lastMRows;
+          const inM = Boolean(lastM && lastM.kind === "clock_in");
+          let note290 = "";
+          if (inM) { const [wl] = await db(`work_log?select=note&clock_in_id=eq.${lastM.id}&limit=1`); note290 = (wl && wl.note) || ""; }
+          mt290 = { clockedIn: inM, since: inM ? lastM.claimed_at : null, lineId: inM ? lastM.line_id : null,
+            where: inM ? (Number(lastM.line_id) === MKT_REMOTE_LINE_290 ? "remote" : "shop") : (hereRows290 ? "shop" : "remote"),
+            atShopIp: Boolean(hereRows290), note: note290 };
+        }
         if (DEPT_LINE92[emp.department]) {
           // Block 212 (v201 SPEED): reads fired together per dependency wave.
           const [lastC92Rows, rs92, hrs92] = await Promise.all([
@@ -9216,7 +9414,7 @@ http.createServer(async (req, res) => {
             ah: { now: ahNow92, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
-        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92));
+        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290));   // Block 290: Marketing clock card rides along (null for everyone else)
       }
       // Block 212 (v201 SPEED): the floor home's three base reads together.
       const [lastRows212, allLines, reasons] = await Promise.all([
@@ -9551,6 +9749,66 @@ http.createServer(async (req, res) => {
       // kit warehouse dropped while the line was down. Runs post-insert, so a
       // rejected clock-in above never resumes the line or starts a cab.
       if (lnGate && lnGate.down_today) await resumeDownLine135(line_id, empId);
+      return json(200, { ok: true });
+    }
+
+    // Block 290: MARKETING TIME — Daniel's clock. Its own two endpoints so the
+    // floor's /api/clock/* (lunch, line gates, after-hours governance, EOD
+    // photo gate) stay byte-for-byte untouched. Marketing department only.
+    // No wifiGate (remote is the point); no after_hours_session ever; the
+    // same double-clock-in guard; plain clock_in / clock_out_shift rows on
+    // lines 17 (shop) / 18 (remote) so every existing read understands them.
+    if (url.pathname === "/api/mtime/in" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [meM] = await db(`employee?select=department,active&id=eq.${empId}`);
+      if (!meM || !isMktDept290(meM.department)) return json(403, { ok: false, error: "This clock is for the Marketing department" });
+      const { where, claimed_at } = await body(req);
+      const lineM = where === "remote" ? MKT_REMOTE_LINE_290 : where === "shop" ? MKT_SHOP_LINE_290 : null;
+      if (!lineM) return json(400, { ok: false, error: "Pick At the shop or Remote" });
+      const [alreadyM] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (alreadyM && alreadyM.kind === "clock_in")
+        return json(400, { ok: false, error: `You're already on the clock${MKT_LINES_290.has(Number(alreadyM.line_id)) ? (Number(alreadyM.line_id) === MKT_REMOTE_LINE_290 ? " — Remote" : " — At the shop") : ""}. Clock out first.` });
+      const atIso = claimed_at && !Number.isNaN(Date.parse(claimed_at)) ? new Date(claimed_at).toISOString() : new Date().toISOString();
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: empId, line_id: lineM, kind: "clock_in", claimed_at: atIso }) });
+      logEvent("clock.in", empId, { line_id: lineM });
+      logEvent("mtime.in", empId, { line_id: lineM, where, at_shop_ip: onShopNetwork(req) });
+      return json(200, { ok: true, where });
+    }
+    if (url.pathname === "/api/mtime/out" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [meM] = await db(`employee?select=department&id=eq.${empId}`);
+      if (!meM || !isMktDept290(meM.department)) return json(403, { ok: false, error: "This clock is for the Marketing department" });
+      const { note, claimed_at } = await body(req);
+      const [lastM] = await db(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      if (!lastM || lastM.kind !== "clock_in") return json(400, { ok: false, error: "You're not on the clock" });
+      const noteM = String(note || "").trim().slice(0, 2000);
+      if (noteM) await upsertWorkLog290(empId, lastM.id, noteM);   // optional — a blank recap never blocks the clock-out
+      const atIso = claimed_at && !Number.isNaN(Date.parse(claimed_at)) ? new Date(claimed_at).toISOString() : new Date().toISOString();
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: empId, kind: "clock_out_shift", reason: "End of day", claimed_at: atIso }) });
+      logEvent("clock.out", empId, { reason: "End of day", kind: "clock_out_shift" });
+      logEvent("mtime.out", empId, { line_id: lastM.line_id, clock_in_id: lastM.id, note_chars: noteM.length });
+      return json(200, { ok: true });
+    }
+    // The recap box: autosave while on the clock (no id = the OPEN stint), or a
+    // later edit of a past stint by its owner (clock_in_id named). Owner-only.
+    if (url.pathname === "/api/mtime/note" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const { note, clock_in_id } = await body(req);
+      let cid = null;
+      if (clock_in_id) {
+        if (!isUuid(String(clock_in_id))) return json(400, { ok: false, error: "That stint isn't valid" });
+        const [own] = await db(`clock_event?select=id,employee_id,kind&id=eq.${clock_in_id}&voided=is.false`);
+        if (!own || own.employee_id !== empId || own.kind !== "clock_in") return json(403, { ok: false, error: "You can only write your own recap" });
+        cid = own.id;
+      } else {
+        const [lastM] = await db(`clock_event?select=id,kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        if (!lastM || lastM.kind !== "clock_in") return json(400, { ok: false, error: "You're not on the clock" });
+        cid = lastM.id;
+      }
+      await upsertWorkLog290(empId, cid, String(note || "").trim().slice(0, 2000));
       return json(200, { ok: true });
     }
 
@@ -10767,6 +11025,63 @@ http.createServer(async (req, res) => {
     // REPORTS v1 (file 12 / Q26): manager + admin only, like the cockpit.
     // Staff-level numbers never reach the floor (file 12 privacy rule).
     // PAY WORKSHEET (payroll hours export) — admin-only (payroll is sensitive).
+    // Block 290: MY TIME — the salaried hours LOG, per pay period, print-styled
+    // (the browser's Save-as-PDF IS the PDF; zero-dependency rule). Who may look:
+    // the person themself when salaried; any admin (Daniel, Rob, Ross, Kerry);
+    // the Accounting manager (Kailey — read-only, so she can answer Rob).
+    // Everyone else → /home (block 118: pages never dead-end).
+    if (url.pathname === "/mytime") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=id,first_name,last_name,role,department,pay_type,must_change_pin&id=eq.${empId}`);
+      if (!me) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const viewer290 = me.role === "admin" || (me.role === "manager" && me.department === "Accounting");
+      const selfOk290 = me.pay_type === "salary";
+      if (!viewer290 && !selfOk290) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      const reqEmp = String(url.searchParams.get("emp") || "");
+      let target = null;
+      const people290 = viewer290 ? await db(`employee?select=id,first_name,last_name,department,pay_type&active=is.true&pay_type=eq.salary&order=first_name,last_name`) : [];
+      if (viewer290 && reqEmp && isUuid(reqEmp)) target = people290.find((p) => p.id === reqEmp) || null;
+      if (!target && selfOk290) target = me;
+      if (!target && viewer290) target = people290.find((p) => isMktDept290(p.department)) || people290[0] || null;
+      if (!target) return send(200, "text/html; charset=utf-8", mytimePage290({ me, viewer: viewer290, people: people290, target: null, period: payPeriod(url.searchParams), days: [], tot: { shop: 0, remote: 0, other: 0, all: 0 }, canEdit: false, lineNames: {} }));
+      const period = payPeriod(url.searchParams);
+      const nowMs = Date.now();
+      const [evs, linesAll290] = await Promise.all([
+        dbAll252(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${target.id}&claimed_at=gte.${new Date(period.startMs - 2 * 86400000).toISOString()}&claimed_at=lt.${new Date(period.endMs).toISOString()}&order=claimed_at.asc,id.asc`),
+        db(`line?select=id,name`),
+      ]);
+      const lineNames290 = Object.fromEntries(linesAll290.map((l) => [l.id, l.name]));
+      // Pair punches into stints, keeping the clock-in id (the recap's key).
+      const stints = []; let open = null;
+      for (const ev of evs) {
+        const t = new Date(ev.claimed_at).getTime();
+        if (ev.kind === "clock_in") { open = { inId: ev.id, lineId: ev.line_id, start: t }; continue; }
+        if (open) { stints.push({ ...open, end: t, auto: ev.kind === "clock_out_auto" }); open = null; }
+      }
+      if (open) stints.push({ ...open, end: nowMs, live: true });
+      const ids290 = stints.map((s) => s.inId);
+      const notes290 = ids290.length ? await dbAll252(`work_log?select=clock_in_id,note,updated_at,created_at&clock_in_id=in.(${ids290.join(",")})`) : [];
+      const noteBy290 = Object.fromEntries(notes290.map((n) => [n.clock_in_id, n]));
+      const days = {}; const tot = { shop: 0, remote: 0, other: 0, all: 0 };
+      for (const s of stints) {
+        const a = Math.max(s.start, period.startMs), b = Math.min(s.end, period.endMs);
+        if (b <= a) continue;
+        const hrs = (b - a) / 3600000;
+        const d = phxDate(a);
+        const where = Number(s.lineId) === MKT_REMOTE_LINE_290 ? "remote" : Number(s.lineId) === MKT_SHOP_LINE_290 ? "shop" : "other";
+        tot[where] += hrs; tot.all += hrs;
+        (days[d] = days[d] || { date: d, hrs: 0, stints: [] });
+        days[d].hrs += hrs;
+        const n = noteBy290[s.inId];
+        days[d].stints.push({ inId: s.inId, start: a, end: b, hrs, where, lineName: lineNames290[s.lineId] || "", live: Boolean(s.live), auto: Boolean(s.auto),
+          note: n ? n.note : "", edited: n && n.updated_at && n.created_at && n.updated_at !== n.created_at ? n.updated_at : null });
+      }
+      const dayList = Object.values(days).sort((x, y) => (x.date < y.date ? -1 : 1));
+      return send(200, "text/html; charset=utf-8", mytimePage290({ me, viewer: viewer290, people: people290, target, period, days: dayList, tot, canEdit: target.id === me.id, lineNames: lineNames290 }));
+    }
+
     if (url.pathname === "/payroll" || url.pathname === "/payroll.csv" || url.pathname === "/payroll.xlsx") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
