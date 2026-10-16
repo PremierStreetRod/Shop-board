@@ -3844,6 +3844,40 @@ const ocLane293 = (onClock) => onClock.length ? `
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
   </div>` : "";
+// Block 295 (Daniel, Michael's console: "way overwhelming… most of these
+// shouldn't automatically display"): a FOLDED lane — title, one plain sentence,
+// "+ Show". The tablet remembers which ones he left open (localStorage).
+const fold295 = (id, title, blurb, body, count) => `
+  <details class="fold295" id="${id}" data-fold="${id}">
+    <summary><span><b>${title}</b>${count != null ? ` <span class="cnt">${count}</span>` : ""}<span class="blurb">${blurb}</span></span><span class="tog">+ Show</span></summary>
+    <div class="fbody">${body}</div>
+  </details>`;
+const FOLD_CSS_295 = `<style>
+  .fold295{border:1px solid var(--line);border-radius:14px;margin-bottom:10px;background:var(--card)}
+  .fold295>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px}
+  .fold295>summary::-webkit-details-marker{display:none}
+  .fold295 .blurb{display:block;opacity:.6;font-size:.88rem;margin-top:2px;font-weight:400}
+  .fold295 .cnt{display:inline-block;min-width:1.4em;text-align:center;background:#3a3a3c;border-radius:9px;padding:1px 7px;font-size:.8rem;margin-left:8px;vertical-align:middle}
+  .fold295 .tog{flex:none;border:1px solid #3a3a3c;border-radius:9px;padding:5px 10px;font-size:.85rem;color:#c7c7cc;white-space:nowrap}
+  .fold295[open] .tog::before{content:"\\2013 Hide"}.fold295[open] .tog{font-size:0}.fold295[open] .tog::before{font-size:.85rem}
+  .fold295 .fbody{padding:0 16px 12px}.fold295 .fbody .lane{border:none;padding:0;margin:0;background:transparent}
+  .x295{opacity:.6;font-size:.9rem;margin:-6px 0 12px}
+</style>
+<script>(function(){ document.addEventListener("toggle", function(e){ var d = e.target; if (!d.classList || !d.classList.contains("fold295")) return; try { localStorage.setItem("mgrfold295:" + d.dataset.fold, d.open ? "1" : "0"); } catch (x) {} }, true);
+  document.addEventListener("DOMContentLoaded", function(){ document.querySelectorAll("details.fold295").forEach(function(d){ try { var v = localStorage.getItem("mgrfold295:" + d.dataset.fold); if (v === "1") d.open = true; if (v === "0") d.open = false; } catch (x) {} }); }); })();</script>`;
+// The Production manager's three folded lists — same rows, same buttons, same
+// endpoints as the always-open lanes everyone else sees; only the wrapper changed.
+const prodLanes295 = (onClock, longRunners, recentDone) => `
+  ${fold295("oc", "On the clock", "Who's punched in right now. The Clock out button is only for the tap somebody forgot.",
+    onClock.length ? onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("") : `<div style="opacity:.6">Nobody is on the clock.</div>`, onClock.length)}
+  ${fold295("rl", "Running long", "Steps that have been open 4+ hours. Just a glance — usually someone went to help elsewhere. Changes no math.",
+    longRunners.length ? longRunners.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+      <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("") : `<div style="opacity:.6">Nothing running long.</div>`, longRunners.length)}
+  ${fold295("rd", "Recently checked off", "The last steps marked done, and who tapped them. Un-complete puts one back if it was a mis-tap.",
+    recentDone.length ? recentDone.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
+      <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
+      <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("") : `<div style="opacity:.6">Nothing checked off yet today.</div>`, recentDone.length)}`;
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -3883,14 +3917,15 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <div style="position:absolute;left:50%;transform:translateX(-50%);top:26px;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:6px 0;z-index:90;min-width:180px;box-shadow:0 10px 26px rgba(0,0,0,.55);text-align:left">
         ${rows.map((r) => `<a href="#line99-${r.line.id}" onclick="this.closest('details').open=false" style="display:block;padding:8px 14px;color:#e8e8ed;text-decoration:none">${r.line.name}</a>`).join("")}
       </div></details>
-    ${insp188 ? "" : `<a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
-    <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>
+    ${insp188 ? "" : `${isAdmin ? `<a href="#to99" style="color:#fff;font-weight:700;margin-right:14px">Time off</a>
+    <a href="#timecorrections" style="color:#fff;font-weight:700;margin-right:14px">Time corrections</a>` : ""}
     <a href="#fixjob" style="color:#fff;font-weight:700">Fix jobs</a>`}
   </div>`}
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : acct189 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— time &amp; pay</span>` : ""}</h2>
-  ${!insp188 && !acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM (after the timecard editor) — Kailey doesn't work from it -->
-  ${!insp188 && !acct189 && longRunners.length ? `
+  ${!isAdmin && !insp188 && !acct189 ? FOLD_CSS_295 + `<div class="x295">Your lines, the cab on each, and anything waiting on you. The other lists are folded below &mdash; tap <b>+ Show</b> to open one; the tablet remembers.</div>` : ""}
+  ${isAdmin && !insp188 && !acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM · Block 295: the Production manager gets it FOLDED at the bottom (prodLanes295) -->
+  ${isAdmin && !insp188 && !acct189 && longRunners.length ? `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
        run; the who + since makes it self-explanatory. -->
@@ -3899,7 +3934,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
   </div>` : ""}
-  ${!insp188 && !acct189 && recentDone.length ? `
+  ${isAdmin && !insp188 && !acct189 && recentDone.length ? `
   <!-- RECENTLY CHECKED OFF (Q107): the shared undo. A step completed out
        from under a partner comes back here — audited, and the engine's
        earned-value math nets it out automatically (earned = completed
@@ -3967,7 +4002,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       </div>
     </div>`)).join("")}
   </div>` : ""}
-  ${acct189 ? "" : `
+  ${acct189 || (!isAdmin && !insp188) ? "" : `
   <!-- Block 207 (owner ruling, Sat 8/22): the ONE-TAP Body send-back — the
        safety valve of the one-inspection system. After rework the crew
        pushes their own cab to Body; if the fixes aren't right, ONE tap
@@ -4008,9 +4043,10 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
                   cab is running (a production role out sick/vacation). The manager
                   TYPES the reason (no pick-list) — it rides with the order and the
                   hold is timed until Back up or a production clock-in. -->
-             <div style="margin:-4px 0 8px;font-size:.85rem">
-               <input id="dr-${r.line.id}" placeholder="Why down? (rides with the order)" maxlength="120" style="padding:5px;width:58%;min-width:210px;background:#111;color:#fff;border:1px solid var(--line);border-radius:6px">
-               <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Put line down</button></div>`)}
+             <details style="margin:-4px 0 8px;font-size:.85rem"><summary style="cursor:pointer;color:#8e8e93;list-style:none;display:inline-block;border:1px solid #3a3a3c;border-radius:8px;padding:3px 9px">Put line down &#9656;</summary>
+               <div style="margin-top:6px"><input id="dr-${r.line.id}" placeholder="Why down? (rides with the order)" maxlength="120" style="padding:5px;width:58%;min-width:210px;background:#111;color:#fff;border:1px solid var(--line);border-radius:6px">
+               <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Put line down</button>
+               <div style="opacity:.55;margin-top:4px">Nobody expected on this line today (staff out, equipment down). The TV shows the reason instead of an idle line; it comes back up the moment someone clocks in.</div></div></details>`)}
       ${(r.awaiting || []).map((w) => `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
@@ -4056,7 +4092,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
-        ${insp188 ? "" : `${oc255(r.active.id, r.active.opts255)}<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`
+        ${insp188 ? "" : `${oc255(r.active.id, r.active.opts255)}${!isAdmin ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`}`
       : `<div style="opacity:.6">No active cab</div>
         ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
@@ -4068,7 +4104,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        the jump-nav above mirrors this exact order. -->
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
-  ${insp188 || acct189 ? "" : `
+  ${insp188 || acct189 || !isAdmin ? "" : `
   <div class="lane" id="to99"><h3>Time off</h3>
     ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
@@ -4191,7 +4227,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see this pay period and last pay period of hours.</div>`}
   </div>` : ""}
   ${acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Kailey's On-the-clock lane lives at the bottom -->
-  ${!insp188 && tc ? `
+  ${!insp188 && (isAdmin || acct189) && tc ? `   /* Block 295: the Production manager loses the punch-level corrector (accounting/admin thing); admins + Accounting keep it */
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
        clock can retire. Pick a person and a Phoenix day; MOVE a punch that
        has the wrong time, VOID one that shouldn't exist, ADD a forgotten
@@ -4228,6 +4264,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
   ${insp188 || acct189 ? "" : `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
+    <div style="opacity:.6;font-size:.9rem;margin:-6px 0 10px">A cab that came back after leaving production &mdash; from the Body Shop or from a customer. Open a fix job and the crew grabs it from their screens; its hours stay off every line's pace.</div>
     ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} · ${(f.on || []).length ? `<b style="color:#4a90d9">on it: ${f.on.join(" · ")}</b>` : `<span style="opacity:.55">nobody on it right now</span>`}
       <!-- Block 266 (Daniel): the open fix is EDITABLE in place — frame, note,
            re-inspect line — plus "Fix done" (manager closes the work, cab goes
@@ -4243,17 +4280,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
       <b>Open a fix job on a returned cab:</b>
       <p>Order
-        <select id="fx-cab">${fixjob.completed.length ? fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
-        <select id="fx-kind"><option value="" disabled selected>&mdash; who sent it back? &mdash;</option><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
-        <select id="fx-reason"><option value="" disabled selected>&mdash; why is it back? &mdash;</option>${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
+        <select id="fx-cab" onchange="fxCheck295()">${fixjob.completed.length ? `<option value="" disabled selected>&mdash; select the order &mdash;</option>` + fixjob.completed.map((c) => `<option value="${c.id}">${c.order}${c.cab ? ` · Cab #${c.cab}` : ""}</option>`).join("") : `<option value="">— no recently-completed cabs —</option>`}</select>
+        <select id="fx-kind" onchange="fxCheck295()"><option value="" disabled selected>&mdash; who sent it back? &mdash;</option><option value="kickback">Body Shop kickback</option><option value="customer_return">Customer return</option></select>
+        <select id="fx-reason" onchange="fxCheck295()"><option value="" disabled selected>&mdash; why is it back? &mdash;</option>${fixjob.reasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
       </p>
       <p>Re-inspects on <select id="fx-line"><option value="">&mdash; its original line &mdash;</option>${fixjob.lines.map((l) => `<option value="${l.id}">${l.name}</option>`).join("")}</select>
 </p>
       <p>Note <input id="fx-note" style="min-width:280px" placeholder="what needs fixing (optional)"></p>
-      <button class="btn" style="background:#0a6cff" onclick="armM(this,()=>openFix())">Open fix job</button>
-      <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span>
+      <button class="btn" id="fx-go" style="background:#0a6cff;opacity:.45" disabled onclick="armM(this,()=>openFix())">Open fix job</button>
+      <span id="fx-hint" style="opacity:.6;font-size:.85rem;margin-left:8px">Pick the order, who sent it back, and why &mdash; then the button lights up.</span>
+      <details style="margin-top:10px"><summary style="cursor:pointer;color:#8e8e93;font-size:.85rem;list-style:none">How fix jobs work &#9656;</summary>
+      <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span></details>
     </div>
   </div>`}
+  ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -4566,9 +4606,14 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     const el = document.getElementById("tccmsg-" + r.ds); if (el) { el.style.color = "#30d158"; el.textContent = "\u2713 " + r.msg; el.scrollIntoView({ block: "center" }); setTimeout(() => { el.textContent = ""; el.style.color = "#ff6b5e"; }, 8000); } } catch (e) {} })();
   function armM(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
   // Q85: open a fix job on a returned/kicked-back cab.
+  // Block 295: the Open-fix-job button stays grey until the order, who, and why are all picked — and then says which order.
+  function fxCheck295(){ var c = document.getElementById("fx-cab"), k = document.getElementById("fx-kind"), r = document.getElementById("fx-reason"), b = document.getElementById("fx-go"), h = document.getElementById("fx-hint"); if (!b) return;
+    var ok = c && c.value && k && k.value && r && r.value; b.disabled = !ok; b.style.opacity = ok ? "1" : ".45";
+    if (ok) { var t = c.options[c.selectedIndex].textContent.split(" · ")[0]; b.textContent = "Open fix job for " + t; if (h) h.textContent = "Tap once to arm, again to open — the crew sees it right away."; }
+    else { b.textContent = "Open fix job"; if (h) h.textContent = "Pick the order, who sent it back, and why — then the button lights up."; } }
   async function openFix(){
     var cab = document.getElementById("fx-cab").value;
-    if(!cab){ document.getElementById("err").textContent = "No completed cab to send back."; return; }
+    if(!cab){ document.getElementById("err").textContent = "Pick the order first."; return; }
     if(!document.getElementById("fx-kind").value){ document.getElementById("err").textContent = "Pick who sent it back — Body Shop or the customer."; return; }
     if(!document.getElementById("fx-reason").value){ document.getElementById("err").textContent = "Pick why it came back."; return; }
     var payload = { build_id: cab, kind: document.getElementById("fx-kind").value,
@@ -12889,6 +12934,14 @@ self.addEventListener("notificationclick", (e) => {
       if (/sb_shared=1/.test(req.headers.cookie || "")) return json(200, { ok: false, shared: true });
       const { endpoint, p256dh, auth } = await body(req);
       if (!endpoint || !p256dh || !auth) return json(400, { ok: false, error: "Incomplete subscription" });
+      // Block 295: the bell script re-registers on EVERY page load (Michael: 413
+      // "push.subscribed" rows in a month). A same-device refresh now just
+      // refreshes the row; the audit row is written only for a NEW device.
+      const [ex295] = await db(`push_subscription?select=id,employee_id&endpoint=eq.${encodeURIComponent(endpoint)}&limit=1`);
+      if (ex295 && ex295.employee_id === empId) {
+        await db(`push_subscription?id=eq.${ex295.id}`, { method: "PATCH", body: JSON.stringify({ p256dh, auth, user_agent: req.headers["user-agent"] || "" }) });
+        return json(200, { ok: true, refreshed: true });
+      }
       await db(`push_subscription?endpoint=eq.${encodeURIComponent(endpoint)}`, { method: "DELETE" });
       await db("push_subscription", { method: "POST", body: JSON.stringify({
         employee_id: empId, endpoint, p256dh, auth, user_agent: req.headers["user-agent"] || "" }) });
