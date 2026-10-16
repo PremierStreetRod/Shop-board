@@ -2315,6 +2315,36 @@ const whRow288 = (q, i, r, canAct) => {
           </div>` : ""}
       </div>`;
 };
+// Block 292: in-place redraw after a punch (shared by the warehouse page and
+// the Build/Body/Accounting clock card). ack = immediate "✓ Clocked in 6:54 AM"
+// so the person SEES it landed, then the fresh page is fetched in the
+// background and only the named region is swapped — no navigation, so a
+// Sign out tap a second later is never swallowed. Any failure → plain reload
+// (the pre-292 behavior), never a stuck screen.
+const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
+    var el = document.querySelector(sel);
+    try { var now = new Date(); var hh = now.getHours() % 12 || 12, mm = String(now.getMinutes()).padStart(2, "0"), ap = now.getHours() >= 12 ? "PM" : "AM";
+      var ack = document.createElement("div"); ack.id = "ack292"; ack.style.cssText = "text-align:center;margin:6px auto;max-width:560px;padding:10px 14px;border-radius:12px;background:#1d5a2d;color:#fff;font-weight:800;font-size:1.1rem";
+      ack.textContent = "\u2713 " + (what || "Saved") + " " + hh + ":" + mm + " " + ap;
+      if (el) { el.style.opacity = ".55"; el.parentNode.insertBefore(ack, el); } } catch (e) {}
+    return fetch(location.href, { cache: "no-store", credentials: "same-origin" }).then(function(r){ return r.text(); }).then(function(h){
+      var d = new DOMParser().parseFromString(h, "text/html"); var n = d.querySelector(sel);
+      if (!el || !n) { location.reload(); return; }
+      el.replaceWith(n); var a = document.getElementById("ack292");
+      // Block 292 option 2 (Daniel: "build both"): on the SHARED TABLET the natural
+      // session is sign in → punch → sign out (Evan's are 4–19 s long). After a
+      // punch from a dept clock card, return to the sign-in screen by itself in a
+      // few seconds — with a "Stay signed in" link that cancels. Phones never do
+      // this (no sb_shared_ui cookie), and the warehouse page never does (Eric
+      // works that page after clocking in).
+      var shared = /(^|; )sb_shared_ui=1/.test(document.cookie || "");
+      if (a && autoOut && shared) {
+        var left = 4, line = document.createElement("div"); line.style.cssText = "font-size:.9rem;font-weight:400;margin-top:6px;opacity:.9";
+        var tick = function(){ line.innerHTML = "Back to sign-in in " + left + "\u2026 &nbsp; <a href=\"#\" id=\"stay292\" style=\"color:#fff;text-decoration:underline\">Stay signed in</a>"; var st = document.getElementById("stay292"); if (st) st.onclick = function(ev){ ev.preventDefault(); clearInterval(tm); a.remove(); }; };
+        a.appendChild(line); tick();
+        var tm = setInterval(function(){ left--; if (left <= 0) { clearInterval(tm); location.replace("/logout"); return; } tick(); }, 1000);
+      } else if (a) setTimeout(function(){ a.remove(); }, 4000);
+    }).catch(function(){ location.reload(); }); }`;
 const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -2430,7 +2460,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }) });
       const out = await r.json();
-      if (out.ok) return location.reload();
+      if (out.ok) return /\/api\/clock\//.test(url) ? swapIn292(".wrap", url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out") : location.reload();   // Block 292: clock taps redraw in place (Eric's tablet has Evan's race too); every other action still reloads
       // Block 124 (logic audit M6): if the tap failed because we're no longer
       // on the clock (day-end sweep or a manager clocked us out), this screen
       // is stale — reload so it shows the real state, not a silent reject under
@@ -2501,6 +2531,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
     post("/api/clock/out", { reason: rW, note: rW.indexOf("Other") === 0 ? w.value.trim() : undefined,
       wrap_note: w.value.trim() }, btn);
   }
+  ${swapIn292Script()}
   setInterval(() => { const f = document.activeElement, wp107 = document.getElementById("ahwrapW107");
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp107 && wp107.style.display !== "none") return;
@@ -2783,7 +2814,7 @@ const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
   ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
   <h2>Welcome, ${emp.first_name}.</h2>
-  ${clk && clk.show ? `<style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
+  ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
     ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</div>
@@ -2805,7 +2836,7 @@ const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
         <button class="wbtn" style="background:#1d5a2d;margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
         <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
       </div>` : ""}`}</div>
-  <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p>` : ""}
+  <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p></div>` : ""}
   <p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
     ${emp.department === "Owner" || emp.role === "admin"
@@ -2875,10 +2906,18 @@ const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
     }
     b.disabled = true;
     try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, claimed_at: new Date().toISOString() }) });
-      const o = await r.json(); if (o.ok) return location.reload();
+      const o = await r.json(); if (o.ok) return swapIn292("#clkcard292", u.indexOf("/in") > -1 ? "Clocked in" : "Clocked out", true);   // Block 292: tablet returns to sign-in by itself (phones: no)
       document.getElementById("werr").textContent = o.error || "Something went wrong";
     } catch (e) { document.getElementById("werr").textContent = "Network hiccup — try again"; }
     b.disabled = false; }
+  // Block 292 (Evan's "3–4 taps to sign out", shop tablet): a successful punch used
+  // to location.reload() the whole page — on the tablet that redraw takes a few
+  // seconds and Safari ignores link taps while a navigation is in flight, so the
+  // Sign out tap right after a punch went nowhere. Now the card acknowledges at
+  // once ("✓ Clocked in 6:54 AM") and REDRAWS ITSELF IN PLACE from a fresh copy of
+  // the page — no navigation, so every tap lands. Falls back to a reload only if
+  // the fresh copy can't be read.
+  ${swapIn292Script()}
   // Block 154: push subscribe/test moved to the shared bell script (automatic).
 </script></body></html>`;
 
