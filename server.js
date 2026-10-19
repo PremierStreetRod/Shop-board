@@ -3400,7 +3400,7 @@ const progressReportPage210 = (b, family, days) => {
   @media print{ body{background:#fff} .sheet{max-width:none;padding:.55in .6in;min-height:0} .noprint{display:none!important} .shots img{height:2in} .hiddenitem{display:none!important} .modrow{display:none} .addbar{display:none} .hidtag{display:none} }
 </style></head>
 <body>
-<div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}/photos.zip" style="color:#C8102E;font-weight:700">&#11015; Download all photos</a><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
+<div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}/photos.zip" download target="_blank" rel="noopener" style="color:#C8102E;font-weight:700">&#11015; Download all photos</a><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
 <div class="wm">PREMIER STREET ROD</div>
 <div class="sheet"><div class="inner">
   <div class="lh"><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Lake Havasu City, Arizona</div></div>
@@ -3569,7 +3569,7 @@ const galleryPage296 = (b, family, photos, tok, expiresAt) => {
   <div class="lh"><div><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Lake Havasu City, Arizona</div></div></div>
   <h1>Your cab, straight from the shop floor</h1>
   <div class="meta"><b>Order ${escH(b.order_number)}</b>${family ? ` &middot; ${escH(family)}` : ""}${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""} &middot; ${photos.length} photo${photos.length === 1 ? "" : "s"}</div>
-  ${photos.length ? `<a class="save" href="${base}/photos.zip">&#11015; Save all photos (${photos.length})</a>
+  ${photos.length ? `<a class="save" href="${base}/photos.zip" download target="_blank" rel="noopener">&#11015; Save all photos (${photos.length})</a>
   <div class="hint">Downloads one file with every photo at full size. Tap any photo to see it larger; press and hold to save just that one. This page is good through ${escH(good)}.</div>` : `<div class="hint">Photos will appear here as your cab moves through the shop.</div>`}
   ${order.map((ds) => `<div class="day"><h2>${escH(longDate296(ds))}</h2><div class="grid">${days[ds].map((p) => `<a href="${base}/photo/${p.id}" target="_blank" rel="noopener"><img src="${base}/thumb/${p.id}" loading="lazy" alt="build photo">${p.step ? `<small>${escH(p.step)}</small>` : ""}</a>`).join("")}</div></div>`).join("")}
   <div class="ft"><span>Premier Street Rod &middot; 1100 N Lake Havasu Ave, Lake Havasu City, AZ 86403 &middot; 800-447-5000 &middot; PremierStreetRod.com</span><span>Order ${escH(b.order_number)}</span></div>
@@ -3588,7 +3588,7 @@ const shareLane296 = (b, photoCount, links, myMobile) => {
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:2px">PHOTOS — download &amp; share with the customer</div>
     <div style="opacity:.55;font-size:.85rem;margin-bottom:8px">Admin only. Every photo the crew has taken on this cab, minus anything hidden from the customer report. A share link opens a private photo page with no sign-in — text it to yourself, then forward it to the customer from your own phone.</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-      <a class="b" href="/order/${encodeURIComponent(b.order_number)}/photos.zip" style="background:#0a6cff${photoCount ? "" : ";opacity:.45;pointer-events:none"}">&#11015; Download all photos (${photoCount})</a>
+      <a class="b" href="/order/${encodeURIComponent(b.order_number)}/photos.zip" download target="_blank" rel="noopener" style="background:#0a6cff${photoCount ? "" : ";opacity:.45;pointer-events:none"}">&#11015; Download all photos (${photoCount})</a>
       <button class="b g" onclick="shCreate296(this)" ${photoCount ? "" : "disabled"}>&#128279; New share link (good ${SHARE_DAYS_296} days)</button>
       <span id="sh-msg296" style="font-size:.9rem;opacity:.8"></span>
     </div>
@@ -10482,6 +10482,9 @@ http.createServer(async (req, res) => {
     const adm296 = async () => { const e = await liveSession(req); if (!e) return [null, json(401, { ok: false, error: "Signed out" })]; const [m] = await db(`employee?select=role,mobile,first_name&id=eq.${e}`); if (!m || m.role !== "admin") return [null, json(403, { ok: false, error: "Admin only" })]; return [e, null, m]; };
     const buildByOrder296 = async (ord) => { if (!/^[\w.\- ]{1,40}$/.test(ord)) return null; const [b] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ord)}&order=created_at.desc&limit=1`); return b || null; };
     // Part 1 — the ZIP (admin): /order/<num>/photos.zip (must sit ahead of the /order/ page route)
+    // Block 296b (Daniel's iPad, 14:19): from the HOME-SCREEN app the ZIP opened in the same window — a dead
+    // "Open in…" page with no way back. Every ZIP link now opens in its own tab (standalone → Safari + its
+    // download manager) and carries the download hint, so the app page stays put.
     if (/^\/order\/[^/]+\/photos\.zip$/.test(url.pathname)) {
       const [eZ, failZ] = await adm296(); if (failZ) return failZ;
       const bZ = await buildByOrder296(decodeURIComponent(url.pathname.split("/")[2]));
