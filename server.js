@@ -3400,7 +3400,7 @@ const progressReportPage210 = (b, family, days) => {
   @media print{ body{background:#fff} .sheet{max-width:none;padding:.55in .6in;min-height:0} .noprint{display:none!important} .shots img{height:2in} .hiddenitem{display:none!important} .modrow{display:none} .addbar{display:none} .hidtag{display:none} }
 </style></head>
 <body>
-<div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
+<div class="printfab noprint"><button onclick="window.print()">&#128424; Print / Save as PDF</button><a href="/order/${encodeURIComponent(b.order_number)}/photos.zip" style="color:#C8102E;font-weight:700">&#11015; Download all photos</a><a href="/order/${encodeURIComponent(b.order_number)}">&#8592; back to the order</a></div>
 <div class="wm">PREMIER STREET ROD</div>
 <div class="sheet"><div class="inner">
   <div class="lh"><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Lake Havasu City, Arizona</div></div>
@@ -3457,6 +3457,158 @@ const progressReportPage210 = (b, family, days) => {
 </body></html>`;
 };
 
+// ===================== Block 296 (Daniel, Mon 10/19): CAB PHOTOS — DOWNLOAD-ALL + CUSTOMER SHARE LINK =====================
+// Ross wanted to send a customer JUST THE PHOTOS of one cab, not the report;
+// the front office had to open and save every photo one at a time. Part 1:
+// one tap = a ZIP of every visible photo on the cab (admin, order page +
+// report page). Part 2: a private, expiring (60 days — Daniel's ruling),
+// no-login photo gallery per cab at /p/<token> — the front office texts the
+// link to ITSELF (existing Twilio channel) and forwards it to the customer
+// from their own phone, so it arrives from a person the customer knows. NOT
+// MMS (carriers shrink photos, 10 per message, cold robot number). The
+// hidden-photo rule from the customer report applies everywhere here.
+// ZIP is written by hand (zero-dependency rule): STORE method — JPEGs don't
+// compress — with data descriptors so the response STREAMS photo by photo
+// instead of buffering a 300 MB cab in memory. Opens in Finder, Windows,
+// and iOS Files.
+const CRC32_296 = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+const crc32_296 = (buf) => { let c = -1; for (let i = 0; i < buf.length; i++) c = CRC32_296[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; };
+const dosTime296 = (iso) => {   // DOS date/time in Phoenix — what Finder shows as the file's date
+  const d = new Date(new Date(iso).getTime() - PHX_OFFSET_MS);
+  const dt = ((d.getUTCFullYear() - 1980) << 9) | ((d.getUTCMonth() + 1) << 5) | d.getUTCDate();
+  const tm = (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | (d.getUTCSeconds() >> 1);
+  return { dt: dt & 0xffff, tm: tm & 0xffff };
+};
+// files = [{ name, at, data: Buffer }] arriving one at a time through next(); writes straight to res.
+async function zipStream296(res, zipName, next) {
+  res.writeHead(200, { "content-type": "application/zip", "content-disposition": `attachment; filename="${zipName.replace(/[^\w.\-]+/g, "_")}"`, "cache-control": "private, no-store" });
+  const central = []; let offset = 0; let count = 0;
+  const w = (b) => { res.write(b); offset += b.length; };
+  for (let f = await next(); f; f = await next()) {
+    const name = Buffer.from(f.name, "utf8"); const crc = crc32_296(f.data); const { dt, tm } = dosTime296(f.at); const start = offset;
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0808, 6); lh.writeUInt16LE(0, 8); lh.writeUInt16LE(tm, 10); lh.writeUInt16LE(dt, 12);
+    lh.writeUInt32LE(0, 14); lh.writeUInt32LE(0, 18); lh.writeUInt32LE(0, 22); lh.writeUInt16LE(name.length, 26); lh.writeUInt16LE(0, 28);
+    w(lh); w(name); w(f.data);
+    const dd = Buffer.alloc(16); dd.writeUInt32LE(0x08074b50, 0); dd.writeUInt32LE(crc, 4); dd.writeUInt32LE(f.data.length, 8); dd.writeUInt32LE(f.data.length, 12); w(dd);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0808, 8); ch.writeUInt16LE(0, 10); ch.writeUInt16LE(tm, 12); ch.writeUInt16LE(dt, 14);
+    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(f.data.length, 20); ch.writeUInt32LE(f.data.length, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt16LE(0, 30); ch.writeUInt16LE(0, 32); ch.writeUInt16LE(0, 34); ch.writeUInt16LE(0, 36); ch.writeUInt32LE(0, 38); ch.writeUInt32LE(start, 42);
+    central.push(Buffer.concat([ch, name])); count++;
+  }
+  const cdStart = offset; for (const c of central) w(c);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10); end.writeUInt32LE(offset - cdStart, 12); end.writeUInt32LE(cdStart, 16); end.writeUInt16LE(0, 20);
+  w(end); res.end(); return count;
+}
+// Every VISIBLE photo on a cab (progress / finish / task — the report's feed), oldest first, with a
+// desktop-sortable file name: 2026-10-15_07-door-and-rocker_1.jpg · 2026-10-16_end-of-day_2.jpg · 2026-10-17_finish_1.jpg
+async function cabPhotos296(buildId) {
+  const [ph, tk] = await Promise.all([
+    db(`build_photo?select=id,kind,task_id,storage_path,thumb_path,created_at,hidden&build_id=eq.${buildId}&hidden=is.false&kind=in.(progress,finish,task)&order=created_at.asc&limit=400`),
+    db(`task?select=id,name,display_no&build_id=eq.${buildId}&limit=600`),
+  ]);
+  const tn = Object.fromEntries(tk.map((t) => [t.id, t]));
+  const seq = {};
+  return ph.map((p) => {
+    const t = p.task_id ? tn[p.task_id] : null; const ds = phxDate(new Date(p.created_at).getTime());
+    const label = t ? `${t.display_no ? String(t.display_no).padStart(2, "0") + "-" : ""}${String(t.name)}` : p.kind === "progress" ? "end-of-day" : p.kind === "finish" ? "finish" : "photo";
+    const slug = label.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+    const key = ds + "_" + slug; seq[key] = (seq[key] || 0) + 1;
+    const ext = /\.(png|webp)$/i.test(p.storage_path || "") ? p.storage_path.match(/\.(png|webp)$/i)[1].toLowerCase() : "jpg";
+    return { id: p.id, kind: p.kind, at: p.created_at, ds, step: t ? `${t.display_no ? t.display_no + ". " : ""}${t.name}` : (p.kind === "progress" ? "End of day" : p.kind === "finish" ? "Finished" : ""), storage_path: p.storage_path, thumb_path: p.thumb_path, name: `${key}_${seq[key]}.${ext}` };
+  });
+}
+async function storageBuf296(path) {
+  const f = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!f.ok) return null; return { buf: Buffer.from(await f.arrayBuffer()), type: f.headers.get("content-type") || "image/jpeg" };
+}
+// Streams the cab's ZIP: fetches 4 photos ahead so a 100-photo cab doesn't crawl one round-trip at a time.
+async function sendCabZip296(res, b, photos) {
+  const queue = photos.slice(); const ahead = [];
+  const fill = () => { while (ahead.length < 4 && queue.length) { const p = queue.shift(); ahead.push(storageBuf296(p.storage_path).then((r) => ({ p, r }))); } };
+  const next = async () => { for (;;) { fill(); if (!ahead.length) return null; const { p, r } = await ahead.shift(); if (r) return { name: p.name, at: p.at, data: r.buf }; } };
+  return zipStream296(res, `Order-${b.order_number}${b.cab_number ? "-Cab-" + b.cab_number : ""}-photos.zip`, next);
+}
+const shareToken296 = () => crypto.randomBytes(24).toString("base64url");                    // 32 chars, URL-safe
+const SHARE_DAYS_296 = 60;
+// Looks a token up: live (not revoked, not expired) → the row + its build, else null.
+async function shareLookup296(tok) {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(String(tok || ""))) return null;
+  const [s] = await db(`share_link?select=id,build_id,expires_at,revoked_at,views&token=eq.${encodeURIComponent(tok)}`);
+  if (!s || s.revoked_at || new Date(s.expires_at).getTime() < Date.now()) return null;
+  const [b] = await db(`build?select=id,order_number,part_number,cab_number,started_at&id=eq.${s.build_id}`);
+  return b ? { s, b } : null;
+}
+const longDate296 = (ds) => { const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"], DOW = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]; const d = new Date(ds + "T12:00:00Z"); return `${DOW[d.getUTCDay()]}, ${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`; };
+// The customer-facing gallery — the report's letterhead, photos by day (newest day first), tap for
+// full size, one "Save all photos" button (the ZIP). Premier's voice only; no sign-in; nothing else reachable.
+const galleryPage296 = (b, family, photos, tok, expiresAt) => {
+  const days = {}; for (const p of photos) (days[p.ds] = days[p.ds] || []).push(p);
+  const order = Object.keys(days).sort((a, z) => (a < z ? 1 : -1));
+  const good = longDate296(phxDate(new Date(expiresAt).getTime()));
+  const base = `/p/${encodeURIComponent(tok)}`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Your Cab — Photos — Order ${escH(b.order_number)}</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f4f4;color:#1a1a1a}
+  .sheet{max-width:980px;margin:0 auto;background:#fff;padding:28px 22px 40px;min-height:100vh}
+  .lh{border-bottom:4px solid #C8102E;padding-bottom:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+  .lh .co{font-weight:900;font-size:24px;letter-spacing:.06em;color:#111} .lh .co span{color:#C8102E}
+  .lh .tag{font-size:11px;letter-spacing:.26em;color:#777;text-transform:uppercase;margin-top:2px}
+  h1{font-size:21px;margin:14px 0 2px} .meta{color:#555;font-size:13.5px;margin-bottom:10px}
+  .save{display:inline-block;background:#C8102E;color:#fff;text-decoration:none;border-radius:12px;padding:12px 20px;font-weight:800;font-size:15px}
+  .hint{font-size:12.5px;color:#777;margin:8px 0 18px}
+  .day h2{font-size:15px;border-bottom:1px solid #ddd;padding-bottom:4px;margin:18px 0 10px;color:#222}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .grid a{display:block;text-decoration:none;color:#444}
+  .grid img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:8px;border:1px solid #ddd;background:#eee}
+  .grid small{display:block;font-size:11px;color:#777;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ft{font-size:11px;color:#999;border-top:1px solid #eee;padding-top:10px;margin-top:28px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  @media (max-width:600px){.sheet{padding:18px 12px 30px}.grid{grid-template-columns:repeat(3,1fr);gap:6px}.save{display:block;text-align:center}}
+</style></head>
+<body><div class="sheet">
+  <div class="lh"><div><div class="co">PREMIER <span>STREET ROD</span></div><div class="tag">Handcrafted Steel Bodies &middot; Lake Havasu City, Arizona</div></div></div>
+  <h1>Your cab, straight from the shop floor</h1>
+  <div class="meta"><b>Order ${escH(b.order_number)}</b>${family ? ` &middot; ${escH(family)}` : ""}${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""} &middot; ${photos.length} photo${photos.length === 1 ? "" : "s"}</div>
+  ${photos.length ? `<a class="save" href="${base}/photos.zip">&#11015; Save all photos (${photos.length})</a>
+  <div class="hint">Downloads one file with every photo at full size. Tap any photo to see it larger; press and hold to save just that one. This page is good through ${escH(good)}.</div>` : `<div class="hint">Photos will appear here as your cab moves through the shop.</div>`}
+  ${order.map((ds) => `<div class="day"><h2>${escH(longDate296(ds))}</h2><div class="grid">${days[ds].map((p) => `<a href="${base}/photo/${p.id}" target="_blank" rel="noopener"><img src="${base}/thumb/${p.id}" loading="lazy" alt="build photo">${p.step ? `<small>${escH(p.step)}</small>` : ""}</a>`).join("")}</div></div>`).join("")}
+  <div class="ft"><span>Premier Street Rod &middot; 1100 N Lake Havasu Ave, Lake Havasu City, AZ 86403 &middot; 800-447-5000 &middot; PremierStreetRod.com</span><span>Order ${escH(b.order_number)}</span></div>
+</div></body></html>`;
+};
+// Admin lane on the order page: the ZIP button + the cab's live share links (copy / text me / revoke) + create.
+const shareLane296 = (b, photoCount, links, myMobile) => {
+  const row = (l) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)">
+      <span style="flex:1;min-width:14em;overflow-wrap:anywhere"><b style="font-size:.9rem">${escH(l.url)}</b><br><small style="opacity:.6">made ${escH(l.made)} by ${escH(l.by)} &middot; good through ${escH(l.good)} &middot; opened ${l.views} time${l.views === 1 ? "" : "s"}</small></span>
+      <button class="b g" onclick="shCopy296('${escH(l.url)}',this)">Copy link</button>
+      <button class="b g" onclick="shText296(${l.id},this)" ${myMobile ? "" : 'disabled title="Add your mobile number under the gear first"'}>Text me the link</button>
+      <button class="b g" style="opacity:.7" onclick="shArm296(this,function(){shRevoke296(${l.id},this)})">Turn link off</button>
+    </div>`;
+  return `<style>#share296 .b{display:inline-block;background:var(--red);border:none;border-radius:10px;color:#fff;font-weight:700;padding:10px 14px;font-size:.95rem;cursor:pointer;text-decoration:none;font-family:inherit}#share296 .b.g{background:#3a3a3c}#share296 .b:disabled{opacity:.45;cursor:default}#share296 .b.armed{background:#8f1622}</style>
+  <div class="lane" style="border-color:#4a90d9" id="share296">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:2px">PHOTOS — download &amp; share with the customer</div>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:8px">Admin only. Every photo the crew has taken on this cab, minus anything hidden from the customer report. A share link opens a private photo page with no sign-in — text it to yourself, then forward it to the customer from your own phone.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <a class="b" href="/order/${encodeURIComponent(b.order_number)}/photos.zip" style="background:#0a6cff${photoCount ? "" : ";opacity:.45;pointer-events:none"}">&#11015; Download all photos (${photoCount})</a>
+      <button class="b g" onclick="shCreate296(this)" ${photoCount ? "" : "disabled"}>&#128279; New share link (good ${SHARE_DAYS_296} days)</button>
+      <span id="sh-msg296" style="font-size:.9rem;opacity:.8"></span>
+    </div>
+    ${links.length ? links.map(row).join("") : `<div style="opacity:.55;font-size:.9rem">No live share link for this cab yet.</div>`}
+  </div>
+  <script>
+  async function shPost296(path, payload, btn){ if (btn) btn.disabled = true; var m = document.getElementById('sh-msg296'); m.textContent = '';
+    try { var r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); var o = await r.json();
+      if (o.ok) return o; m.textContent = o.error || 'Something went wrong'; } catch (e) { m.textContent = 'Network hiccup — try again'; }
+    if (btn) btn.disabled = false; return null; }
+  async function shCreate296(btn){ var o = await shPost296('/api/share/create', { build_id: '${b.id}' }, btn); if (o) location.reload(); }
+  async function shRevoke296(id, btn){ var o = await shPost296('/api/share/revoke', { id: id }, btn); if (o) location.reload(); }
+  async function shText296(id, btn){ var o = await shPost296('/api/share/textme', { id: id }, btn); if (o) { btn.textContent = '\\u2713 Sent to your phone'; } }
+  function shArm296(btn, fn){ if (btn.dataset.armed) { btn.dataset.armed = ''; btn.classList.remove('armed'); return fn.call(btn); }
+    btn.dataset.armed = '1'; btn.classList.add('armed'); var o = btn.textContent; btn.textContent = 'Turn it off? Tap again'; setTimeout(function(){ btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = o; }, 4000); }
+  function shCopy296(u, btn){ var done = function(){ btn.textContent = '\\u2713 Copied'; setTimeout(function(){ btn.textContent = 'Copy link'; }, 2500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(done, function(){ prompt('Copy this link:', u); }); else prompt('Copy this link:', u); }
+  </script>`;
+};
+
 // Block 255 (order 23109 — the cab shipped missing two paid options): the
 // OPTION CHECKLIST derives from the customer's LIVE Coyote order, never from
 // the task list — a cab with a hollow task history (the go-live seeds) still
@@ -3474,7 +3626,7 @@ async function optionList255(b, allow255 = null) {
   if (!det255 || !det255.features.length) return [];
   return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = []) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
   const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
@@ -3505,6 +3657,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   ${nav196(emp196)}   <!-- Block 196 (owner: "the customer order pages do not" have nav — the endless-loop page): the ONE shared nav -->
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   ${isAdmin97 ? `<p style="text-align:center;margin:0 0 12px"><a href="/report/progress/${encodeURIComponent(b.order_number)}" style="display:inline-block;background:#1c1c1e;border:1px solid #4a90d9;border-radius:10px;color:#8ec2f0;padding:10px 18px;text-decoration:none;font-weight:700">&#128247; Customer progress report</a></p>` : ""}   <!-- Block 210: the build-report the front office sends the owner -->
+  ${share296 ? shareLane296(b, share296.photoCount, share296.links, share296.myMobile) : ""}
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
@@ -10324,6 +10477,86 @@ http.createServer(async (req, res) => {
     }
 
     // ORDER DETAIL (block 25) — public look-up from the board's order links.
+    // ===== Block 296: CAB PHOTOS — download-all ZIP + customer share links =====
+    // Admin check local to this block (requireAdmin is declared further down this scope).
+    const adm296 = async () => { const e = await liveSession(req); if (!e) return [null, json(401, { ok: false, error: "Signed out" })]; const [m] = await db(`employee?select=role,mobile,first_name&id=eq.${e}`); if (!m || m.role !== "admin") return [null, json(403, { ok: false, error: "Admin only" })]; return [e, null, m]; };
+    const buildByOrder296 = async (ord) => { if (!/^[\w.\- ]{1,40}$/.test(ord)) return null; const [b] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ord)}&order=created_at.desc&limit=1`); return b || null; };
+    // Part 1 — the ZIP (admin): /order/<num>/photos.zip (must sit ahead of the /order/ page route)
+    if (/^\/order\/[^/]+\/photos\.zip$/.test(url.pathname)) {
+      const [eZ, failZ] = await adm296(); if (failZ) return failZ;
+      const bZ = await buildByOrder296(decodeURIComponent(url.pathname.split("/")[2]));
+      if (!bZ) return send(404, "text/plain; charset=utf-8", "No build on record for that order.");
+      const phZ = await cabPhotos296(bZ.id);
+      if (!phZ.length) return send(404, "text/plain; charset=utf-8", "No photos on this cab yet.");
+      logEvent("photos.zip_downloaded", eZ, { build_id: bZ.id, order_number: bZ.order_number, count: phZ.length });
+      await sendCabZip296(res, bZ, phZ); return;
+    }
+    // Part 2 — the customer's private photo page: /p/<token> (+ /photo/<id>, /thumb/<id>, /photos.zip). No sign-in;
+    // the token is the only key, it reaches ONLY this cab's visible photos, and it dies at 60 days or on revoke.
+    if (url.pathname.startsWith("/p/")) {
+      const partsP = url.pathname.slice(3).split("/");
+      const hitP = await shareLookup296(partsP[0]);
+      if (!hitP) return send(404, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Premier Street Rod</title><style>body{margin:0;font-family:system-ui,sans-serif;background:#f4f4f4;color:#333;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px}b{color:#C8102E}</style></head><body><div><div style="font-weight:900;font-size:22px;letter-spacing:.06em;margin-bottom:12px">PREMIER <b>STREET ROD</b></div>This photo link has expired or was turned off.<br>Give us a call at 800-447-5000 and we'll send you a fresh one.</div></body></html>`);
+      const { s: sP, b: bP } = hitP;
+      if (partsP.length === 1 || (partsP.length === 2 && partsP[1] === "")) {
+        const [prodP, phP] = await Promise.all([db(`product?select=family&part_number=eq.${encodeURIComponent(bP.part_number || "")}`), cabPhotos296(bP.id)]);
+        db(`share_link?id=eq.${sP.id}`, { method: "PATCH", body: JSON.stringify({ views: Number(sP.views || 0) + 1, last_view_at: new Date().toISOString() }) }).catch(() => {});
+        logEvent("share.viewed", null, { share_id: sP.id, build_id: bP.id, order_number: bP.order_number, photos: phP.length });
+        return send(200, "text/html; charset=utf-8", galleryPage296(bP, prodP[0] ? prodP[0].family : "", phP, partsP[0], sP.expires_at));
+      }
+      if (partsP[1] === "photos.zip" && partsP.length === 2) {
+        const phP = await cabPhotos296(bP.id);
+        if (!phP.length) return send(404, "text/plain; charset=utf-8", "No photos yet.");
+        logEvent("share.zip_downloaded", null, { share_id: sP.id, build_id: bP.id, count: phP.length });
+        await sendCabZip296(res, bP, phP); return;
+      }
+      if ((partsP[1] === "photo" || partsP[1] === "thumb") && partsP.length === 3) {
+        if (!isUuid(partsP[2])) return send(404, "text/plain", "Not found");
+        const [pP] = await db(`build_photo?select=storage_path,thumb_path,hidden,kind&id=eq.${partsP[2]}&build_id=eq.${bP.id}`);
+        if (!pP || pP.hidden || !["progress", "finish", "task"].includes(pP.kind)) return send(404, "text/plain", "Not found");
+        let rP = partsP[1] === "thumb" && pP.thumb_path ? await storageBuf296(pP.thumb_path) : null;
+        if (!rP) rP = await storageBuf296(pP.storage_path);
+        if (!rP) return send(404, "text/plain", "Not found");
+        res.writeHead(200, { "content-type": rP.type, "cache-control": "private, max-age=86400" }); return res.end(rP.buf);
+      }
+      return send(404, "text/plain", "Not found");
+    }
+    if (url.pathname === "/api/share/create" && req.method === "POST") {
+      const [eS, failS] = await adm296(); if (failS) return failS;
+      const { build_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bS] = await db(`build?select=id,order_number&id=eq.${build_id}`);
+      if (!bS) return json(404, { ok: false, error: "Cab not found" });
+      const tokS = shareToken296(); const expS = new Date(Date.now() + SHARE_DAYS_296 * 86400000).toISOString();
+      const [rowS] = await db("share_link", { method: "POST", body: JSON.stringify({ build_id, token: tokS, created_by: eS, expires_at: expS }) });
+      logEvent("share.created", eS, { share_id: rowS ? rowS.id : null, build_id, order_number: bS.order_number, expires_at: expS });
+      return json(200, { ok: true, id: rowS ? rowS.id : null, url: `https://shopboard.premierstreetrod.com/p/${tokS}`, expires_at: expS });
+    }
+    if (url.pathname === "/api/share/revoke" && req.method === "POST") {
+      const [eR, failR] = await adm296(); if (failR) return failR;
+      const { id } = await body(req);
+      if (!/^\d{1,12}$/.test(String(id))) return json(400, { ok: false, error: "That link reference isn't valid" });
+      const [sR] = await db(`share_link?select=id,build_id,revoked_at&id=eq.${id}`);
+      if (!sR) return json(404, { ok: false, error: "Link not found" });
+      if (!sR.revoked_at) await db(`share_link?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ revoked_at: new Date().toISOString() }) });
+      logEvent("share.revoked", eR, { share_id: sR.id, build_id: sR.build_id });
+      return json(200, { ok: true });
+    }
+    // "Text me the link" — to the signed-in admin's OWN mobile through the existing Twilio channel (never to a customer from here).
+    if (url.pathname === "/api/share/textme" && req.method === "POST") {
+      const [eT, failT, meT] = await adm296(); if (failT) return failT;
+      const { id } = await body(req);
+      if (!/^\d{1,12}$/.test(String(id))) return json(400, { ok: false, error: "That link reference isn't valid" });
+      if (!meT.mobile || String(meT.mobile).replace(/\D/g, "").length < 10) return json(400, { ok: false, error: "Add your mobile number under the gear first" });
+      const [sT] = await db(`share_link?select=id,build_id,revoked_at,expires_at,token&id=eq.${id}`);
+      if (!sT || sT.revoked_at || new Date(sT.expires_at).getTime() < Date.now()) return json(404, { ok: false, error: "That link is off or expired — make a new one" });
+      const [bT] = await db(`build?select=order_number,cab_number&id=eq.${sT.build_id}`);
+      const goodT = longDate296(phxDate(new Date(sT.expires_at).getTime())).replace(/^\w+, /, "");
+      const msgT = `Shop Board photo link for Order ${bT ? bT.order_number : ""}${bT && bT.cab_number ? " (Cab #" + bT.cab_number + ")" : ""}: https://shopboard.premierstreetrod.com/p/${sT.token} — good through ${goodT}. Forward it to the customer from your phone.`;
+      try { await sendSms116(meT.mobile, msgT); } catch (e) { return json(400, { ok: false, error: String(e.message || "Text failed").slice(0, 200) }); }
+      logEvent("share.texted_self", eT, { share_id: sT.id, build_id: sT.build_id });
+      return json(200, { ok: true });
+    }
     if (url.pathname.startsWith("/order/")) {
       // Block 88 (owner-rep): order DETAILS are signed-in-staff only. The TV
       // shows the basics on its tiles; clicking through asks for a sign-in.
@@ -10389,7 +10622,20 @@ http.createServer(async (req, res) => {
         for (const p2 of phA230) D230(p2.created_at).photos.push({ id: p2.id, hidden: !!p2.hidden, who: nm230[p2.uploaded_by] || "", step: p2.task_id ? (tn230[p2.task_id] || "step") : (p2.kind === "progress" ? "end of day" : p2.kind || "") });
         act230 = Object.values(days230).sort((a2, z2) => (a2.ds < z2.ds ? 1 : a2.ds > z2.ds ? -1 : 0));
       }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283));
+      // Block 296: the admin's photo lane — visible-photo count + this cab's live share links.
+      let share296 = null;
+      if (isAdmin97r) {
+        const [phC296, lk296, me296, emps296] = await Promise.all([
+          db(`build_photo?select=id&build_id=eq.${bO.id}&hidden=is.false&kind=in.(progress,finish,task)&limit=400`),
+          db(`share_link?select=id,token,created_by,created_at,expires_at,views&build_id=eq.${bO.id}&revoked_at=is.null&expires_at=gt.${new Date().toISOString()}&order=created_at.desc`),
+          db(`employee?select=mobile&id=eq.${empId86}`),
+          db(`employee?select=id,first_name,last_name`),
+        ]);
+        const nm296 = Object.fromEntries(emps296.map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`]));
+        share296 = { photoCount: phC296.length, myMobile: !!(me296[0] && String(me296[0].mobile || "").replace(/\D/g, "").length >= 10),
+          links: lk296.map((l) => ({ id: l.id, url: `https://shopboard.premierstreetrod.com/p/${l.token}`, by: nm296[l.created_by] || "", made: dayShort291(phxDate(new Date(l.created_at).getTime())), good: dayShort291(phxDate(new Date(l.expires_at).getTime())), views: Number(l.views || 0) })) };
+      }
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
