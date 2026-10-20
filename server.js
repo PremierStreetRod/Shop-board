@@ -9014,12 +9014,17 @@ async function cabRecap310(b) {
       if (z <= a) continue;
       shopDays++;
       const covered = unionMs310(lineIvs, a, z);
-      // the shop's lunch that day = the longest stretch between 11:00 and 14:30 with NOBODY on ANY line, capped at 60 min
-      const la = dayStart + 11 * 3600000, lz = dayStart + 14.5 * 3600000;
-      const cuts = [...new Set(ivs.flatMap((iv) => [iv.start, iv.end]).filter((t) => t > la && t < lz)), la, lz].sort((p, q) => p - q);
+      // Block 313 (Daniel: "is LUNCH causing a false read?" — yes): lunch = THIS LINE's own longest gap
+      // between 11:00 and 14:30 with nobody on the line, capped at 60 min (lines stagger lunches, so the
+      // whole-shop rule almost never fired). Taken out of that day's shop hours, so neither "line empty"
+      // nor "people on the line" counts the crew's lunch against them. Ignored under 15 min (a punch edge).
+      const la = Math.max(a, dayStart + 11 * 3600000), lz = Math.min(z, dayStart + 14.5 * 3600000);
       let bestGap = 0;
-      for (let i = 0; i + 1 < cuts.length; i++) { const s = cuts[i], e = cuts[i + 1]; if (e <= s) continue; const busy = ivs.some((iv) => iv.start <= s && iv.end >= e); if (!busy) bestGap = Math.max(bestGap, e - s); }
-      const lunch = Math.min(bestGap, 3600000);
+      if (lz > la) { const cuts = [...new Set(lineIvs.flatMap((iv) => [iv.start, iv.end]).filter((t) => t > la && t < lz)), la, lz].sort((p, q) => p - q);
+        // a lunch gap is one the line comes BACK from: somebody on the line before it and somebody after it that same day
+        for (let i = 0; i + 1 < cuts.length; i++) { const s = cuts[i], e = cuts[i + 1]; if (e <= s) continue; const busy = lineIvs.some((iv) => iv.start <= s && iv.end >= e); if (busy) continue;
+          const before = lineIvs.some((iv) => iv.end <= s + 1 && iv.end >= a), after = lineIvs.some((iv) => iv.start >= e - 1 && iv.start <= z); if (before && after) bestGap = Math.max(bestGap, e - s); } }
+      const lunch = bestGap >= 900000 ? Math.min(bestGap, 3600000) : 0;
       const lineIdleInLunch = Math.min(lunch, Math.max(0, (z - a) - covered));
       const dayShop = (z - a) - lineIdleInLunch, dayIdle = Math.max(0, (z - a) - covered - lineIdleInLunch);
       shopMs += dayShop; idleMs += dayIdle; lunchMs += lineIdleInLunch;
@@ -9085,6 +9090,8 @@ async function cabRecap310(b) {
     startedAt: startMs ? new Date(startMs).toISOString() : null, finishedAt: finishEv ? finishEv.at : null, signedOffAt: signEv ? signEv.at : null, signedOffBy: signEv ? name(signEv.actor_id) : "", signedOff,
     promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((new Date(phxDate(promiseMs) + "T00:00:00Z").getTime() - new Date(phxDate(new Date(signEv.at).getTime()) + "T00:00:00Z").getTime()) / 86400000) : null,   // Block 310b: calendar days, Phoenix
     daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays, promisedShopDays, planPerDay, crewPerDay: shopDays ? crewTotalH / shopDays : null,
+    avgHeads: shopMs ? crewTotalH / (shopMs / 3600000) : null,   // Block 313: average people clocked onto the line during shop hours (lunch out)
+    planHeads: planPerDay && hrs.close > hrs.open ? planPerDay / ((hrs.close - hrs.open) - 0.5) : null,   // the plan's day budget as people, over an 8.5-h day
     allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
     unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
@@ -9104,21 +9111,23 @@ const recapPage310 = (R, emp196 = null) => {
   const hoursTone = pct == null ? "flat" : pct <= 0 ? "good" : pct <= 10 ? "ok" : "bad";
   const daysOver = R.promisedShopDays != null && R.shopDays != null ? R.shopDays - R.promisedShopDays : null;   // Block 312: shop days used vs promised
   const timeTone = daysOver == null ? "flat" : daysOver <= 0 ? "good" : daysOver <= 2 ? "ok" : "bad";
-  const paceRatio = R.planPerDay && R.crewPerDay != null ? R.crewPerDay / R.planPerDay : null;
+  const paceRatio = R.planHeads && R.avgHeads != null ? R.avgHeads / R.planHeads : null;   // Block 313: people on the line vs the plan's people
   const paceTone = paceRatio == null ? "flat" : paceRatio >= 1 ? "good" : paceRatio >= 0.85 ? "ok" : "bad";
+  const onLinePct = R.crew.length && R.avgHeads != null ? Math.round((R.avgHeads / R.crew.length) * 100) : null;
+  const heads1 = (x) => (Math.round(x * 10) / 10).toFixed(1).replace(/\.0$/, "");
   const idleTone = idlePct <= 8 ? "good" : idlePct <= 15 ? "ok" : "bad";
   const dayWord = (n) => `${Math.abs(n)} day${Math.abs(n) === 1 ? "" : "s"}`;
   const partsN = R.kit.missing ? R.kit.missing.split(/[,;]+/).map((x) => x.trim()).filter(Boolean).length : 0;
   // --- the verdict sentences
   const s1 = R.allowed ? `Built in <b>${h1_310(R.crewHours)} crew hours</b> against ${h1_310(R.allowed)} allowed &mdash; <b>${h1_310(Math.abs(diffH))} hours ${diffH <= 0 ? "under" : "over"}</b> (${pct > 0 ? "+" : ""}${pct}%).` : `<b>${h1_310(R.crewHours)} crew hours</b> on the line (no allowance on record).`;
   const s2 = R.shopDays != null ? `On the line <b>${R.shopDays} shop day${R.shopDays === 1 ? "" : "s"}</b>${R.promisedShopDays != null ? ` against ${R.promisedShopDays} promised &mdash; <b>${daysOver === 0 ? "finished on the promised day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}</b> (promised ${e(phxDay310(R.promised))}, finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : e(phxDay310(R.signedOffAt))})` : " (no promise date on the order)"}.` : "";
-  const s5 = R.crewPerDay != null && R.planPerDay ? `${R.crew.length === 1 ? "One person" : `${R.crew.length} people`} on the line averaged <b>${h1_310(R.crewPerDay)} crew hours per shop day</b> against the plan&#39;s ${h1_310(R.planPerDay)}${paceRatio >= 1.25 ? " &mdash; finished early by spending more" : paceRatio < 0.85 ? " &mdash; the cab moved slower than the plan assumes" : ""}.` : "";
+  const s5 = R.avgHeads != null && R.crew.length ? `${R.crew.length === 1 ? "One person" : `${R.crew.length === 2 ? "Two" : R.crew.length} people`} worked it, on the line <b>${onLinePct}% of the day</b> on average${R.planHeads ? ` &mdash; the plan assumes about ${heads1(R.planHeads)} ${R.planHeads >= 1.95 ? "people" : "person"} all day${paceRatio >= 1.25 ? ", so it beat the calendar by putting more people on it" : paceRatio < 0.85 ? ", so the cab moved slower than planned" : ""}` : ""}.` : "";
   const s3 = R.idle.shopH ? `The line sat empty <b>${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours</b> (${idlePct}%).` : "";
-  const s4 = R.kit.shortAtStart ? `Kit delivered <b>short &mdash; ${partsN || "some"} part${partsN === 1 ? "" : "s"} owed</b>${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? ", never marked complete by warehouse (cleared at sign-off)" : `, cleared ${e(phxDay310(R.kit.clearedAt))}`) : ", never cleared"}.` : R.kit.deliveredAt ? `Kit complete${R.kit.startedByManager ? `; started from the Manager console by ${e(R.kit.startedByManager)}` : ""}.` : "";
+  const s4 = R.kit.shortAtStart ? `Kit delivered <b>short &mdash; ${partsN || "some"} part${partsN === 1 ? "" : "s"} owed</b>${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? ", never marked complete by warehouse (cleared at sign-off)" : `, cleared ${e(phxDay310(R.kit.clearedAt))}`) : ", never cleared"}.` : R.kit.deliveredAt ? `Kit complete${R.kit.startedByManager ? ` &mdash; started from the Manager console by ${e(R.kit.startedByManager)}` : "."}` : "";
   const tile = (big, small, t) => `<div class="tile ${t}" style="background:${tone[t]}"><b>${big}</b><span>${small}</span></div>`;
   // --- the steps table: five columns
   const stepRow = (s) => { const d = s.actual == null ? null : s.actual - s.std; const over = d != null && s.std > 0 ? Math.round((d / s.std) * 100) : null;
-    return `<tr${s.isOpt ? ' class="opt"' : ""}><td class="num">${s.isOpt ? "" : e(String(s.no))}</td><td>${e(s.isOpt ? s.name.replace(/^(UPGRADE|EXTRA)\s*—\s*/i, "") : s.name)}${s.isOpt ? ' <span class="tag">upgrade</span>' : ""}${s.state !== "complete" ? ' <span class="tag warn">not finished</span>' : ""}</td><td class="n">${h1_310(s.std)}</td><td class="n b">${s.actual == null ? "&mdash;" : h1_310(s.actual)}</td><td class="n mut">${s.avg == null ? "&mdash;" : h1_310(s.avg)}</td><td class="n ${d == null ? "mut" : d <= 0 ? "under" : over > 25 ? "over2" : "over"}">${d == null ? "&mdash;" : `${d <= 0 ? "&minus;" : "+"}${h1_310(Math.abs(d))}`}</td></tr>`; };
+    return `<tr${s.isOpt ? ' class="opt"' : ""}><td class="num">${s.isOpt ? "" : e(String(s.no))}</td><td>${e(s.isOpt ? s.name.replace(/^(UPGRADE|EXTRA)\s*—\s*/i, "") : s.name)}${s.isOpt ? ' <span class="tag">upgrade</span>' : ""}${s.state !== "complete" ? ' <span class="tag warn">not finished</span>' : ""}</td><td class="n">${h1_310(s.std)}</td><td class="n b">${s.actual == null ? "&mdash;" : h1_310(s.actual)}</td><td class="n mut">${s.avg == null ? "&mdash;" : h1_310(s.avg)}</td><td class="n ${d == null ? "mut" : Math.abs(d) < 0.05 ? "mut" : d < 0 ? "under" : over > 25 ? "over2" : "over"}">${d == null ? "&mdash;" : Math.abs(d) < 0.05 ? "0" : `${d < 0 ? "&minus;" : "+"}${h1_310(Math.abs(d))}`}</td></tr>`; };
   const mainSteps = R.steps.filter((s) => !s.isOpt), optSteps = R.steps.filter((s) => s.isOpt);
   const sumActual = R.steps.reduce((s, x) => s + (x.actual || 0), 0);
   // --- what went sideways: one plain list
@@ -9179,7 +9188,7 @@ const recapPage310 = (R, emp196 = null) => {
     ${tile(pct == null ? "&mdash;" : `${pct > 0 ? "+" : ""}${pct}%`, pct == null ? "no allowance" : `${h1_310(Math.abs(diffH))} h ${diffH <= 0 ? "under" : "over"} the ${h1_310(R.allowed)} allowed`, hoursTone)}
     ${tile(R.shopDays == null ? "&mdash;" : `${R.shopDays} day${R.shopDays === 1 ? "" : "s"}`, R.promisedShopDays == null ? "in production &middot; no promise date" : `in production &middot; promised ${R.promisedShopDays} &middot; ${daysOver === 0 ? "on the day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}`, timeTone)}
     ${tile(`${idlePct}%`, `line empty &middot; ${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours`, idleTone)}
-    ${tile(R.crewPerDay == null ? "&mdash;" : `${h1_310(R.crewPerDay)} h/day`, `crew pace &middot; ${R.crew.length} on it${R.planPerDay ? ` &middot; plan ${h1_310(R.planPerDay)} per day` : ""}`, paceTone)}
+    ${tile(R.crew.length ? `${R.crew.length} ${R.crew.length === 1 ? "person" : "people"}` : "&mdash;", R.avgHeads == null ? "on the cab" : `on the cab &middot; ${heads1(R.avgHeads)} on the line on average &mdash; ${onLinePct}% of the day`, paceTone)}
   </div>
   <div class="two">
     <div>
@@ -9216,7 +9225,7 @@ const recapPage310 = (R, emp196 = null) => {
   <div class="sec">Photos &mdash; ${R.photoTotal}${R.photoTotal ? ` (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ")})` : ""}</div>
   <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
   <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a>
-  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, lunch removed.</p>
+  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the line&#39;s own lunch removed. People on the line = crew hours &divide; those shop hours.</p>
 </div></body></html>`;
 };
 
