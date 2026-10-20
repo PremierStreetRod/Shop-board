@@ -2892,7 +2892,9 @@ const mytimePage290 = (d) => {
     if (await edPost291({ action:'add', employee_id: TGT291, line_id: Number(ln), in_at: new Date(phxIso291(d,ti)).toISOString(), out_at: new Date(phxIso291(d,to)).toISOString() }, b)) location.reload(); }
 </script></body></html>`;
 };
-const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
+// Block 308: the home-screen inspection strip (inspectors + admins). One per waiting cab; deep link to its card.
+const inspStrip308 = (list) => (list && list.length) ? list.map((c) => `<a href="/manager#insp-${c.id}" style="display:block;text-decoration:none;margin:4px auto 10px;max-width:560px;padding:14px 16px;border-radius:14px;background:#3a2f00;border:2px solid #ffd60a;color:#ffd60a;font-weight:800;font-size:1.1rem;text-align:left">&#128269; Cab waiting for inspection &mdash; ORDER ${escH(c.order)}${c.cab ? ` &middot; Cab #${escH(c.cab)}` : ""}${c.line ? ` &middot; ${escH(c.line)}` : ""}<div style="text-align:right;margin-top:4px;font-size:1rem">Inspect &rarr;</div></a>`).join("") : "";
+const watcherPage = (emp, clk = null, mt290 = null, insp308 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
@@ -2901,6 +2903,7 @@ const watcherPage = (emp, clk = null, mt290 = null) => `<!doctype html>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
   ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
   <h2>Welcome, ${emp.first_name}.</h2>
+  ${inspStrip308(insp308)}
   ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
@@ -3028,7 +3031,7 @@ const LINK_FALLBACK_234 = {
   "payroll.edited": "/manager#timecorrections",
   "sync.iface_add": "/reconcile", "sync.iface_drop": "/reconcile", "kit.short": "/reconcile",
   "pace.warn": "/board", "pace.standards": "/board",
-  "build.ready_inspection": "/manager", "build.self_passed": "/manager",
+  "build.ready_inspection": "/manager#insp153", "build.self_passed": "/manager",   // Block 308: the bell lands ON the inspection card
   "touch.linefrees": "/manager", "timeoff.requested": "/manager",
   "afterhours.wrapped": "/manager", "afterhours.claimed": "/admin",
 };
@@ -4135,6 +4138,31 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
       : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
     <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — your checked boxes are SAVED, and the rework note fills in for you.</div>
   </div>`;
+// Block 308 (Daniel + Isaac, 10/20: "the whole block is just noise to him"): the INSPECTOR'S card —
+// one cab, one path: tick each customer selection (a running "3 of 5"), then ONE big button that is
+// grey until every box is ticked, so there is never an error to read. No completion photos (he is
+// standing at the cab), no "I've got this one" (hidden; a line shows only if someone ELSE claimed it),
+// send-back folded behind a small link. Same audited endpoints underneath (act / sendBack).
+const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const n = L.length;
+  return `<div id="insp-${w.id}" style="border:2px solid #ffd60a;border-radius:14px;padding:14px;margin-bottom:12px;background:#1a1700">
+      <div style="font-size:1.35rem;font-weight:800">ORDER ${w.order_number}${w.cab_number ? ` &middot; Cab #${w.cab_number}` : ""}</div>
+      <div style="opacity:.7;margin:2px 0 8px">${r.line.name} &middot; production says it&#39;s done</div>
+      ${w.inspection_claimed_by && !w.claim_is_me308 ? `<div style="color:#5ac8fa;font-weight:700;margin-bottom:8px">&#128269; ${w.claim_name184} is on this one${w.claim_hhmm184 ? ` (since ${w.claim_hhmm184})` : ""}</div>` : ""}
+      ${w.final_note ? `<div style="opacity:.8;font-size:.95rem;margin-bottom:8px">Crew&#39;s note: ${w.final_note}</div>` : ""}
+      <div style="border:1px solid #C8102E;border-radius:12px;padding:10px 12px;background:#1c1416">
+        <div style="font-weight:800;color:#ff8f98;margin-bottom:4px">STEP 1 &mdash; Customer selections <span id="occ-${w.id}" style="float:right;font-weight:700;color:#fff">0 of ${n || 1}</span></div>
+        <div style="opacity:.7;font-size:.9rem;margin-bottom:6px">${n ? "Tick each one you can see on the cab, done right." : "This order has no customer options."}</div>
+        ${n ? L.map((o) => `<label style="display:block;padding:9px 6px;font-size:1.05rem;border-top:1px solid #3a2a2c;cursor:pointer"><input type="checkbox" class="oc255" data-b="${w.id}" data-o="${escH(o).replace(/"/g, "&quot;")}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> ${escH(o)}</label>`).join("")
+          : `<label style="display:block;padding:9px 6px;font-size:1.05rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${w.id}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> Checked against the order &mdash; nothing to confirm</label>`}
+      </div>
+      <div style="font-weight:800;color:#ffd60a;margin:12px 0 4px">STEP 2 &mdash; Sign off</div>
+      <button id="sob-${w.id}" class="btn" disabled style="width:100%;font-size:1.15rem;padding:16px;margin-top:0;background:#1d5a2d;border-color:#30d158;opacity:.45" onclick="act('complete','${w.id}',this)">Tick ${n ? `the ${n} selection${n > 1 ? "s" : ""}` : "the box"} first</button>
+      <details style="margin-top:12px"><summary style="cursor:pointer;color:#8e8e93;font-size:.95rem">Something&#39;s wrong? Send it back &#9656;</summary>
+        <div style="margin-top:8px"><select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;width:100%">
+          ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
+        <input id="Trn-${w.id}" placeholder="What needs fixing (shows on the tech&#39;s screen)" style="width:100%;box-sizing:border-box;margin-top:6px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px">
+        <button class="btn gray" style="margin-top:8px" onclick="sendBack('${w.id}',this,'T')">Send back &mdash; rework</button></div></details>
+    </div>`; };
 // ON THE CLOCK (risk sweep 2026-07-28): the same-day fix for a forgotten
 // clock-out. The sweeper auto-closes anything 4+ hrs past day end; this
 // button is for catching it sooner. Audited (who forced it is logged).
@@ -4286,9 +4314,9 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        awaiting inspection now ALSO surfaces here, one glance from the top,
        with the SAME controls (input ids carry a T prefix so the two copies
        never collide; sendBack takes the prefix). The per-line copy stays. -->
-  <div class="lane" style="border-color:#ffd60a" id="insp153"><h3>Needs inspection — sign off or send back</h3>
-    ${rows.flatMap((r) => (r.awaiting || []).map((w) => `
-    <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
+  <div class="lane" style="border-color:#ffd60a" id="insp153"><h3>${insp188 ? "Inspection" : "Needs inspection — sign off or send back"}</h3>
+    ${rows.flatMap((r) => (r.awaiting || []).map((w) => insp188 ? inspCard308(w, r, reworkReasons) : `
+    <div id="insp-${w.id}" style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
       <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · AWAITING INSPECTION
       ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
       ${(w.photos || []).length ? `<div style="margin-top:6px">${w.photos.map((p) =>
@@ -4321,7 +4349,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        the work has missed twice). No arm/confirm dance — the owner wants
        this EASY for Body managers; it's fully audited and reversible
        through the normal fix flow. -->
-  <div class="lane" style="border-color:#4a90d9" id="sendback207"><h3>Left production recently — send back if the fixes aren't right</h3>
+  ${insp188 ? "<style>#sendback207[data-fold308]:not(.open308)>*:not(h3){display:none!important}</style>" : ""}<div class="lane" style="border-color:#4a90d9" id="sendback207"${insp188 ? ' data-fold308="1"' : ""}><h3>Left production recently — send back if the fixes aren't right${insp188 ? ` <button class="btn gray" style="padding:4px 10px;margin:0 0 0 8px;font-size:.85rem" onclick="var l=this.closest('.lane');var o=l.classList.toggle('open308');this.textContent=o?'&minus; Hide':'+ Show'">+ Show</button>` : ""}</h3>
     ${(fixjob.sendback || []).length ? fixjob.sendback.map((c) => `<div class="qrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span><b>ORDER ${c.order}</b>${c.cab ? ` · Cab #${c.cab}` : ""}</span>
       <button class="btn" style="margin-left:auto;margin-top:0;padding:8px 16px" onclick="sendBack207('${c.id}',this)">Send back to production</button></div>`).join("") : `<div style="opacity:.6">No cabs have left production recently.</div>`}
     <div style="opacity:.5;font-size:.85rem;margin-top:6px">One tap opens a kickback fix job — off the line, its own hours; the crew grabs it from the Open-fixes lane. It re-inspects through the normal sign-off when fixed.</div>
@@ -4337,7 +4365,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="toDecide('${t.id}','deny',this)">Deny</button></div>`).join("")}
   </div>` : ""}
   <div id="lines99"></div>
-  ${acct189 ? "" : rows.map((r) => `
+  ${acct189 || insp188 ? "" : rows.map((r) => `
     <div class="lane" id="line99-${r.line.id}">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
@@ -4608,6 +4636,17 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
 <script>
+  // Block 308: the inspector's running count + the one big button that only wakes up when every
+  // customer selection is ticked (never an error to read). Admin cards don't use it.
+  function ocTick308(id) {
+    var boxes = Array.prototype.slice.call(document.querySelectorAll('.oc255[data-b="' + id + '"]'));
+    var ack = document.querySelector('.ocack255[data-b="' + id + '"]');
+    var total = boxes.length || 1, done = boxes.length ? boxes.filter(function (b) { return b.checked; }).length : (ack && ack.checked ? 1 : 0);
+    var c = document.getElementById("occ-" + id); if (c) c.textContent = done + " of " + total;
+    var b = document.getElementById("sob-" + id); if (!b) return;
+    var all = done >= total; b.disabled = !all; b.style.opacity = all ? "1" : ".45";
+    b.textContent = all ? "\u2713 Inspected \u2014 sign off" : ("Tick " + (boxes.length ? ("the " + total + " selection" + (total > 1 ? "s" : "")) : "the box") + " first");
+  }
   // Plain global handler wired by onclick= on each button — sturdier than
   // delegated listeners under automation and on older shop tablets.
   async function act(kind, id, btn) {
@@ -7845,8 +7884,11 @@ async function reconcileData() {
   // Body Shop / shipping build-outs exist, production_complete reads "At Body
   // Shop" — richer stages arrive with those departments.
   const gone233 = await db("build?select=id,order_number,part_number,cab_number,state,customer_name,created_at&state=in.(production_complete,complete)&order=created_at.desc&limit=150");
-  const leftEv233 = await db("event_log?select=build_id,at&event_type=eq.build.production_complete&order=at.desc&limit=400");
-  const leftAt233 = {}; for (const e of leftEv233) if (e.build_id && !leftAt233[e.build_id]) leftAt233[e.build_id] = e.at;
+  // Block 308 (Daniel, 10/20: "23850 left production today, not on the 7th"): event_log.build_id is a column
+  // nothing ever fills — the cab lives in the payload — so this lookup was always empty and every
+  // "Left production" fell back to the order's CREATED date. Read the payload like everywhere else.
+  const leftEv233 = await db("event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=400");
+  const leftAt233 = {}; for (const e of leftEv233) { const bid = e.payload && e.payload.build_id; if (bid && !leftAt233[bid]) leftAt233[bid] = e.at; }
   shaped.movedOn = gone233.map((b) => ({
     order: b.order_number || "—", family: famOf[String(b.part_number || "").toUpperCase()] || b.part_number || "",
     cab: b.cab_number || "", customer: b.customer_name || "",
@@ -9447,7 +9489,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long"];   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff"];   // Block 308: warehouse bookkeeping nudge, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -10064,7 +10106,16 @@ http.createServer(async (req, res) => {
             ah: { now: ahNow92, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
-        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290));   // Block 290: Marketing clock card rides along (null for everyone else)
+        // Block 308 (Daniel, 10/20): inspectors (Body/Build managers + admins) see a yellow strip on their
+        // HOME screen for every cab waiting for inspection — one tap lands on that cab's card. It exists
+        // only while something is waiting, so it vanishes the moment the cab is signed off or sent back.
+        let insp308 = [];
+        if (emp.role === "admin" || (emp.role === "manager" && emp.department !== "Production" && emp.department !== "Accounting")) {
+          const [waitB308, lines308] = await Promise.all([db("build?select=id,order_number,cab_number,line_id&state=eq.awaiting_inspection&order=created_at.asc"), db("line?select=id,name")]);
+          const lnName308 = Object.fromEntries((lines308 || []).map((l) => [l.id, l.name]));
+          insp308 = (waitB308 || []).map((b) => ({ id: b.id, order: b.order_number, cab: b.cab_number || "", line: lnName308[b.line_id] || "" }));
+        }
+        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290, insp308));   // Block 290: Marketing clock card rides along (null for everyone else) · Block 308: inspection strip
       }
       // Block 212 (v201 SPEED): the floor home's three base reads together.
       const [lastRows212, allLines, reasons] = await Promise.all([
@@ -11566,6 +11617,7 @@ http.createServer(async (req, res) => {
             const ce184 = b.inspection_claimed_by ? empNames.find((x) => x.id === b.inspection_claimed_by) : null;
             return { ...b, photos: photos.filter((p) => p.build_id === b.id),
               claim_name184: b.inspection_claimed_by ? (ce184 ? `${ce184.first_name} ${(ce184.last_name || "")[0] || ""}.` : "a manager") : null,
+              claim_is_me308: Boolean(b.inspection_claimed_by && b.inspection_claimed_by === empId),   // Block 308: the inspector's card shows a claim line only for someone ELSE
               claim_hhmm184: b.inspection_claimed_at ? new Date(new Date(b.inspection_claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) : null }; }),
         queue: builds.filter((b) => b.line_id === l.id && b.state === "upcoming")
           .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
@@ -12269,7 +12321,7 @@ http.createServer(async (req, res) => {
         const phrase230 = { "kit.status": (p2) => p2.status === "verified" ? "verified the kit" : p2.status === "short" ? `marked the kit SHORT${p2.note ? ` — "${String(p2.note).slice(0, 60)}"` : ""}` : "set the kit back to unverified",
           "kit.pull_started": () => "started pulling the kit", "kit.pull_undone": () => "un-pulled the kit", "kit.pull_reverted": () => "pull auto-reverted (no longer on deck)",
           "kit.delivered": (p2) => `delivered the kit${p2.short ? " SHORT — parts still owed" : ""}${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": (p2) => `delivered the kit${p2.short ? " SHORT" : ""} (line still held)`, "kit.note": () => "left a kit note",
-          "kit.short_cleared": (p2) => `confirmed the missing parts arrived${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit complete` };   // Block 254
+          "kit.short_cleared": (p2) => p2.at_signoff ? `signed the cab off with the kit still marked SHORT${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit cleared at sign-off (Block 308)` : `confirmed the missing parts arrived${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit complete` };   // Block 254 · Block 308
         const feed230 = ev230.map((e2) => ({ who: e2.actor_id ? (nm230b[e2.actor_id] || "someone") : "system",
           what: (phrase230[e2.event_type] || (() => e2.event_type))(e2.payload || {}),
           order: (e2.payload || {}).order_number || "", at: `${phxDate(new Date(e2.at).getTime()).slice(5)} ${phxHHMM(e2.at)}` }));
@@ -12424,7 +12476,7 @@ http.createServer(async (req, res) => {
       // LINE to walk to, not which cab number. Order stays in the body.
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
         `${lnF ? lnF.name : "A line"} — ready for inspection`,
-        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — production finished. Sign off on the Manager console, or send it back with a reason and hours.`, "/manager");
+        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — production finished. Sign off on the Manager console, or send it back with a reason and hours.`, "/manager#insp153");   // Block 308: lands on the card
       // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
@@ -12727,9 +12779,13 @@ http.createServer(async (req, res) => {
       // at sign-off through the same informed-tap flow — the manager sees what
       // is missing and confirms on the separate red button; it's on the record.
       const shortSO254 = b.kit_status === "short";
-      if ((openT109.length || shortSO254) && !force)
+      // Block 308 (Daniel, 10/20): "there is no way a cab will ever be at the inspection stage IF it is
+      // still missing parts" — a SHORT kit at sign-off is stale warehouse bookkeeping, not a reason to
+      // warn the inspector. It no longer needs the red button: sign-off clears the kit itself (audited)
+      // and warehouse gets a quiet bell to keep the owed-parts lane honest. Open steps still need force.
+      if (openT109.length && !force)
         return json(400, { ok: false, needs_force: true, open: openT109.length,
-          short254: shortSO254 ? (b.kit_note || "no note left") : "",
+          short254: "",
           error: `${openT109.length ? `${openT109.length} step${openT109.length > 1 ? "s" : ""} still open on this cab. ` : ""}${shortSO254 ? `This cab is STILL OWED parts — warehouse never confirmed the kit complete (missing: ${b.kit_note || "no note left"}). ` : ""}Signing off advances it out of production anyway.` });
       if (openT109.length) logEvent("build.signoff_override", empId, { build_id, order_number: b.order_number, open_steps: openT109.length });
       // Q85: if this cab carried a fix job (fix_assigned_at set), signing off is
@@ -12739,9 +12795,16 @@ http.createServer(async (req, res) => {
       // rework fields — clear them too (a cab that never reworked has null).
       const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null, inspection_claimed_by: null, inspection_claimed_at: null };   // Block 184: sign-off clears the claim
       if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
+      if (shortSO254) { patchC.kit_status = "verified"; patchC.kit_note = null; patchC.kit_verified_by = empId; patchC.kit_verified_at = new Date().toISOString(); }   // Block 308: cleared at sign-off
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
       logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: b.state, signed_off_at: claimed_at, re_inspection: wasFix, by_role: me.role,
-        short_at_signoff: shortSO254 || undefined, still_missing: shortSO254 ? (b.kit_note || "") : undefined });   // Block 254: the warned-past-it override, on the record
+        short_at_signoff: shortSO254 || undefined, still_missing: shortSO254 ? (b.kit_note || "") : undefined });   // Block 254: on the record · Block 308: no longer a warning, the kit is cleared below
+      if (shortSO254) {
+        logEvent("kit.short_cleared", empId, { build_id, order_number: b.order_number, was_missing: b.kit_note || "", at_signoff: true });
+        void notify("kit.cleared_at_signoff", await warehouseIds(),
+          `Order ${b.order_number} signed off — kit was still marked SHORT`,
+          `Production finished and the cab passed inspection, so the parts arrived. The kit is now marked complete for you. Next time tap "Parts arrived — kit complete" when they land, so the owed-parts lane stays true.${b.kit_note ? ` (Was listed: ${String(b.kit_note).slice(0, 80)})` : ""}`, "/home");
+      }
       // Block 255: the verification itself, on the record — one audited row per
       // confirmed selection (gate-aware: 'body' now, 'ship' wakes with the
       // Body→warehouse hand-off build). Zero-options cabs log the acknowledgment.
