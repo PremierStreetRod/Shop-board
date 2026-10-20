@@ -77,6 +77,9 @@ const SHOP_LINE_ID = 10;
 // (clock_event.fix_build_id) so the hours roll up per order. Any tech can grab a
 // fix; grabbing one moves the clock here.
 const FIX_LINE_ID = 15;
+// Block 301: PANEL PREP — the laser-stripping bucket (line 19, like Fix work): clockable, never on the TV,
+// no cab lives there; the punch carries the cab in fix_build_id (the same pointer Fix work uses).
+const PREP_LINE_ID = 19;
 // Block 290 (Daniel, 10/16): MARKETING TIME LOG — the owner is cracking down,
 // salaried people clock too. Daniel works at the shop AND remotely, so his
 // department gets TWO dept-time lines (migration 0067, same disabled-line
@@ -2299,7 +2302,7 @@ const whEsc288 = (x) => escH(x).split('"').join("&quot;");
 // does (Build sooner / Build later) and the first tap spells out the exact
 // swap (Build 23697 BEFORE 23659? Tap again) — same /api/kit/move call after.
 const whOrd289 = (o) => String(o == null ? "" : o).replace(/[^A-Za-z0-9. -]/g, "");
-const whRow288 = (q, i, r, canAct) => {
+const whRow288 = (q, i, r, canAct, canPrep301 = false, clockedIn301 = false) => {
   const dis = canAct ? "" : " disabled";
   const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
   const isNext = i === (pullIdx < 0 ? 0 : pullIdx);
@@ -2318,6 +2321,7 @@ const whRow288 = (q, i, r, canAct) => {
           ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot earlier" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} BEFORE ${whOrd289(r.queue[i - 1].order_number)}? Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this))">&#9650; Build sooner</button>` : ""}
           ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot later" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} AFTER ${whOrd289(r.queue[i + 1].order_number)}?${i === pullIdx && q.kit_pull_started_at ? " Cancels the pull." : ""} Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this))">&#9660; Build later</button>` : ""}
         </div>
+        ${prepStrip301(q, canPrep301, clockedIn301)}   <!-- Block 301: panel prep lives on the row Eric already works -->
         ${q.kit_note ? `<div class="qnote${isShort ? " sh" : ""}">${isShort ? "Missing: " : "Note: "}${whEsc288(q.kit_note)}</div>` : ""}
         ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div class="qnote" style="color:#ffd60a">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
         <div class="np" id="np-${q.id}" style="display:none">
@@ -2333,7 +2337,7 @@ const whRow288 = (q, i, r, canAct) => {
               ? `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep" style="color:#ffd60a"><b>Step 2 waits</b> &mdash; line busy: ORDER ${busy.order_number} is still on it (${String(busy.state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</div>
                <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
               : `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep"><b>Step 2</b> &mdash; when it's all on the line:</div>
-               <button class="b grn big"${dis} onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${isShort ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}</button>
+               <button class="b grn big"${dis} onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${isShort ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}${q.prep && q.prep.state !== "done" ? " (panels not prepped)" : ""}</button>
                <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
             : `<div class="pstep"><b>Step 1</b> &mdash; when you begin gathering this kit:</div><button class="b grn big"${dis} onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">${isShort ? "Pull started — gathering what we have" : "Pull started — gathering the kit"}</button>`}
           </div>` : ""}
@@ -2369,7 +2373,21 @@ const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
         var tm = setInterval(function(){ left--; if (left <= 0) { clearInterval(tm); location.replace("/logout"); return; } tick(); }, 1000);
       } else if (a) setTimeout(function(){ a.remove(); }, 4000);
     }).catch(function(){ location.reload(); }); }`;
-const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = []) => `<!doctype html>
+// Block 301: the PANEL PREP strip on a warehouse row — one button to start, "Panels ready" to finish
+// (which also puts the clock back on Warehouse), a small "Back to warehouse" to pause. Chip for everyone.
+const prepStrip301 = (b, canPrep, clockedIn) => {
+  const p = b.prep || { state: "none", hrs: 0, std: 3, by: "", mine: false };
+  const chip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready${p.hrs ? ` &middot; ${p.hrs}h` : ""}${p.by ? ` &middot; ${whEsc288(p.by)}` : ""}</span>`
+    : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;border-color:#7a5900;color:#ffd60a">&#9881; Panels in progress &middot; ${p.hrs}h of ${p.std}h</span>`
+    : `<span class="chip unv">Panels not prepped &middot; ${p.std}h allowed</span>`;
+  if (!canPrep || p.state === "done") return `<div class="prep301">${chip}</div>`;
+  const dis = clockedIn ? "" : " disabled title=\"Clock in first\"";
+  if (p.mine) return `<div class="prep301 on"><b style="color:#ffd60a">&#9881; You're prepping this cab &middot; ${p.hrs}h</b>
+      <button class="b grn"${dis} onclick="post('/api/prep/done',{build_id:'${b.id}'},this)">&#10003; Panels ready</button>
+      <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">Back to warehouse</button></div>`;
+  return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "Keep prepping" : "Prep panels &mdash; start"}</button></div>`;
+};
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
@@ -2397,7 +2415,8 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   .qst{flex:0 0 auto}
   .qact{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
   .qact .b,.np .b,.pull .b{margin-left:0}
-  .qnote{flex:1 1 100%;font-size:.85rem;color:#c7c7cc}.qnote.sh{color:#ff9f0a;font-weight:600}
+  .qnote{flex:1 1 100%;font-size:.85rem;color:#c7c7cc}
+  .prep301{flex:1 1 100%;margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.prep301.on{background:#2a2200;border:1px solid #7a5900;border-radius:10px;padding:8px 10px}.prep301 .b{margin:0}.qnote.sh{color:#ff9f0a;font-weight:600}
   .np{flex:1 1 100%;background:#111;border:1px solid var(--line);border-radius:10px;padding:12px}
   .nplab{font-size:.88rem;font-weight:600}
   .np input{width:100%;box-sizing:border-box;background:#000;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:16px;margin:8px 0}
@@ -2440,12 +2459,12 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   ${rows.map((r) => `
   <div class="lane">
     <h3>${r.line.name}</h3>
-    ${r.active ? `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}</div>` : ""}
+    ${r.active ? `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}${r.active.prep && r.active.prep.state !== "done" ? prepStrip301(r.active, prep301.can, clockedIn) : ""}</div>` : ""}
     ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
     ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
     ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
     ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first)</div>
-      ${r.queue.map((q, i) => whRow288(q, i, r, clockedIn || emp.role === "manager" || emp.role === "admin")).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
+      ${r.queue.map((q, i) => whRow288(q, i, r, clockedIn || emp.role === "manager" || emp.role === "admin", prep301.can, clockedIn)).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
   </div>`).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
     <h3>Started short — parts still owed</h3>
@@ -2990,7 +3009,7 @@ function bellLink234(n) {
 // wrap-up card carries ONE-TAP Approve / Deny for admins right in the inbox (same audited
 // endpoints as the Admin panel, no "sure?"), cards that need a decision are tagged and sorted
 // first, and the Manager console lane for admins is the same one-tap pair.
-const DEPT_LINE_NAMES_300 = { 9: "Warehouse", 10: "Shop time", 12: "Build time", 13: "Body Shop time", 14: "Off the line", 15: "Fix work", 16: "Accounting time", 17: "Marketing — at the shop", 18: "Marketing — remote" };
+const DEPT_LINE_NAMES_300 = { 9: "Warehouse", 10: "Shop time", 12: "Build time", 13: "Body Shop time", 14: "Off the line", 15: "Fix work", 16: "Accounting time", 17: "Marketing — at the shop", 18: "Marketing — remote", 19: "Panel prep" };
 const lineName300 = (lineId, lines) => ((lines || []).find((l) => l.id === lineId) || {}).name || DEPT_LINE_NAMES_300[lineId] || (lineId ? "Line " + lineId : "");
 const NEEDS_YOU_300 = new Set(["build.ready_inspection", "timeoff.requested", "note.triage"]);   // a claimed (still-open) session is news until it wraps
 const ahIdOf300 = (n) => { const m = /[?&]ah=([0-9a-f-]{36})/i.exec(String(n && n.link || "")); return m ? m[1] : null; };
@@ -3249,7 +3268,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
           : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today" : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
-            ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\`
+            ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\${l.ondeck.prep === "done" ? " · ✓ panels ready" : l.ondeck.prep === "in_progress" ? " · panels in progress" : ""}\`
             : "ON DECK: — nothing queued"}</div>
           <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
         </div>\`).join("");
@@ -3749,6 +3768,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
     <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
     ${fixHrs > 0 ? `<div class="kv"><b>Fix labor</b>${fixHrs.toFixed(1)} hr on returns/kickbacks — this order's rework, on top of the build hours</div>` : ""}
+    ${b.prep301 && b.prep301.state !== "none" ? `<div class="kv"><b>Panel prep</b>${b.prep301.state === "done" ? `${b.prep301.hrs.toFixed(1)} hr${b.prep301.by ? ` — ${escH(b.prep301.by)}` : ""}${b.prep301.doneDs ? `, ${escH(b.prep301.doneDs)}` : ""} (${b.prep301.std} hr allowed)` : `in progress — ${b.prep301.hrs.toFixed(1)} hr so far (${b.prep301.std} hr allowed)`}</div>` : ""}   <!-- Block 301: laser-stripping hours, from punches -->
     ${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
@@ -5261,7 +5281,7 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
-const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = [], act258 = null) => `<!doctype html>
+const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = [], act258 = null, prep301 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Admin</title>${style}
@@ -5329,13 +5349,14 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <button class="b grn" onclick="addEmp(this)">Add + issue temp code</button>
     <span id="np-msg" style="font-size:.85rem;margin-left:6px"></span>
   </div>
-  <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Pay</th><th>Usual lines</th><th></th><th></th><th></th></tr>
+  <table><tr><th>Name</th><th>Department</th><th>Role</th><th>Pay</th><th>Usual lines</th><th title="Can laser-strip panels for any cab from the warehouse page (Block 301)">Panel prep</th><th></th><th></th><th></th></tr>
   ${emps.map((e) => `<tr class="${e.active ? "" : "off"}">
     <td><b>${e.first_name} ${e.last_name}</b></td>
     <td><select id="d-${e.id}">${DEPTS.map((d) => `<option ${e.department === d ? "selected" : ""}>${d}</option>`).join("")}</select></td>
     <td><select id="r-${e.id}">${ROLES.map((r) => `<option value="${r}" ${e.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
     <td><select id="p-${e.id}">${[["hourly", "Hourly"], ["salary", "Salary"], ["na", "Owner — n/a"]].map(([pv, pl]) => `<option value="${pv}" ${(e.pay_type || "hourly") === pv ? "selected" : ""}>${pl}</option>`).join("")}</select></td>   <!-- Block 200: hourly people are payroll; salary/owner stay OFF the Pay Worksheet totals -->
     <td>${e.department === "Production" ? `<input class="ln" id="l-${e.id}" value="${(e.lines || []).join(",")}" placeholder="1,2">` : '<span style="opacity:.35">—</span>'}</td>
+    <td style="text-align:center"><input type="checkbox" id="pp-${e.id}" ${e.panel_prep ? "checked" : ""} style="width:20px;height:20px;cursor:pointer" title="Panel prep — laser-stripping from the warehouse page"></td>   <!-- Block 301 -->
     <td><button class="b" onclick="saveEmp('${e.id}',this)">Save</button></td>
     <td><button class="b ${e.active ? "" : "grn"}" onclick="arm(this,()=>setActive('${e.id}',${e.active ? "false" : "true"},this))">${e.active ? "Deactivate" : "Reactivate"}</button></td>
     <td><button class="b ${e.must_change_pin ? "grn" : ""}" onclick="arm(this,()=>resetPin('${e.id}',this))">${e.must_change_pin && e.temp_pin ? `Temp: ${e.temp_pin}` : (e.pin_hash ? "Reset PIN" : "No PIN yet")}</button></td>
@@ -5501,6 +5522,22 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Q86: per-product completion-photo minimums. A cab of a product can't be
        sent to inspection until this many completion photos are attached
        (0 = no photo required for that product). Default 1. -->
+  <!-- Block 301 (Daniel 10/19): PANEL PREP — hours allowed per cab family, with the median of the
+       last 12 finished cabs beside it so the number can teach us. Hours come from Eric's punches
+       on the Panel prep bucket, never typed. Changing the standard is audited and applies to cabs
+       not yet marked ready. -->
+  <div class="panel" id="prep301"><h3>Panel prep — hours allowed per cab</h3>
+  <p style="opacity:.5;font-size:.85rem">Laser-stripping the weld areas, done by whoever has <b>Panel prep</b> checked under People (Eric). One number per cab family; 3.0 h to start. <b>Median actual</b> = the middle of the last 12 cabs marked ready (gray until 2 cabs). Punches set the actuals — nothing is typed.</p>
+  ${prep301.length ? `<table><tr><th>Cab family</th><th>Hours allowed</th><th>Median actual</th><th>Last cab</th><th></th></tr>
+  ${prep301.map((r) => `<tr>
+    <td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>
+    <td><input class="num" id="ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}" value="${r.hours}" inputmode="decimal" step="0.25"></td>
+    <td>${r.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${r.median} &middot;${r.n}</span>` : `<span style="opacity:.4">${r.n ? r.n + " cab so far" : "no cabs yet"}</span>`}</td>
+    <td style="opacity:.7">${r.last ? `${r.last.h}h &middot; ${String(r.last.at).slice(5, 10)}` : "—"}</td>
+    <td><button class="b" onclick="savePrepStd301('${String(r.family).replace(/'/g, "\\'")}','ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td>
+  </tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}
+  </div>
+
   <div class="panel" id="products"><h3>Product settings — completion photos</h3>
   <p style="opacity:.5;font-size:.85rem">How many completion photos a builder must attach before finishing a cab of each product. Default is 1. Set 0 to exempt a product. This is a hard gate — the phone's Finish button won't send without them.</p>
   ${products.length ? `<table><tr><th>Product</th><th>Family</th><th>Min photos</th><th></th></tr>
@@ -5641,7 +5678,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     // unconditionally threw for every other department and killed the Save
     // silently (found live: moving Body Shop -> manager did nothing).
     const le183 = document.getElementById("l-"+id);
-    post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id), pay_type: v("p-"+id),
+    const pp301 = document.getElementById("pp-"+id);
+    post("/api/admin/employee", { id, department: v("d-"+id), role: v("r-"+id), pay_type: v("p-"+id), panel_prep: pp301 ? pp301.checked : undefined,   // Block 301
       lines: le183 ? le183.value.split(",").map(s=>Number(s.trim())).filter(n=>n>0) : [] }, btn); }
   function setActive(id, to, btn){ post("/api/admin/employee", { id, active: to === "true" || to === true }, btn); }
   // Q114: reset now ISSUES a temp code (the old reset opened the Q68 hole).
@@ -5729,6 +5767,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     btn.textContent = was; btn.disabled = false;
   }
   function saveCab(id, btn){ post("/api/admin/cab-number", { build_id: id, cab_number: v("cn-"+id) }, btn); }
+  function savePrepStd301(family, inputId, btn){ post("/api/admin/prep-standard", { family: family, hours: Number(v(inputId)) }, btn); }   // Block 301
   function savePhotoMin(part, btn){ post("/api/admin/product", { part_number: part, photo_min: Number(v("pm-"+part)) }, btn); }
   // Block 246: preview backfill — pull each old photo, redraw it small in THIS
   // browser (the server never decodes pixels), send the tiny copy back. Loops
@@ -5795,6 +5834,29 @@ const phxDate = (ms) => new Date(ms - 7 * 3600000).toISOString().slice(0, 10);
 // Block 127 (M3, B2): fix-labor hours per order. Pairs each Fix-work clock-in
 // (which carries fix_build_id) with the tech's next clock-out and sums the elapsed
 // time per build. Non-fix intervals are ignored; a still-open fix counts to now.
+// Block 301: hours a BUCKET line (Fix work 15 / Panel prep 19) spent per cab — from punches, never typed.
+function bucketHoursByBuild301(evs, lineId) {
+  const open = {}, sums = {}, now = Date.now();
+  const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === lineId && o.fix) sums[o.fix] = (sums[o.fix] || 0) + (t - o.start); open[emp] = null; } };
+  for (const e of evs) {
+    const t = new Date(e.claimed_at).getTime();
+    if (e.kind === "clock_in") { close(e.employee_id, t); open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id }; }
+    else close(e.employee_id, t);
+  }
+  for (const emp in open) { const o = open[emp]; if (o && o.line === lineId && o.fix) sums[o.fix] = (sums[o.fix] || 0) + (now - o.start); }
+  const out = {}; for (const k in sums) out[k] = sums[k] / 3600000;
+  return out;
+}
+// Prep hours for a set of cabs: seed by the punches that point at them, then replay those people's days.
+async function prepHours301(buildIds) {
+  if (!buildIds.length) return {};
+  const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${PREP_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&kind=eq.clock_in&limit=2000`);
+  if (!seed.length) return {};
+  const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const evs = await dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${new Date(Date.now() - 120 * 86400000).toISOString()}&order=claimed_at.asc,id.asc`);
+  return bucketHoursByBuild301(evs, PREP_LINE_ID);
+}
+const median301 = (xs) => { const a = [...xs].sort((x, y) => x - y); const m = a.length >> 1; return a.length ? (a.length % 2 ? a[m] : Math.round(((a[m - 1] + a[m]) / 2) * 100) / 100) : 0; };
 function fixHoursByBuild(evs) {
   const open = {}, sums = {}, now = Date.now();
   const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === FIX_LINE_ID && o.fix) sums[o.fix] = (sums[o.fix] || 0) + (t - o.start); open[emp] = null; } };
@@ -9697,6 +9759,7 @@ http.createServer(async (req, res) => {
       return res.end(gz212);
     }
     res.writeHead(code, { "content-type": type }); res.end(data);
+    return res;   // Block 301 audit: ALWAYS truthy — the `[null, json(...)]` / `if (fail) return fail` guards (requireAdmin, adm296, prepAuth301) fell through on small plain responses and answered twice (ERR_HTTP_HEADERS_SENT in the log)
   };
   const json = (code, obj) => send(code, "application/json", JSON.stringify(obj));
 
@@ -9816,7 +9879,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [emp] = await db(`employee?select=id,first_name,lines,department,role,must_change_pin&id=eq.${empId}`);   // Block 165: id rides along — the cab screen's "started by mistake? undo" compares emp.id to the step's starter (v164 shipped without it, so the link never rendered for the starter — Daniel caught it live)
+      const [emp] = await db(`employee?select=id,first_name,lines,department,role,must_change_pin,panel_prep&id=eq.${empId}`);   // Block 165: id rides along · Block 301: panel_prep flag — the cab screen's "started by mistake? undo" compares emp.id to the step's starter (v164 shipped without it, so the link never rendered for the starter — Daniel caught it live)
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       // Q114: a temporary code gets you exactly one place — the change-PIN screen.
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
@@ -9827,7 +9890,7 @@ http.createServer(async (req, res) => {
           db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
           db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
           db(`line?select=id,name&enabled=is.true&order=id`),
-          db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),
+          db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at,prep_state,prep_started_at,prep_done_at,prep_done_by&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),   // Block 301: +prep_*
           // Block 97 (owner-rep): the delivered history — where warehouse's cabs
           // ARE in production. Read-only; ship-prep/receive-back is a later stage.
           db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`),
@@ -9842,6 +9905,17 @@ http.createServer(async (req, res) => {
         const [lastW] = lastWRows;
         const famW288 = Object.fromEntries((prodW288 || []).map((p) => [p.part_number, p.family]));
         buildsW.forEach((b) => { b.family = famW288[b.part_number] || ""; });
+        // Block 301: PANEL PREP on the warehouse page — who may prep, which cab I'm prepping right now,
+        // each cab's prep state + hours so far, and the per-family standard (admin-set, 3.0 seeded).
+        const canPrep301 = Boolean(emp.panel_prep) || emp.role === "admin";
+        const [lastFull301] = await db(`clock_event?select=kind,line_id,fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+        const myPrep301 = lastFull301 && lastFull301.kind === "clock_in" && lastFull301.line_id === PREP_LINE_ID ? { build_id: lastFull301.fix_build_id, since: lastFull301.claimed_at } : null;
+        const prepIds301 = buildsW.filter((b) => b.prep_state && b.prep_state !== "none").map((b) => b.id);
+        const [prepHrs301, stdRows301, whoRows301] = await Promise.all([prepHours301(prepIds301), db(`prep_standard?select=family,hours`).catch(() => []), prepIds301.length ? db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []) : []]);
+        const stdOf301 = Object.fromEntries((stdRows301 || []).map((r) => [r.family, Number(r.hours)]));
+        const whoOf301 = Object.fromEntries((whoRows301 || []).map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`.trim()]));
+        buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id) }; });
+        const prep301 = { can: canPrep301, mine: myPrep301 };
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
           awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
@@ -9879,7 +9953,7 @@ http.createServer(async (req, res) => {
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
             { now: ahNowW, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
-              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239, shortOwedW254));
+              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239, shortOwedW254, prep301));
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
@@ -10523,6 +10597,81 @@ http.createServer(async (req, res) => {
     // (line 15) stamped with this order, and points their screen at the fix. Not a
     // lock — two techs may share one fix. Fix-work is non-production: paid, never
     // charged to a cab's pace.
+    // ===== Block 301: PANEL PREP (Eric, from the warehouse page) =====
+    // start = move my clock onto the Panel prep bucket pointed at the cab (the "Work this fix" move);
+    // done  = mark the cab's panels ready AND put my clock back on my department line;
+    // back  = pause: clock back on my department line, the cab stays "in progress".
+    // Flagged people (employee.panel_prep) and admins. Nothing here gates deliver or step 1 (Daniel: shown only).
+    const prepAuth301 = async () => {
+      const e = await liveSession(req); if (!e) return [null, json(401, { ok: false, error: "Signed out — sign in again" })];
+      const g = wifiGate(req); if (g) return [null, json(403, { ok: false, error: g })];
+      const [m] = await db(`employee?select=id,department,role,panel_prep&id=eq.${e}`);
+      if (!m || !(m.panel_prep || m.role === "admin")) return [null, json(403, { ok: false, error: "Panel prep isn't switched on for you — an admin can under People" })];
+      return [e, null, m];
+    };
+    const homeLine301 = (m) => m.department === "Warehouse" ? 9 : m.department === "Build" ? 12 : m.department === "Body Shop" ? 13 : 14;
+    if (url.pathname === "/api/prep/start" && req.method === "POST") {
+      const [eP, failP, meP301] = await prepAuth301(); if (failP) return failP;
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bP] = await db(`build?select=id,order_number,state,prep_state&id=eq.${build_id}`);
+      if (!bP || !["upcoming", "active", "rework", "awaiting_inspection"].includes(bP.state)) return json(400, { ok: false, error: "That cab isn't on the board anymore — refresh" });
+      if (bP.prep_state === "done") return json(400, { ok: false, error: "Those panels are already marked ready" });
+      const [lastP] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${eP}&order=claimed_at.desc&limit=1`);
+      if (!lastP || lastP.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first, then start prepping" });
+      const whenP = new Date(claimed_at || Date.now());
+      if (!(lastP.line_id === PREP_LINE_ID && lastP.fix_build_id === build_id)) {
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eP, line_id: lastP.line_id, kind: "clock_out_early", reason: "Switched to panel prep", claimed_at: whenP.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eP, line_id: PREP_LINE_ID, kind: "clock_in", fix_build_id: build_id, claimed_at: new Date(whenP.getTime() + 1000).toISOString() }) });
+      }
+      const patchP = { prep_state: "in_progress" }; if (!bP.prep_state || bP.prep_state === "none") patchP.prep_started_at = whenP.toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchP) });
+      logEvent("prep.start", eP, { build_id, order_number: bP.order_number, from_line: lastP.line_id });
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/prep/done" && req.method === "POST") {
+      const [eD, failD, meD301] = await prepAuth301(); if (failD) return failD;
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bD] = await db(`build?select=id,order_number,prep_state&id=eq.${build_id}`);
+      if (!bD) return json(404, { ok: false, error: "Cab not found" });
+      if (bD.prep_state === "done") return json(400, { ok: false, error: "Already marked ready" });
+      const whenD = new Date(claimed_at || Date.now());
+      const [lastD] = await db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${eD}&order=claimed_at.desc&limit=1`);
+      if (lastD && lastD.kind === "clock_in" && lastD.line_id === PREP_LINE_ID) {
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eD, line_id: PREP_LINE_ID, kind: "clock_out_early", reason: "Panels ready", claimed_at: whenD.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eD, line_id: homeLine301(meD301), kind: "clock_in", claimed_at: new Date(whenD.getTime() + 1000).toISOString() }) });
+      }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ prep_state: "done", prep_done_at: whenD.toISOString(), prep_done_by: eD, ...(bD.prep_state === "none" || !bD.prep_state ? { prep_started_at: whenD.toISOString() } : {}) }) });
+      const hrsD = (await prepHours301([build_id]))[build_id] || 0;
+      logEvent("prep.done", eD, { build_id, order_number: bD.order_number, hours: Math.round(hrsD * 100) / 100 });
+      return json(200, { ok: true, hours: Math.round(hrsD * 10) / 10 });
+    }
+    if (url.pathname === "/api/prep/back" && req.method === "POST") {
+      const [eB, failB, meB301] = await prepAuth301(); if (failB) return failB;
+      const { claimed_at } = await body(req);
+      const [lastB] = await db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${eB}&order=claimed_at.desc&limit=1`);
+      if (!(lastB && lastB.kind === "clock_in" && lastB.line_id === PREP_LINE_ID)) return json(400, { ok: false, error: "You're not on panel prep right now" });
+      const whenB = new Date(claimed_at || Date.now());
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eB, line_id: PREP_LINE_ID, kind: "clock_out_early", reason: "Back to warehouse", claimed_at: whenB.toISOString() }) });
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eB, line_id: homeLine301(meB301), kind: "clock_in", claimed_at: new Date(whenB.getTime() + 1000).toISOString() }) });
+      logEvent("prep.pause", eB, { build_id: lastB.fix_build_id });
+      return json(200, { ok: true });
+    }
+    // Admin: the per-family standard. Audited; applies to cabs not yet done.
+    if (url.pathname === "/api/admin/prep-standard" && req.method === "POST") {
+      const eS = await liveSession(req); if (!eS) return json(401, { ok: false, error: "Signed out" });
+      const [mS] = await db(`employee?select=role&id=eq.${eS}`); if (!mS || mS.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const { family, hours } = await body(req);
+      const famS = String(family || "").trim().slice(0, 80); const hS = Number(hours);
+      if (!famS) return json(400, { ok: false, error: "Which cab family?" });
+      if (!Number.isFinite(hS) || hS < 0 || hS > 40) return json(400, { ok: false, error: "Hours between 0 and 40" });
+      const [curS] = await db(`prep_standard?select=family,hours&family=eq.${encodeURIComponent(famS)}`);
+      if (curS) await db(`prep_standard?family=eq.${encodeURIComponent(famS)}`, { method: "PATCH", body: JSON.stringify({ hours: hS, updated_by: eS, updated_at: new Date().toISOString() }) });
+      else await db("prep_standard", { method: "POST", body: JSON.stringify({ family: famS, hours: hS, updated_by: eS }) });
+      logEvent("config.prep_hours", eS, { family: famS, from: curS ? Number(curS.hours) : null, to: hS });
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/fix/claim" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
@@ -10754,6 +10903,12 @@ http.createServer(async (req, res) => {
         const fmF127 = fixHoursByBuild(await dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${empsF127.join(",")})&order=claimed_at.asc,id.asc`));
         fixHrs127 = fmF127[bO.id] || 0;
       }
+      // Block 301: the cab's panel-prep line — state from the build row, hours from the bucket punches, standard per family.
+      bO.prep301 = null;
+      if (bO.prep_state && bO.prep_state !== "none") {
+        const [hrsP301, stdP301, whoP301] = await Promise.all([prepHours301([bO.id]), prodO && prodO.family ? db(`prep_standard?select=hours&family=eq.${encodeURIComponent(prodO.family)}`).catch(() => []) : [], bO.prep_done_by ? db(`employee?select=first_name,last_name&id=eq.${bO.prep_done_by}`) : []]);
+        bO.prep301 = { state: bO.prep_state, hrs: hrsP301[bO.id] || 0, std: stdP301[0] ? Number(stdP301[0].hours) : 3, by: whoP301[0] ? `${whoP301[0].first_name} ${((whoP301[0].last_name || "")[0] || "")}.` : "", doneDs: bO.prep_done_at ? dayShort291(phxDate(new Date(bO.prep_done_at).getTime())) : "" };
+      }
       // Block 230 (Daniel): ADMIN-ONLY internal activity feed — the customer
       // report's raw material, unfiltered: every step check-off, every note
       // (hidden ones struck through), every photo, day by day. Punch-level
@@ -10932,7 +11087,7 @@ http.createServer(async (req, res) => {
       const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
         db(`employee?select=id,first_name&active=is.true`),
-        db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),
+        db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state
         // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
         // order #, customer or business name, ship-to state. The Q65 toggle
         // ("Customer names on the TV") still governs the name; missing row = ON.
@@ -11099,7 +11254,7 @@ http.createServer(async (req, res) => {
       });
       const payload298 = { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
-        const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]) } : null;
+        const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]), prep: deckOf[l.id].prep_state || "none" } : null;   // Block 301: panels ready / in progress / not yet
         const upcoming95 = (upOf[l.id] || []).map((u) => ({ order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
@@ -11424,6 +11579,7 @@ http.createServer(async (req, res) => {
         if (fxIds272.length) for (const bFx of await db(`build?select=id,order_number&id=in.(${fxIds272.join(",")})`)) fxNames272[bFx.id] = bFx.order_number;
         tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at), line_id: p2.line_id,   // Block 297: line_id feeds the admin "Change line" control
           lineName: p2.line_id === FIX_LINE_ID ? "Fix work" + (fxNames272[p2.fix_build_id] ? " — " + fxNames272[p2.fix_build_id] : "")
+            : p2.line_id === PREP_LINE_ID ? "Panel prep" + (fxNames272[p2.fix_build_id] ? " — " + fxNames272[p2.fix_build_id] : "")   // Block 301
             : p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
@@ -13485,7 +13641,7 @@ self.addEventListener("notificationclick", (e) => {
       // (same queries verbatim; only the awaiting moved).
       const today = phxDate(Date.now());
       const [emps, tmpls, toggles, cabRows, allNums, hrsAdmin, pickRows, products, calDays, ntRows, ahRowsA] = await Promise.all([
-        db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email,pay_type&order=active.desc,first_name"),   // Block 200: pay_type feeds the People panel
+        db("employee?select=id,first_name,last_name,role,department,lines,active,pin_hash,temp_pin,must_change_pin,mobile,email,notify_push,notify_sms,notify_email,pay_type,panel_prep&order=active.desc,first_name"),   // Block 200: pay_type feeds the People panel · Block 301: panel_prep
         db("build_template?select=id,family&order=family"),
         db("feature_toggle?select=key,enabled&order=key"),
         // Q110: the cab-number editor works the OPEN cabs (upcoming through
@@ -13543,19 +13699,33 @@ self.addEventListener("notificationclick", (e) => {
       // Block 258: STEP ACTUALS — computed only when the toggle is ON, only
       // for the family being viewed, read-only. A compute hiccup renders the
       // editor exactly as before (never blocks the admin page).
+      // Block 301: PANEL PREP standards per family with the last-12 median actual beside each (from punches).
+      let prep301 = [];
+      try {
+        const [stdRowsP, doneP] = await Promise.all([
+          db(`prep_standard?select=family,hours,updated_at`),
+          db(`build?select=id,part_number,prep_done_at&prep_state=eq.done&order=prep_done_at.desc&limit=200`),
+        ]);
+        const famOfP = Object.fromEntries(products.map((pr) => [pr.part_number, pr.family]));
+        const hrsP = await prepHours301(doneP.map((b) => b.id));
+        const byFam = {}; for (const b of doneP) { const f = famOfP[b.part_number] || ""; if (!f) continue; (byFam[f] = byFam[f] || []).push({ h: Math.round((hrsP[b.id] || 0) * 100) / 100, at: b.prep_done_at }); }
+        const fams = [...new Set([...stdRowsP.map((r) => r.family), ...Object.keys(byFam), ...products.map((pr) => pr.family).filter(Boolean)])].sort();
+        prep301 = fams.map((f) => { const st = stdRowsP.find((r) => r.family === f); const xs = (byFam[f] || []).slice(0, 12).map((x) => x.h);
+          return { family: f, hours: st ? Number(st.hours) : 3, n: xs.length, median: xs.length >= 2 ? median301(xs) : null, last: (byFam[f] || [])[0] || null }; });
+      } catch (eP301) { console.error("prep standards failed:", eP301.message); }
       let act258 = null;
       try {
         const togSA258 = toggles.find((t) => t.key === "step_actuals");
         if (togSA258 && togSA258.enabled && fam94) act258 = await stepActuals258(fam94, steps, optItems94);
       } catch (eA258) { console.error("step actuals failed:", eA258.message); }
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin, act258));
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin, act258, prep301));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
     if (url.pathname === "/api/admin/employee" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p94 = await body(req);
-      const { id, department, role, lines, active, reset_pin, pay_type } = p94;   // Block 200: pay_type (hourly / salary / na)
+      const { id, department, role, lines, active, reset_pin, pay_type, panel_prep } = p94;   // Block 200: pay_type (hourly / salary / na) · Block 301: panel_prep
       // Block 93 (owner-rep note 1): ADD a person from the console. Creates the
       // row + issues a temp passcode via the proven Q114 path (first sign-in
       // forces them to pick their own PIN). Lines only make sense for Production.
@@ -13595,7 +13765,9 @@ self.addEventListener("notificationclick", (e) => {
       // Block 200: hourly = on the Pay Worksheet; salary / na (owners) are
       // listed informationally only. Whitelisted — anything else is refused.
       if (pay_type !== undefined) { if (!["hourly", "salary", "na"].includes(pay_type)) return json(400, { ok: false, error: "Pay type must be Hourly, Salary, or Owner — n/a" }); patch.pay_type = pay_type; }
+      if (panel_prep !== undefined) patch.panel_prep = Boolean(panel_prep);   // Block 301: the Panel prep switch, any number of people
       await db(`employee?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      if (panel_prep !== undefined) logEvent("employee.panel_prep", adminId, { employee_id: id, on: Boolean(panel_prep) });
       // Deactivating someone still ON the clock used to leave their interval
       // open forever (risk sweep) — close it at the moment of deactivation.
       if (active === false) {
