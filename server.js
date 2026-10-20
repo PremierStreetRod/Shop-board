@@ -3808,6 +3808,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   <p style="text-align:center;margin:2px 0 12px"><a href="/shopboard" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the board</a></p>
   ${nav196(emp196)}   <!-- Block 196 (owner: "the customer order pages do not" have nav — the endless-loop page): the ONE shared nav -->
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
+  ${isAdmin97 && (b.state === "production_complete" || b.state === "complete") ? `<p style="text-align:center;margin:0 0 10px"><a href="/order/${encodeURIComponent(b.order_number)}/recap" style="display:inline-block;background:#1b2a1e;border:1px solid #30d158;border-radius:10px;color:#9be7b0;padding:10px 18px;text-decoration:none;font-weight:700">&#128196; Cab recap &mdash; one page for the owners</a></p>` : ""}   <!-- Block 310: available once production signs the cab off -->
   ${isAdmin97 ? `<p style="text-align:center;margin:0 0 12px"><a href="/report/progress/${encodeURIComponent(b.order_number)}" style="display:inline-block;background:#1c1c1e;border:1px solid #4a90d9;border-radius:10px;color:#8ec2f0;padding:10px 18px;text-decoration:none;font-weight:700">&#128247; Customer progress report</a></p>` : ""}   <!-- Block 210: the build-report the front office sends the owner -->
   ${share296 ? shareLane296(b, share296.photoCount, share296.links, share296.myMobile) : ""}
   <div class="lane">
@@ -8892,6 +8893,274 @@ function actPill258(act, kind, id, tplId) {
   return `<a href="${href}" style="text-decoration:none" title="median of the last ${r.n} cabs \u00b7 range ${r.lo}\u2013${r.hi} crew-hrs \u00b7 tap for the receipts"><span style="display:inline-block;background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:3px 9px;font-size:.85rem;font-weight:800">${r.median} <span style="opacity:.65;font-weight:600">\u00b7${r.n}</span></span></a>`;
 }
 
+// ---------- Block 310 (Daniel, 10/20): THE CAB RECAP — one page per cab, for the owners ----------
+// Playbook 67. "Shows owners all the steps, how long the steps are, how long it actually took, who was
+// working on the cab, how long the cab sat idle, any oddities found during the build and with punches,
+// whether the cab was shown to have missing pieces at start." Facts only — no verdicts, no pay figures.
+// Available from the moment production signs the cab off (build.production_complete), forever.
+// Everything below is read from tables that already exist; the per-step actuals and the shop average
+// ride the Block 258 engine unchanged (lineLabor258 / stepActuals258 — same rules the admin editor shows).
+const h1_310 = (x) => (Math.round(Number(x || 0) * 10) / 10).toFixed(1).replace(/\.0$/, "");
+const phxStamp310 = (iso) => { if (!iso) return ""; const d = new Date(new Date(iso).getTime() - PHX_OFFSET_MS); const h = d.getUTCHours(), m = String(d.getUTCMinutes()).padStart(2, "0"); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${h % 12 || 12}:${m} ${h >= 12 ? "PM" : "AM"}`; };
+const phxDay310 = (iso) => { if (!iso) return ""; if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso))) { const [y, m, d] = String(iso).split("-"); return `${Number(m)}/${Number(d)}/${y.slice(2)}`; }   // a date-only value is already a Phoenix day
+  const d = new Date(new Date(iso).getTime() - PHX_OFFSET_MS); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${String(d.getUTCFullYear()).slice(2)}`; };
+// Clip an interval list to [a,b] and return the union length in ms.
+function unionMs310(ivs, a, b) {
+  const xs = ivs.map((iv) => [Math.max(iv.start, a), Math.min(iv.end, b)]).filter(([s, e]) => e > s).sort((p, q) => p[0] - q[0]);
+  let total = 0, cs = null, ce = null;
+  for (const [s, e] of xs) { if (cs == null || s > ce) { if (cs != null) total += ce - cs; cs = s; ce = e; } else ce = Math.max(ce, e); }
+  if (cs != null) total += ce - cs;
+  return total;
+}
+async function cabRecap310(b) {
+  const nowMs = Date.now();
+  const [prod] = b.part_number ? await db(`product?select=family,template_id&part_number=eq.${encodeURIComponent(b.part_number)}`) : [null];
+  const family = prod ? prod.family : "";
+  const [[ln], tasks, emps, evs, photos, checks, flags, downs, tnotes, hrs, cal] = await Promise.all([
+    b.line_id ? db(`line?select=id,name&id=eq.${b.line_id}`) : [null],
+    db(`task?select=id,display_no,name,man_hours,state,is_background,source,sort_order,day_no,started_by,completed_by,completed_at,helpers&build_id=eq.${b.id}&order=day_no,sort_order`),
+    db("employee?select=id,first_name,last_name,department"),
+    dbAll252(`event_log?select=at,event_type,actor_id,payload&payload->>build_id=eq.${b.id}&order=at.asc,id.asc`),
+    db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc&limit=400`),
+    db(`option_check?select=item_text,checked_by,checked_at&build_id=eq.${b.id}&order=checked_at.asc`).catch(() => []),
+    db(`option_flag?select=flag_text&build_id=eq.${b.id}`).catch(() => []),
+    db(`line_down?select=reason,down_at,up_at&build_id=eq.${b.id}&order=down_at.asc`).catch(() => []),
+    db(`task_note?select=task_id,note,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc`).catch(() => []),
+    shopHours(),
+    db(`shop_calendar?select=cal_date,is_open`).catch(() => []),
+  ]);
+  const name = (id) => { const e = emps.find((x) => x.id === id); return e ? `${e.first_name} ${((e.last_name || "")[0] || "")}.`.trim() : (id ? "someone" : ""); };
+  const testIds = new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id));
+  const ev = (type) => evs.filter((e) => e.event_type === type);
+  const startEv = ev("build.start")[0] || null, finishEv = ev("build.finish").slice(-1)[0] || null, signEv = ev("build.production_complete").slice(-1)[0] || null;
+  const startMs = b.started_at ? new Date(b.started_at).getTime() : (startEv ? new Date(startEv.at).getTime() : null);
+  const endMs = signEv ? new Date(signEv.at).getTime() : nowMs;
+  const signedOff = Boolean(signEv);
+  // ---- punches on this line while the cab was on it (voided out, Zz out) ----
+  let ivs = [];
+  if (startMs && b.line_id) {
+    const punches = await dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at&voided=is.false&claimed_at=gte.${new Date(startMs - 86400000).toISOString()}&claimed_at=lte.${new Date(endMs + 86400000).toISOString()}&order=claimed_at.asc,id.asc`);
+    ivs = pairLineIvs258(punches.filter((p) => !testIds.has(p.employee_id)), nowMs).map((iv) => ({ ...iv, start: Math.max(iv.start, startMs), end: Math.min(iv.end, endMs) })).filter((iv) => iv.end > iv.start);
+  }
+  const lineIvs = ivs.filter((iv) => Number(iv.line) === Number(b.line_id));
+  const crewMs = {}; for (const iv of lineIvs) crewMs[iv.emp] = (crewMs[iv.emp] || 0) + (iv.end - iv.start);
+  const crewTotalH = Object.values(crewMs).reduce((s, v) => s + v, 0) / 3600000;
+  const crew = Object.entries(crewMs).map(([e, ms]) => ({ id: e, name: name(e), hours: ms / 3600000, share: crewTotalH ? ms / 3600000 / crewTotalH : 0 })).sort((x, y) => y.hours - x.hours);
+  // ---- per-step actuals (the 258 engine, this cab only) ----
+  const tEvs = evs.filter((e) => /^task\.(start|complete|undo|unstart)$/.test(e.event_type) && e.payload && e.payload.task_id)
+    .map((e) => ({ at: new Date(e.at).getTime(), type: e.event_type.slice(5), task_id: e.payload.task_id, actor: e.actor_id }));
+  const bgSet = new Set(tasks.filter((t) => t.is_background).map((t) => t.id));
+  const labor = startMs ? lineLabor258(tEvs, lineIvs, { background: bgSet, nowMs: endMs }) : {};
+  // ---- the shop average (last-12 median), keyed like the admin editor ----
+  const norm = (x) => String(x || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
+  let avg = { rows: {} };
+  let tplSteps = [], optItems = [];
+  if (prod && prod.template_id) {
+    [tplSteps, optItems] = await Promise.all([
+      db(`step_template?select=id,name,man_hours&template_id=eq.${prod.template_id}&retired=is.false`).catch(() => []),
+      db(`option_item?select=id,match_text,man_hours&retired=is.false`).catch(() => []),
+    ]);
+    try { avg = await stepActuals258(family, tplSteps, optItems); } catch (e) { avg = { rows: {} }; }
+  }
+  const stepKey = {}; for (const st of tplSteps) stepKey[norm(st.name)] = `step:${st.id}`;
+  const optKey = {}; for (const o of optItems) optKey[norm(o.match_text)] = `opt:${o.id}`;
+  // ---- the steps table ----
+  const undoCount = {}, unstartCount = {};
+  for (const e of tEvs) { if (e.type === "undo") undoCount[e.task_id] = (undoCount[e.task_id] || 0) + 1; if (e.type === "unstart") unstartCount[e.task_id] = (unstartCount[e.task_id] || 0) + 1; }
+  const mgrDone = new Set(ev("task.manager_completed").map((e) => e.payload.task_id));
+  const steps = tasks.filter((t) => !t.is_background).map((t) => {
+    const L = labor[t.id] || null;
+    const isOpt = t.source === "option" || t.source === "extra" || /^UPGRADE/i.test(t.name);
+    const key = isOpt ? optKey[norm(String(t.name).replace(/^UPGRADE\s*—\s*/, ""))] : stepKey[norm(t.name)];
+    const a = key ? (avg.rows || {})[key] : null;
+    const std = Number(t.man_hours) || 0;
+    const flagsT = [];
+    if (L && L.wallMin < QUICK_TAP_MIN_258 && std >= 1) flagsT.push(`done ${L.wallMin} min after start`);
+    else if (L && std > 0 && L.crewH < std * tierFloor258(std) && L.crewH > 0) flagsT.push(`only ${h1_310(L.crewH)} crew-h on a ${h1_310(std)} h step`);
+    if (undoCount[t.id]) flagsT.push(`un-done ${undoCount[t.id]}×`);
+    if (unstartCount[t.id]) flagsT.push(`started by mistake ${unstartCount[t.id]}×`);
+    if (mgrDone.has(t.id)) flagsT.push("checked off by a manager");
+    if (t.state !== "complete") flagsT.push(t.state === "in_progress" ? "still open at sign-off" : "never started");
+    const who = [t.started_by ? name(t.started_by) : "", ...(Array.isArray(t.helpers) ? t.helpers.map((h) => name(typeof h === "object" ? h.id || h.employee_id : h)) : [])].filter(Boolean);
+    const byPerson = L ? Object.entries(L.byPerson).sort((x, y) => y[1] - x[1]).map(([e, h]) => `${name(e)} ${h1_310(h)}`) : [];
+    return { no: t.display_no, name: t.name, isOpt, source: t.source, std, actual: L ? L.crewH : null, wallMin: L ? L.wallMin : null, avg: a && a.n >= 3 ? a.median : null, avgN: a ? a.n : 0,
+      who: byPerson.length ? byPerson.join(" + ") : who.join(" + "), started: L ? L.from : null, done: L ? L.to : (t.completed_at ? new Date(t.completed_at).getTime() : null), flags: flagsT, state: t.state };
+  });
+  const allowedSteps = steps.filter((s) => !s.isOpt && s.source !== "rework" && s.source !== "fix").reduce((s, x) => s + x.std, 0);
+  const allowedOpts = steps.filter((s) => s.isOpt).reduce((s, x) => s + x.std, 0);
+  const allowedFix = steps.filter((s) => s.source === "rework" || s.source === "fix").reduce((s, x) => s + x.std, 0);
+  const allowed = allowedSteps + allowedOpts;
+  // ---- idle: shop-open hours on the line with nobody clocked onto it (lunch gap removed) ----
+  const closedDays = new Set((cal || []).filter((c) => c.is_open === false).map((c) => c.cal_date));
+  const openDays = new Set((cal || []).filter((c) => c.is_open === true).map((c) => c.cal_date));
+  const idleDays = []; let shopMs = 0, idleMs = 0, lunchMs = 0;
+  if (startMs) {
+    for (let d = new Date(startMs - PHX_OFFSET_MS); ; d = new Date(d.getTime() + 86400000)) {
+      const dayKey = d.toISOString().slice(0, 10);
+      const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + PHX_OFFSET_MS;   // Phoenix midnight in UTC ms
+      if (dayStart > endMs) break;
+      const dow = new Date(dayStart - PHX_OFFSET_MS).getUTCDay();
+      const isOpen = openDays.has(dayKey) || (dow >= 1 && dow <= 5 && !closedDays.has(dayKey));
+      if (!isOpen) continue;
+      const a = Math.max(dayStart + hrs.open * 3600000, startMs), z = Math.min(dayStart + hrs.close * 3600000, endMs);
+      if (z <= a) continue;
+      const covered = unionMs310(lineIvs, a, z);
+      // the shop's lunch that day = the longest stretch between 11:00 and 14:30 with NOBODY on ANY line, capped at 60 min
+      const la = dayStart + 11 * 3600000, lz = dayStart + 14.5 * 3600000;
+      const cuts = [...new Set(ivs.flatMap((iv) => [iv.start, iv.end]).filter((t) => t > la && t < lz)), la, lz].sort((p, q) => p - q);
+      let bestGap = 0;
+      for (let i = 0; i + 1 < cuts.length; i++) { const s = cuts[i], e = cuts[i + 1]; if (e <= s) continue; const busy = ivs.some((iv) => iv.start <= s && iv.end >= e); if (!busy) bestGap = Math.max(bestGap, e - s); }
+      const lunch = Math.min(bestGap, 3600000);
+      const lineIdleInLunch = Math.min(lunch, Math.max(0, (z - a) - covered));
+      const dayShop = (z - a) - lineIdleInLunch, dayIdle = Math.max(0, (z - a) - covered - lineIdleInLunch);
+      shopMs += dayShop; idleMs += dayIdle; lunchMs += lineIdleInLunch;
+      if (dayIdle >= 1800000) idleDays.push({ day: phxDay310(new Date(dayStart - PHX_OFFSET_MS + 12 * 3600000).toISOString()), idleH: dayIdle / 3600000, shopH: dayShop / 3600000 });
+    }
+  }
+  // ---- kit ----
+  const kitStatusEvs = ev("kit.status");
+  const shortBeforeStart = kitStatusEvs.some((e) => e.payload && e.payload.to === "short" && (!startMs || new Date(e.at).getTime() <= startMs)) || Boolean(ev("build.manager_started").some((e) => e.payload && e.payload.short)) || Boolean(ev("kit.delivered").some((e) => e.payload && e.payload.short));
+  const shortNote = (kitStatusEvs.filter((e) => e.payload && e.payload.to === "short").slice(-1)[0] || {}).payload || {};
+  const noteEv = ev("kit.note").slice(-1)[0];
+  const clearedEv = ev("kit.short_cleared").slice(-1)[0] || null;
+  const mgrStart = ev("build.manager_started")[0] || null;
+  const kit = {
+    verifiedAt: b.kit_verified_at, verifiedBy: name(b.kit_verified_by),
+    pullMin: b.kit_pull_started_at && b.kit_delivered_at ? Math.round((new Date(b.kit_delivered_at) - new Date(b.kit_pull_started_at)) / 60000) : null,
+    deliveredAt: b.kit_delivered_at, deliveredBy: name(b.kit_delivered_by), startedByManager: mgrStart ? name(mgrStart.actor_id) : null,
+    shortAtStart: shortBeforeStart, missing: shortNote.note || (noteEv && noteEv.payload ? noteEv.payload.note : "") || b.kit_note || "",
+    clearedAt: clearedEv ? clearedEv.at : null, clearedBy: clearedEv ? name(clearedEv.actor_id) : "", clearedAtSignoff: Boolean(clearedEv && clearedEv.payload && clearedEv.payload.at_signoff),
+  };
+  // ---- options ----
+  const options = (checks || []).map((c) => ({ text: c.item_text, by: name(c.checked_by), at: c.checked_at }));
+  const optionFlags = (flags || []).map((f) => f.flag_text);
+  // ---- oddities ----
+  const odd = [];
+  for (const e of ev("build.rework_assigned")) odd.push({ at: e.at, what: `Sent back for rework by ${name(e.actor_id)}${e.payload.reason ? ` — ${e.payload.reason}` : ""}${e.payload.hours ? ` (${h1_310(e.payload.hours)} h)` : ""}${e.payload.note ? `: ${String(e.payload.note).slice(0, 90)}` : ""}` });
+  for (const e of ev("build.self_passed")) odd.push({ at: e.at, what: `Production pushed the cab through after rework (self-pass) — ${name(e.actor_id)}` });
+  for (const e of ev("build.fixjob_opened")) odd.push({ at: e.at, what: `Fix job opened by ${name(e.actor_id)}${e.payload.kind ? ` (${e.payload.kind})` : ""}${e.payload.reason ? ` — ${e.payload.reason}` : ""}` });
+  for (const e of ev("build.fixjob_done")) odd.push({ at: e.at, what: `Fix job finished${e.payload.hours ? ` — ${h1_310(e.payload.hours)} h` : ""}` });
+  for (const d of downs || []) odd.push({ at: d.down_at, what: `Line down${d.reason ? ` — ${d.reason}` : ""}${d.up_at ? ` (${h1_310((new Date(d.up_at) - new Date(d.down_at)) / 3600000)} h)` : " (not marked back up)"}` });
+  for (const e of ev("build.signoff_override")) odd.push({ at: e.at, what: `Signed off with ${e.payload.open_steps} step${e.payload.open_steps === 1 ? "" : "s"} still open (manager override)` });
+  if (signEv && signEv.payload && signEv.payload.short_at_signoff) odd.push({ at: signEv.at, what: `Kit was still marked SHORT at sign-off${signEv.payload.still_missing ? ` — "${String(signEv.payload.still_missing).slice(0, 80)}"` : ""}` });
+  for (const e of ev("build.photos_waived")) odd.push({ at: e.at, what: `Completion photo requirement waived by ${name(e.actor_id)}` });
+  for (const e of ev("task.cap_override")) odd.push({ at: e.at, what: `Open-steps cap overridden by ${name(e.actor_id)}` });
+  if (finishEv && signEv) { const waitH = (new Date(signEv.at) - new Date(finishEv.at)) / 3600000; if (waitH >= 2) odd.push({ at: finishEv.at, what: `Waited ${h1_310(waitH)} h for inspection (finished ${phxStamp310(finishEv.at)}, signed off ${phxStamp310(signEv.at)})` }); }
+  // punches on this line, in the window, that were corrected/relined/auto-closed
+  if (startMs && b.line_id) {
+    const lineEmps = new Set(lineIvs.map((iv) => String(iv.emp)));
+    const fixEvs = await dbAll252(`event_log?select=at,event_type,actor_id,payload&event_type=in.(punch.relined,punch.moved,punch.added,punch.voided,punch.pair_voided,clock.auto_out)&at=gte.${new Date(startMs).toISOString()}&at=lte.${new Date(endMs + 86400000).toISOString()}&order=at.asc`).catch(() => []);
+    for (const e of fixEvs) { const p = e.payload || {}; const who = p.employee_id ? String(p.employee_id) : ""; if (who && !lineEmps.has(who)) continue;
+      if (e.event_type === "clock.auto_out" && Number(p.line_id) !== Number(b.line_id)) continue;
+      if (e.event_type === "punch.relined" && Number(p.to_line) !== Number(b.line_id) && Number(p.from_line) !== Number(b.line_id)) continue;
+      odd.push({ at: e.at, what: e.event_type === "clock.auto_out" ? `${name(p.employee_id)} forgot to clock out — auto-closed at day end` : e.event_type === "punch.relined" ? `${name(p.employee_id)}'s punch moved to another line by ${name(e.actor_id)}` : `${name(p.employee_id)}'s punch ${e.event_type.replace("punch.", "").replace("_", " ")} by ${name(e.actor_id)}${p.note ? ` — ${String(p.note).slice(0, 60)}` : ""}` }); }
+  }
+  // days on the line with no end-of-day / finish / step photo at all
+  const photoDays = new Set((photos || []).filter((p) => !p.hidden && p.kind !== "prep").map((p) => phxDate(new Date(p.created_at).getTime())));
+  const noPhotoDays = [];
+  if (startMs) for (let t = startMs; t <= endMs; t += 86400000) { const k = phxDate(t); const dow = new Date(t - PHX_OFFSET_MS).getUTCDay(); if (dow === 0 || dow === 6 || closedDays.has(k)) continue; if (!photoDays.has(k)) noPhotoDays.push(phxDay310(new Date(t).toISOString())); }
+  odd.sort((x, y) => new Date(x.at) - new Date(y.at));
+  // ---- photos / notes ----
+  const vis = (photos || []).filter((p) => !p.hidden);
+  const photoCounts = {}; for (const p of vis) photoCounts[p.kind] = (photoCounts[p.kind] || 0) + 1;
+  const strip = vis.length <= 4 ? vis : [vis[0], vis[Math.floor(vis.length / 3)], vis[Math.floor((2 * vis.length) / 3)], vis[vis.length - 1]];
+  const notes = (tnotes || []).filter((n) => !n.hidden).map((n) => ({ task: (tasks.find((t) => t.id === n.task_id) || {}).display_no, note: String(n.note).slice(0, 140) })).slice(0, 8);
+  const promiseMs = b.promised_finish ? (/^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish)) ? new Date(b.promised_finish + "T23:59:59Z").getTime() + PHX_OFFSET_MS : new Date(b.promised_finish).getTime()) : null;   // a date-only promise = end of that Phoenix day
+  const earned = steps.filter((s) => s.state === "complete").reduce((s, x) => s + x.std, 0);
+  return {
+    order: b.order_number, cab: b.cab_number || "", customer: b.customer_name || "", family, part: b.part_number || "", line: ln ? ln.name : "", state: b.state,
+    startedAt: startMs ? new Date(startMs).toISOString() : null, finishedAt: finishEv ? finishEv.at : null, signedOffAt: signEv ? signEv.at : null, signedOffBy: signEv ? name(signEv.actor_id) : "", signedOff,
+    promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((promiseMs - new Date(signEv.at).getTime()) / 86400000) : null,
+    daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null,
+    allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
+    idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
+    kit, options, optionFlags, oddities: odd, noPhotoDays, photoCounts, photoTotal: vis.length, strip: strip.map((p) => p.id), notes, finalNote: b.final_note || "",
+  };
+}
+// The one-page render. Screen = the app's dark theme; print = light, letter, one page.
+const recapPage310 = (R, emp196 = null) => {
+  const e = escH;
+  const pct = R.allowed ? Math.round(((R.crewHours - R.allowed) / R.allowed) * 100) : null;
+  const flagsOf = (s) => s.flags.length ? s.flags.map((f) => `<span class="fl">${e(f)}</span>`).join(" ") : "";
+  const stepRow = (s) => `<tr${s.isOpt ? ' class="opt"' : ""}><td>${s.isOpt ? "U" : e(String(s.no))}</td><td>${e(s.name)}${s.source === "rework" || s.source === "fix" ? ' <span class="fl">rework</span>' : ""}</td><td class="n">${h1_310(s.std)}</td><td class="n b">${s.actual == null ? "—" : h1_310(s.actual)}</td><td class="n">${s.avg == null ? `<span class="mut">—${s.avgN ? ` (${s.avgN})` : ""}</span>` : h1_310(s.avg)}</td><td>${e(s.who)}</td><td class="mut">${s.started ? e(phxStamp310(new Date(s.started).toISOString())) : ""}${s.done ? ` → ${e(phxStamp310(new Date(s.done).toISOString()))}` : ""}</td><td>${flagsOf(s)}</td></tr>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">
+<title>Cab recap — Order ${e(R.order)}</title>${style}
+<style>
+  .rc{max-width:1000px;margin:0 auto;padding:0 12px}
+  .rc h2{margin:6px 0 2px}.rc .sub{opacity:.7;margin:0 0 10px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:10px 0}
+  .tile{background:#1c1c1e;border:1px solid #2c2c2e;border-radius:12px;padding:10px 12px}.tile b{display:block;font-size:1.5rem}.tile span{opacity:.65;font-size:.85rem}
+  .sec{margin:12px 0 4px;font-weight:800;letter-spacing:.04em;font-size:.85rem;color:#8e8e93;text-transform:uppercase}
+  table.t{width:100%;border-collapse:collapse;font-size:.9rem}table.t th{text-align:left;opacity:.6;font-weight:600;padding:4px 6px;border-bottom:1px solid #2c2c2e}table.t td{padding:4px 6px;border-bottom:1px solid #1c1c1e;vertical-align:top}
+  td.n,th.n{text-align:right;white-space:nowrap}td.b{font-weight:800}.mut{opacity:.55}tr.opt td{color:#c9b6ff}
+  .fl{display:inline-block;background:#3a2a00;color:#ffd60a;border-radius:7px;padding:1px 6px;font-size:.78rem;margin:1px 2px 1px 0}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:2px 10px;font-size:.92rem}.kv b{opacity:.6;font-weight:600}
+  .strip img{height:92px;border-radius:8px;margin:0 6px 6px 0}
+  ul.od{margin:4px 0;padding-left:18px;font-size:.92rem}ul.od li{margin:2px 0}
+  .noprint{}
+  @media print{
+    @page{size:letter;margin:.45in}
+    html,body{background:#fff!important;color:#000!important;font-size:9.6px;height:auto!important;min-height:0!important;margin:0!important;padding:0!important}
+    .grid{grid-template-columns:repeat(5,1fr);gap:5px;margin:6px 0}.wrap{padding:0}
+    .noprint,.logo,.nav196{display:none!important}
+    .rc{max-width:none;padding:0}.tile{border:1px solid #bbb;background:#fff;padding:6px 8px}.tile b{font-size:1.15rem}
+    table.t{font-size:8.8px}table.t th,table.t td{padding:2px 4px;border-bottom:1px solid #ddd}tr.opt td{color:#4a2a9a}
+    .fl{background:#fff3c2;color:#5a4300;border:1px solid #e0c060}.sec{color:#444;margin:7px 0 2px}.kv{font-size:8.8px;grid-template-columns:120px 1fr}
+    .strip img{height:62px}ul.od{font-size:8.8px}.mut{opacity:.6}
+    a{color:#000;text-decoration:none}
+  }
+</style></head>
+<body><div class="rc">
+  <div class="logo noprint">SHOP <span>BOARD</span></div>
+  <p class="noprint" style="text-align:center;margin:2px 0 8px"><a href="/order/${encodeURIComponent(R.order)}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the order</a> &nbsp;&middot;&nbsp; <a href="#" onclick="window.print();return false" style="color:#8ec2f0;font-size:.9rem;text-decoration:none">&#128424; Print / Save as PDF</a></p>
+  <h2>Cab recap &mdash; ORDER ${e(R.order)}${R.cab ? ` &middot; Cab #${e(R.cab)}` : ""}</h2>
+  <p class="sub">${e(R.customer) || "&mdash;"} &middot; ${e(R.family) || e(R.part)} &middot; ${e(R.line)}${R.signedOff ? ` &middot; signed off ${e(phxStamp310(R.signedOffAt))} by ${e(R.signedOffBy)}` : " &middot; <b>not signed off yet</b>"}</p>
+  <div class="grid">
+    <div class="tile"><b>${h1_310(R.crewHours)} h</b><span>crew hours on the line${R.allowed ? ` &middot; <b style="display:inline;font-size:1rem">${pct > 0 ? "+" : ""}${pct}%</b> vs ${h1_310(R.allowed)} allowed` : ""}</span></div>
+    <div class="tile"><b>${h1_310(R.allowed)} h</b><span>allowed &middot; ${h1_310(R.allowedSteps)} steps + ${h1_310(R.allowedOpts)} upgrades${R.allowedFix ? ` (+${h1_310(R.allowedFix)} rework, not counted)` : ""}</span></div>
+    <div class="tile"><b>${h1_310(R.idle.idleH)} h</b><span>line empty of ${h1_310(R.idle.shopH)} shop hours${R.idle.lunchH ? ` (lunch removed)` : ""}</span></div>
+    <div class="tile"><b>${R.daysOnLine == null ? "—" : R.daysOnLine}</b><span>days on the line &middot; ${R.startedAt ? e(phxDay310(R.startedAt)) : "?"} &rarr; ${R.signedOffAt ? e(phxDay310(R.signedOffAt)) : "open"}</span></div>
+    <div class="tile"><b>${R.onTimeDays == null ? "—" : (R.onTimeDays >= 0 ? "On time" : "Late")}</b><span>${R.promised ? `promised ${e(phxDay310(R.promised))}${R.onTimeDays == null ? "" : R.onTimeDays >= 0 ? ` &middot; ${R.onTimeDays} day${R.onTimeDays === 1 ? "" : "s"} early` : ` &middot; ${-R.onTimeDays} day${R.onTimeDays === -1 ? "" : "s"} late`}` : "no promise date on the order"}</span></div>
+  </div>
+  <div class="sec">Steps &mdash; allowed &middot; this cab &middot; shop average (last 12 cabs)</div>
+  <table class="t"><tr><th>#</th><th>Step</th><th class="n">Allowed</th><th class="n">This cab</th><th class="n">Average</th><th>Who</th><th>When</th><th>Notes</th></tr>
+    ${R.steps.map(stepRow).join("")}
+    <tr><td></td><td><b>Total</b></td><td class="n b">${h1_310(R.allowed)}</td><td class="n b">${h1_310(R.steps.reduce((s, x) => s + (x.actual || 0), 0))}</td><td class="n mut">—</td><td colspan="3" class="mut">U = upgrade &middot; "This cab" = clocked line hours split across the steps open at the time (Block 258 rule) &middot; Average = median of the last 12 cabs on that step, "—" until 3 cabs</td></tr>
+  </table>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div>
+      <div class="sec">Crew</div>
+      <table class="t"><tr><th>Who</th><th class="n">Hours</th><th class="n">Share</th></tr>${R.crew.map((c) => `<tr><td>${e(c.name)}</td><td class="n">${h1_310(c.hours)}</td><td class="n">${Math.round(c.share * 100)}%</td></tr>`).join("") || `<tr><td colspan="3" class="mut">No punches on this line while the cab was on it.</td></tr>`}</table>
+      ${R.idle.days.length ? `<div class="sec">Line empty &mdash; by day</div><ul class="od">${R.idle.days.map((d) => `<li>${e(d.day)}: ${h1_310(d.idleH)} of ${h1_310(d.shopH)} h</li>`).join("")}</ul>` : ""}
+    </div>
+    <div>
+      <div class="sec">Kit</div>
+      <div class="kv">
+        <b>Verified</b><span>${R.kit.verifiedAt ? `${e(phxStamp310(R.kit.verifiedAt))} by ${e(R.kit.verifiedBy)}` : "—"}</span>
+        <b>Delivered</b><span>${R.kit.startedByManager ? `started from the Manager console by ${e(R.kit.startedByManager)} ${R.kit.deliveredAt ? e(phxStamp310(R.kit.deliveredAt)) : ""}` : R.kit.deliveredAt ? `${e(phxStamp310(R.kit.deliveredAt))} by ${e(R.kit.deliveredBy)}${R.kit.pullMin != null ? ` &middot; ${R.kit.pullMin} min pull` : ""}` : "—"}</span>
+        <b>Missing parts at start</b><span>${R.kit.shortAtStart ? `<b style="color:#ff9f0a;opacity:1">YES</b>${R.kit.missing ? ` &mdash; ${e(R.kit.missing)}` : ""}${R.kit.clearedAt ? `<br>cleared ${e(phxStamp310(R.kit.clearedAt))}${R.kit.clearedAtSignoff ? " at sign-off (never tapped by warehouse)" : ` by ${e(R.kit.clearedBy)}`}` : "<br>never cleared"}` : "no"}</span>
+      </div>
+      <div class="sec">Customer selections${R.options.length ? ` &mdash; ${R.options.length} confirmed at sign-off` : ""}</div>
+      ${R.options.length ? `<ul class="od">${R.options.map((o) => `<li>&#10003; ${e(o.text)} <span class="mut">(${e(o.by)})</span></li>`).join("")}</ul>` : `<div class="mut" style="font-size:.9rem">No customer options on this order${R.signedOff ? " (acknowledged at sign-off)" : ""}.</div>`}
+      ${R.optionFlags.length ? `<div class="mut" style="font-size:.85rem">Flagged on the cab: ${R.optionFlags.map(e).join(" · ")}</div>` : ""}
+    </div>
+  </div>
+  <div class="sec">Oddities &mdash; build and punches</div>
+  ${R.oddities.length || R.noPhotoDays.length ? `<ul class="od">${R.oddities.map((o) => `<li><span class="mut">${e(phxStamp310(o.at))}</span> &middot; ${e(o.what)}</li>`).join("")}${R.noPhotoDays.length ? `<li>No photo at all on ${R.noPhotoDays.length} shop day${R.noPhotoDays.length === 1 ? "" : "s"}: ${R.noPhotoDays.map(e).join(", ")}</li>` : ""}</ul>` : `<div class="mut" style="font-size:.9rem">Nothing out of the ordinary on record.</div>`}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div><div class="sec">Photos &mdash; ${R.photoTotal} (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ") || "none"})</div>
+      <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
+      <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a></div>
+    <div><div class="sec">Notes</div>
+      ${R.finalNote ? `<div style="font-size:.9rem"><b>Crew&#39;s final note:</b> ${e(R.finalNote)}</div>` : ""}
+      ${R.notes.length ? `<ul class="od">${R.notes.map((n) => `<li>${n.task ? `Step ${e(String(n.task))}: ` : ""}${e(n.note)}</li>`).join("")}</ul>` : (R.finalNote ? "" : `<div class="mut" style="font-size:.9rem">No notes.</div>`)}
+    </div>
+  </div>
+  <p class="mut" style="font-size:.78rem;margin-top:10px">Production phase only &mdash; Body Shop time is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} between the cab&#39;s start and sign-off. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the shop&#39;s lunch removed.</p>
+</div></body></html>`;
+};
+
 // ---------- Block 259 (Daniel, 9/18): THE REWORK SCOREBOARD ----------
 // Daniel's read on rework time: "i believe we have a staffing issue of body
 // shop NOT checking the right boxes or properly explaining WHY a cab goes
@@ -9489,7 +9758,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder"];   // Block 308/309: warehouse bookkeeping nudges, bell only   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready"];   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -10897,6 +11166,18 @@ http.createServer(async (req, res) => {
     // Admin check local to this block (requireAdmin is declared further down this scope).
     const adm296 = async () => { const e = await liveSession(req); if (!e) return [null, json(401, { ok: false, error: "Signed out" })]; const [m] = await db(`employee?select=role,mobile,first_name&id=eq.${e}`); if (!m || m.role !== "admin") return [null, json(403, { ok: false, error: "Admin only" })]; return [e, null, m]; };
     const buildByOrder296 = async (ord) => { if (!/^[\w.\- ]{1,40}$/.test(ord)) return null; const [b] = await db(`build?select=id,order_number,part_number,cab_number,started_at&order_number=eq.${encodeURIComponent(ord)}&order=created_at.desc&limit=1`); return b || null; };
+    // Block 310 — THE CAB RECAP (admin): /order/<num>/recap (must sit ahead of the /order/ page route)
+    if (/^\/order\/[^/]+\/recap$/.test(url.pathname)) {
+      // (requireAdmin is declared further DOWN this handler — Block 297b rule: use none of the later consts)
+      const adminR310 = await liveSession(req); if (!adminR310) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [meR310] = await db(`employee?select=role&id=eq.${adminR310}`); if (!meR310 || meR310.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const ordR310 = decodeURIComponent(url.pathname.slice(7, -6));
+      const [bR310] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ordR310)}`);
+      if (!bR310) return json(404, { ok: false, error: "No such order" });
+      const R310 = await cabRecap310(bR310);
+      logEvent("recap.viewed", adminR310, { build_id: bR310.id, order_number: bR310.order_number });
+      return send(200, "text/html; charset=utf-8", recapPage310(R310));
+    }
     // Part 1 — the ZIP (admin): /order/<num>/photos.zip (must sit ahead of the /order/ page route)
     // Block 296b (Daniel's iPad, 14:19): from the HOME-SCREEN app the ZIP opened in the same window — a dead
     // "Open in…" page with no way back. Every ZIP link now opens in its own tab (standalone → Safari + its
@@ -12815,6 +13096,10 @@ http.createServer(async (req, res) => {
       if (wasFix) logEvent("build.fixjob_closed", empId, { build_id, order_number: b.order_number, kind: b.fix_kind, reason: b.fix_reason, signed_off_at: claimed_at });
       // Q109: sign-off frees the line — warehouse can deliver the next
       // verified kit the moment this fires. Q106 sandbox applies.
+      // Block 310: the owners' silent bell — one tap opens the one-page recap (all active admins = Daniel, Ross, Rob, Kerry).
+      void (async () => { try { const adm310 = await db(`employee?select=id&active=is.true&role=eq.admin`); await notify("build.recap_ready", adm310.map((a) => a.id),
+        `Cab recap ready — order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""}`,
+        `Production signed this cab off. One page: steps vs allowed vs average, crew, idle time, kit, oddities.`, `/order/${encodeURIComponent(b.order_number)}/recap`); } catch (e310) { /* never break sign-off over a bell */ } })();
       const [lnC] = await db(`line?select=name&id=eq.${b.line_id}`);
       notify("build.line_clear", await warehouseIds(),
         `${lnC ? lnC.name : "Line"} is CLEAR`,
