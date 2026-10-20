@@ -9489,7 +9489,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff"];   // Block 308: warehouse bookkeeping nudge, bell only   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder"];   // Block 308/309: warehouse bookkeeping nudges, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -12921,6 +12921,14 @@ http.createServer(async (req, res) => {
       const shortMS254 = b.kit_status === "short";
       logEvent("build.manager_started", empId, { build_id, order_number: b.order_number,
         short: shortMS254 || undefined, missing: shortMS254 ? (b.kit_note || "") : undefined });
+      // Block 309 (Daniel, 10/20: "keep it, but only Eric should get the notification — a gentle
+      // reminder that it is his responsibility to deliver the cab through the shop board"). Michael keeps
+      // Start next as the backstop; every manager start sends ERIC (by name, Warehouse) one bell-only
+      // note. Nobody else hears it; the audit row above is the record.
+      const [ericMS309, lnMS309] = await Promise.all([db(`employee?select=id&first_name=eq.Eric&department=eq.Warehouse&active=is.true&limit=1`).catch(() => []), db(`line?select=name&id=eq.${b.line_id}`).catch(() => [])]);
+      if (ericMS309.length) void notify("kit.manager_started_reminder", [ericMS309[0].id],
+        `Order ${b.order_number} was started from the Manager console`,
+        `Heads-up: management started this cab on ${lnMS309[0] ? lnMS309[0].name : "its line"}. Delivering the kit through the warehouse page ("Delivered — start the cab") is what starts a line — that tap is yours. Nothing to fix on this one.`, "/home");
       if (shortMS254) {
         const adminsMS254 = await db(`employee?select=id&active=is.true&role=eq.admin`);
         void notify("kit.delivered_short", adminsMS254.map((a) => a.id),
