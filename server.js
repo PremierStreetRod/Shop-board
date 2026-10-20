@@ -2384,7 +2384,8 @@ const prepStrip301 = (b, canPrep, clockedIn) => {
   const dis = clockedIn ? "" : " disabled title=\"Clock in first\"";
   if (p.mine) return `<div class="prep301 on"><b style="color:#ffd60a">&#9881; You're prepping this cab &middot; ${p.hrs}h</b>
       <button class="b grn"${dis} onclick="post('/api/prep/done',{build_id:'${b.id}'},this)">&#10003; Panels ready</button>
-      <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">Back to warehouse</button></div>`;
+      <button class="b mv" onclick="document.getElementById('ppf-${b.id}').click()">&#128247; Photo</button><input type="file" id="ppf-${b.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="prepPhoto302('${b.id}',this)">
+      <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">Back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
   return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "Keep prepping" : "Prep panels &mdash; start"}</button></div>`;
 };
 const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }) => `<!doctype html>
@@ -2483,10 +2484,22 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
 </div>
-<script>
+<script>${netJs}
   // Same sturdy patterns as the consoles: two-tap arm on anything that
   // changes another team's world; plain posts; full reload on success.
   function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
+  // Block 302: a prep photo from the phone — converted to JPEG on the phone (HEIC-safe), uploaded as kind=prep,
+  // lands in the customer report / gallery / ZIP labelled "Panel prep". No reload; the strip just says it landed.
+  async function prepJpeg302(file){ try { const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); const sc = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85)); return blob || file; } catch (e) { return file; } }
+  async function prepPhoto302(buildId, input){ const m = document.getElementById("ppm-" + buildId); const files = input.files || []; if (!files.length) return; let n = 0;
+    for (let i = 0; i < files.length; i++) { m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "\u2026";
+      try { const blob = await prepJpeg302(files[i]);
+        const o = await sbUpload("/api/photo/upload?build_id=" + buildId + "&kind=prep", blob, blob.type || "image/jpeg", function(t){ m.textContent = t; });   // netJs: retries + the thumbnail
+        if (o && o.ok) n++; else { m.textContent = (o && o.error) || "Photo didn't make it \u2014 try again"; input.value = ""; return; } }
+      catch (e) { m.textContent = "Network hiccup \u2014 try again"; input.value = ""; return; } }
+    m.textContent = "\u2713 " + n + " photo" + (n === 1 ? "" : "s") + " on the cab"; input.value = ""; }
   // Block 288: the parts note lives in a tucked-away panel. "Mark short" opens
   // it with the red confirm showing; "Add note" opens it with Save note only.
   function openNote288(id, asShort){ const p = document.getElementById("np-" + id); if (!p) return;
@@ -3607,18 +3620,18 @@ async function zipStream296(res, zipName, next) {
 // desktop-sortable file name: 2026-10-15_07-door-and-rocker_1.jpg · 2026-10-16_end-of-day_2.jpg · 2026-10-17_finish_1.jpg
 async function cabPhotos296(buildId) {
   const [ph, tk] = await Promise.all([
-    db(`build_photo?select=id,kind,task_id,storage_path,thumb_path,created_at,hidden&build_id=eq.${buildId}&hidden=is.false&kind=in.(progress,finish,task)&order=created_at.asc&limit=400`),
+    db(`build_photo?select=id,kind,task_id,storage_path,thumb_path,created_at,hidden&build_id=eq.${buildId}&hidden=is.false&kind=in.(progress,finish,task,prep)&order=created_at.asc&limit=400`),
     db(`task?select=id,name,display_no&build_id=eq.${buildId}&limit=600`),
   ]);
   const tn = Object.fromEntries(tk.map((t) => [t.id, t]));
   const seq = {};
   return ph.map((p) => {
     const t = p.task_id ? tn[p.task_id] : null; const ds = phxDate(new Date(p.created_at).getTime());
-    const label = t ? `${t.display_no ? String(t.display_no).padStart(2, "0") + "-" : ""}${String(t.name)}` : p.kind === "progress" ? "end-of-day" : p.kind === "finish" ? "finish" : "photo";
+    const label = t ? `${t.display_no ? String(t.display_no).padStart(2, "0") + "-" : ""}${String(t.name)}` : p.kind === "progress" ? "end-of-day" : p.kind === "finish" ? "finish" : p.kind === "prep" ? "panel-prep" : "photo";   // Block 302
     const slug = label.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
     const key = ds + "_" + slug; seq[key] = (seq[key] || 0) + 1;
     const ext = /\.(png|webp)$/i.test(p.storage_path || "") ? p.storage_path.match(/\.(png|webp)$/i)[1].toLowerCase() : "jpg";
-    return { id: p.id, kind: p.kind, at: p.created_at, ds, step: t ? `${t.display_no ? t.display_no + ". " : ""}${t.name}` : (p.kind === "progress" ? "End of day" : p.kind === "finish" ? "Finished" : ""), storage_path: p.storage_path, thumb_path: p.thumb_path, name: `${key}_${seq[key]}.${ext}` };
+    return { id: p.id, kind: p.kind, at: p.created_at, ds, step: t ? `${t.display_no ? t.display_no + ". " : ""}${t.name}` : (p.kind === "progress" ? "End of day" : p.kind === "finish" ? "Finished" : p.kind === "prep" ? "Panel prep" : ""), storage_path: p.storage_path, thumb_path: p.thumb_path, name: `${key}_${seq[key]}.${ext}` };
   });
 }
 async function storageBuf296(path) {
@@ -10063,7 +10076,7 @@ http.createServer(async (req, res) => {
             db(`product?select=photo_min&part_number=eq.${encodeURIComponent(build.part_number)}`),
             db(`build_photo?select=id&build_id=eq.${build.id}&kind=eq.finish`),
             db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
-            db(`build_photo?select=id&build_id=eq.${build.id}&kind=in.(progress,finish,task)&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),   // Block 218 (Daniel): STEP photos count as today's update too
+            db(`build_photo?select=id&build_id=eq.${build.id}&kind=in.(progress,finish,task,prep)&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),   // Block 218 (Daniel): STEP photos count as today's update too
             db(`build_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),
             db(`task_note?select=id&build_id=eq.${build.id}&hidden=is.false&created_at=gte.${new Date(mid209).toISOString()}&limit=1`),   // Block 218: step notes count too
           ]);
@@ -10466,7 +10479,7 @@ http.createServer(async (req, res) => {
               // Block 218 (Daniel): STEP photos and STEP notes satisfy the gate
               // too — a tech who documented a step during the day already gave
               // the customer their update.
-              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=in.(progress,finish,task)&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
+              const phG = await db(`build_photo?select=id&build_id=eq.${bG209.id}&kind=in.(progress,finish,task,prep)&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
               if (!phG.length) {
                 const ntG = await db(`build_note?select=id&build_id=eq.${bG209.id}&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
                 const tnG = ntG.length ? [{}] : await db(`task_note?select=id&build_id=eq.${bG209.id}&hidden=is.false&created_at=gte.${new Date(d0209).toISOString()}&limit=1`);
@@ -10818,7 +10831,7 @@ http.createServer(async (req, res) => {
       if ((partsP[1] === "photo" || partsP[1] === "thumb") && partsP.length === 3) {
         if (!isUuid(partsP[2])) return send(404, "text/plain", "Not found");
         const [pP] = await db(`build_photo?select=storage_path,thumb_path,hidden,kind&id=eq.${partsP[2]}&build_id=eq.${bP.id}`);
-        if (!pP || pP.hidden || !["progress", "finish", "task"].includes(pP.kind)) return send(404, "text/plain", "Not found");
+        if (!pP || pP.hidden || !["progress", "finish", "task", "prep"].includes(pP.kind)) return send(404, "text/plain", "Not found");   // Block 302
         let rP = partsP[1] === "thumb" && pP.thumb_path ? await storageBuf296(pP.thumb_path) : null;
         if (!rP) rP = await storageBuf296(pP.storage_path);
         if (!rP) return send(404, "text/plain", "Not found");
@@ -10930,14 +10943,14 @@ http.createServer(async (req, res) => {
         for (const t2 of tkA230) if (t2.state === "complete" && t2.completed_at) D230(t2.completed_at).steps.push({ label: tn230[t2.id] || t2.name, who: nm230[t2.completed_by] || "", at: phxHHMM(t2.completed_at) });
         for (const n2 of bnA230) D230(n2.created_at).notes.push({ note: n2.note, who: nm230[n2.author_id] || "", hidden: !!n2.hidden, step: "", at: phxHHMM(n2.created_at) });
         for (const n2 of tnA230) D230(n2.created_at).notes.push({ note: n2.note, who: nm230[n2.author_id] || "", hidden: !!n2.hidden, step: tn230[n2.task_id] || "", at: phxHHMM(n2.created_at) });
-        for (const p2 of phA230) D230(p2.created_at).photos.push({ id: p2.id, hidden: !!p2.hidden, who: nm230[p2.uploaded_by] || "", step: p2.task_id ? (tn230[p2.task_id] || "step") : (p2.kind === "progress" ? "end of day" : p2.kind || "") });
+        for (const p2 of phA230) D230(p2.created_at).photos.push({ id: p2.id, hidden: !!p2.hidden, who: nm230[p2.uploaded_by] || "", step: p2.task_id ? (tn230[p2.task_id] || "step") : (p2.kind === "progress" ? "end of day" : p2.kind === "prep" ? "Panel prep" : p2.kind || "") });   // Block 302: prep photos read "Panel prep"
         act230 = Object.values(days230).sort((a2, z2) => (a2.ds < z2.ds ? 1 : a2.ds > z2.ds ? -1 : 0));
       }
       // Block 296: the admin's photo lane — visible-photo count + this cab's live share links.
       let share296 = null;
       if (isAdmin97r) {
         const [phC296, lk296, me296, emps296] = await Promise.all([
-          db(`build_photo?select=id&build_id=eq.${bO.id}&hidden=is.false&kind=in.(progress,finish,task)&limit=400`),
+          db(`build_photo?select=id&build_id=eq.${bO.id}&hidden=is.false&kind=in.(progress,finish,task,prep)&limit=400`),
           db(`share_link?select=id,token,created_by,created_at,expires_at,views&build_id=eq.${bO.id}&revoked_at=is.null&expires_at=gt.${new Date().toISOString()}&order=created_at.desc`),
           db(`employee?select=mobile&id=eq.${empId86}`),
           db(`employee?select=id,first_name,last_name`),
@@ -10969,7 +10982,7 @@ http.createServer(async (req, res) => {
       const allIds = [...new Set([...onB.map((b2) => b2.id), ...doneIds])];
       const [doneB, phAll, ntAllB, tnAll218] = await Promise.all([
         doneIds.length ? db(`build?select=id,order_number,cab_number,part_number,line_id&id=in.(${doneIds.join(",")})&state=eq.production_complete`) : [],
-        allIds.length ? dbAll252(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish,task)&order=id.asc`) : [],   // Block 218: step photos count
+        allIds.length ? dbAll252(`build_photo?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&kind=in.(progress,finish,task,prep)&order=id.asc`) : [],   // Block 218: step photos count
         allIds.length ? dbAll252(`build_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&order=id.asc`) : [],
         allIds.length ? dbAll252(`task_note?select=build_id,hidden,created_at&build_id=in.(${allIds.join(",")})&order=id.asc`) : [],   // Block 218: step notes count
       ]);
@@ -11007,7 +11020,7 @@ http.createServer(async (req, res) => {
       const [prodRep, tasksRep, photosRep, notesRep, milesRep, tnotesRep218, taskNamesRep218] = await Promise.all([
         db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`),
         db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`),
-        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish,task)&order=created_at.asc&limit=300`),
+        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish,task,prep)&order=created_at.asc&limit=300`),
         db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
         db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`),
         db(`task_note?select=id,task_id,note,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
@@ -14614,7 +14627,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
       // Block 209 (owner, Sat 8/22): kind=progress marks an END-OF-DAY cab
       // progress photo — the feed the customer build reports will draw from.
-      const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : null;
+      const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : url.searchParams.get("kind") === "prep" && !task_id ? "prep" : null;   // Block 302: prep = a panel-prep photo (warehouse page)
       const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
         build_id, task_id, uploaded_by: empId, storage_path: path, kind: kindQ209 || (task_id ? "task" : "finish") }) });
       logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined });
