@@ -4654,8 +4654,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         var pf255 = document.getElementById("Trn-" + id) || document.getElementById("rn-" + id);
         if (pf255 && !pf255.value) pf255.value = "Customer option NOT done: " + out.need_opts[0];
       }
-      document.getElementById("err").textContent = out.error || "Something went wrong";
-    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; }
+      nearBtn307(btn, out.error || "Something went wrong");   // Block 307: beside the button, not the page bottom
+    } catch (e) { nearBtn307(btn, "Network hiccup — try again"); }
     btn.disabled = false; btn.textContent = orig109;
   }
   // Block 194 (Blazer lesson): the cockpit's "Send to inspection" — the
@@ -4824,16 +4824,30 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   // Block 128 (logic audit L1): the SEPARATE override button's advance call —
   // reached only by a deliberate tap on the distinct red button, never by a
   // reflexive double-tap on Sign off.
+  // Block 307 (Isaac, 23850, Tue 10/20): this button was built before the option gate (255)
+  // and sent NO ticks, so the server refused every "Advance anyway" since 9/2 and the
+  // message landed at the bottom of the page — off-screen on a phone. Now the red button
+  // carries the same ticks + acknowledgment as the first tap, and any answer lands
+  // right beside the button, where the person is looking.
   async function forceComplete128(id, c) {
     try {
+      var ocF = Array.prototype.slice.call(document.querySelectorAll('.oc255[data-b="' + id + '"]:checked')).map(function (x) { return x.dataset.o; });
+      var ackF = !!document.querySelector('.ocack255[data-b="' + id + '"]:checked');
       const r = await fetch("/api/build/complete", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString(), force: true }) });
+        body: JSON.stringify({ build_id: id, claimed_at: new Date().toISOString(), force: true, opts_checked: ocF, opts_ack: ackF }) });
       const out = await r.json();
       if (out.ok) return location.reload();
-      document.getElementById("err").textContent = out.error || "Something went wrong";
-      if (c) c.remove();
-    } catch (e) { document.getElementById("err").textContent = "Network hiccup — try again"; if (c) { c.disabled = false; c.textContent = "Advance anyway"; } }
+      nearBtn307(c, out.error || "Something went wrong");
+      if (c) { c.disabled = false; c.textContent = "Advance anyway"; }
+    } catch (e) { nearBtn307(c, "Network hiccup — try again"); if (c) { c.disabled = false; c.textContent = "Advance anyway"; } }
+  }
+  function nearBtn307(btn, msg) {
+    document.getElementById("err").textContent = msg;
+    if (!btn || !btn.parentNode) return;
+    var s = btn.nextElementSibling;
+    if (!s || !s.className || s.className.indexOf("berr307") === -1) { s = document.createElement("div"); s.className = "berr307"; s.style.cssText = "color:#ff6b5e;font-size:.9rem;font-weight:700;margin:6px 0"; btn.insertAdjacentElement("afterend", s); }
+    s.textContent = msg;
   }
   // Q107 manager un-complete: backs a wrongly-finished step to In Progress.
   // Goes through the same /api/task/state engine as the floor (audited as
