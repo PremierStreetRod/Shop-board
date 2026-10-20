@@ -8958,11 +8958,16 @@ async function cabRecap310(b) {
   const norm = (x) => String(x || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
   let avg = { rows: {} };
   let tplSteps = [], optItems = [];
+  let planPerDay = null;   // Block 312: the family's day budget (template hours ÷ template days — the same rule that sets the promise date, Block 103)
   if (prod && prod.template_id) {
-    [tplSteps, optItems] = await Promise.all([
+    let tplRow = null;
+    [tplSteps, optItems, [tplRow]] = await Promise.all([
       db(`step_template?select=id,name,man_hours&template_id=eq.${prod.template_id}&retired=is.false`).catch(() => []),
       db(`option_item?select=id,match_text,man_hours&retired=is.false`).catch(() => []),
+      db(`build_template?select=total_days&id=eq.${prod.template_id}`).catch(() => [null]),
     ]);
+    const tplH = (tplSteps || []).reduce((x, st) => x + (Number(st.man_hours) || 0), 0), tplD = tplRow && Number(tplRow.total_days) > 0 ? Number(tplRow.total_days) : 0;
+    if (tplH > 0 && tplD > 0) planPerDay = tplH / tplD;
     try { avg = await stepActuals258(family, tplSteps, optItems); } catch (e) { avg = { rows: {} }; }
   }
   const stepKey = {}; for (const st of tplSteps) stepKey[norm(st.name)] = `step:${st.id}`;
@@ -9070,13 +9075,16 @@ async function cabRecap310(b) {
   const photoCounts = {}; for (const p of vis) photoCounts[p.kind] = (photoCounts[p.kind] || 0) + 1;
   const strip = vis.length <= 4 ? vis : [vis[0], vis[Math.floor(vis.length / 3)], vis[Math.floor((2 * vis.length) / 3)], vis[vis.length - 1]];
   const notes = (tnotes || []).filter((n) => !n.hidden).map((n) => ({ task: (tasks.find((t) => t.id === n.task_id) || {}).display_no, note: String(n.note).slice(0, 140) })).slice(0, 8);
+  // Block 312: how many shop days the promise allowed (start day → promised day, open days only)
+  let promisedShopDays = null;
+  if (startMs && b.promised_finish && /^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish))) { promisedShopDays = 0; for (let t = startMs; phxDate(t) <= String(b.promised_finish) && promisedShopDays < 120; t += 86400000) { const k = phxDate(t); const dow = new Date(t - PHX_OFFSET_MS).getUTCDay(); if (openDays.has(k) || (dow >= 1 && dow <= 5 && !closedDays.has(k))) promisedShopDays++; } }
   const promiseMs = b.promised_finish ? (/^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish)) ? new Date(b.promised_finish + "T23:59:59Z").getTime() + PHX_OFFSET_MS : new Date(b.promised_finish).getTime()) : null;   // a date-only promise = end of that Phoenix day
   const earned = steps.filter((s) => s.state === "complete").reduce((s, x) => s + x.std, 0);
   return {
     order: b.order_number, cab: b.cab_number || "", customer: b.customer_name || "", family, part: b.part_number || "", line: ln ? ln.name : "", state: b.state,
     startedAt: startMs ? new Date(startMs).toISOString() : null, finishedAt: finishEv ? finishEv.at : null, signedOffAt: signEv ? signEv.at : null, signedOffBy: signEv ? name(signEv.actor_id) : "", signedOff,
     promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((new Date(phxDate(promiseMs) + "T00:00:00Z").getTime() - new Date(phxDate(new Date(signEv.at).getTime()) + "T00:00:00Z").getTime()) / 86400000) : null,   // Block 310b: calendar days, Phoenix
-    daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays,
+    daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays, promisedShopDays, planPerDay, crewPerDay: shopDays ? crewTotalH / shopDays : null,
     allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
     unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
@@ -9094,14 +9102,17 @@ const recapPage310 = (R, emp196 = null) => {
   const idlePct = R.idle.shopH ? Math.round((R.idle.idleH / R.idle.shopH) * 100) : 0;
   const tone = { good: "#1d5a2d", ok: "#5c4a10", bad: "#6e1d1d", flat: "#2c2c2e" };
   const hoursTone = pct == null ? "flat" : pct <= 0 ? "good" : pct <= 10 ? "ok" : "bad";
-  const timeTone = R.onTimeDays == null ? "flat" : R.onTimeDays >= 0 ? "good" : R.onTimeDays >= -2 ? "ok" : "bad";
+  const daysOver = R.promisedShopDays != null && R.shopDays != null ? R.shopDays - R.promisedShopDays : null;   // Block 312: shop days used vs promised
+  const timeTone = daysOver == null ? "flat" : daysOver <= 0 ? "good" : daysOver <= 2 ? "ok" : "bad";
+  const paceRatio = R.planPerDay && R.crewPerDay != null ? R.crewPerDay / R.planPerDay : null;
+  const paceTone = paceRatio == null ? "flat" : paceRatio >= 1 ? "good" : paceRatio >= 0.85 ? "ok" : "bad";
   const idleTone = idlePct <= 8 ? "good" : idlePct <= 15 ? "ok" : "bad";
-  const kitTone = !R.kit.shortAtStart ? "good" : R.kit.clearedAt && !R.kit.clearedAtSignoff ? "ok" : "bad";
   const dayWord = (n) => `${Math.abs(n)} day${Math.abs(n) === 1 ? "" : "s"}`;
   const partsN = R.kit.missing ? R.kit.missing.split(/[,;]+/).map((x) => x.trim()).filter(Boolean).length : 0;
   // --- the verdict sentences
   const s1 = R.allowed ? `Built in <b>${h1_310(R.crewHours)} crew hours</b> against ${h1_310(R.allowed)} allowed &mdash; <b>${h1_310(Math.abs(diffH))} hours ${diffH <= 0 ? "under" : "over"}</b> (${pct > 0 ? "+" : ""}${pct}%).` : `<b>${h1_310(R.crewHours)} crew hours</b> on the line (no allowance on record).`;
-  const s2 = R.promised ? `Promised ${e(phxDay310(R.promised))}, finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : e(phxDay310(R.signedOffAt))} &mdash; <b>${R.onTimeDays == null ? "" : R.onTimeDays === 0 ? "on the day" : R.onTimeDays > 0 ? `${dayWord(R.onTimeDays)} early` : `${dayWord(R.onTimeDays)} late`}</b>.` : `No promise date on the order; ${R.daysOnLine} days on the line.`;
+  const s2 = R.shopDays != null ? `On the line <b>${R.shopDays} shop day${R.shopDays === 1 ? "" : "s"}</b>${R.promisedShopDays != null ? ` against ${R.promisedShopDays} promised &mdash; <b>${daysOver === 0 ? "finished on the promised day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}</b> (promised ${e(phxDay310(R.promised))}, finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : e(phxDay310(R.signedOffAt))})` : " (no promise date on the order)"}.` : "";
+  const s5 = R.crewPerDay != null && R.planPerDay ? `${R.crew.length === 1 ? "One person" : `${R.crew.length} people`} on the line averaged <b>${h1_310(R.crewPerDay)} crew hours per shop day</b> against the plan&#39;s ${h1_310(R.planPerDay)}${paceRatio >= 1.25 ? " &mdash; finished early by spending more" : paceRatio < 0.85 ? " &mdash; the cab moved slower than the plan assumes" : ""}.` : "";
   const s3 = R.idle.shopH ? `The line sat empty <b>${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours</b> (${idlePct}%).` : "";
   const s4 = R.kit.shortAtStart ? `Kit delivered <b>short &mdash; ${partsN || "some"} part${partsN === 1 ? "" : "s"} owed</b>${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? ", never marked complete by warehouse (cleared at sign-off)" : `, cleared ${e(phxDay310(R.kit.clearedAt))}`) : ", never cleared"}.` : R.kit.deliveredAt ? `Kit complete${R.kit.startedByManager ? `; started from the Manager console by ${e(R.kit.startedByManager)}` : ""}.` : "";
   const tile = (big, small, t) => `<div class="tile ${t}" style="background:${tone[t]}"><b>${big}</b><span>${small}</span></div>`;
@@ -9163,12 +9174,12 @@ const recapPage310 = (R, emp196 = null) => {
   <p class="noprint" style="text-align:center;margin:2px 0 8px"><a href="/order/${encodeURIComponent(R.order)}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the order</a> &nbsp;&middot;&nbsp; <a href="#" onclick="window.print();return false" style="color:#8ec2f0;font-size:.9rem;text-decoration:none">&#128424; Print / Save as PDF</a></p>
   <h2>ORDER ${e(R.order)}${R.cab ? ` &middot; Cab #${e(R.cab)}` : ""} &mdash; ${e(R.family) || e(R.part)}</h2>
   <p class="sub">${e(R.customer) || "&mdash;"} &middot; ${e(R.line)} &middot; built by ${R.crew.length ? R.crew.map((c) => e(c.name)).join(" &amp; ") : "&mdash;"}${R.signedOff ? ` &middot; signed off ${e(phxDay310(R.signedOffAt))} by ${e(R.signedOffBy)}` : " &middot; <b>not signed off yet</b>"}</p>
-  <p class="verdict">${s1} ${s2} ${s3} ${s4}</p>
+  <p class="verdict">${s1} ${s2} ${s5} ${s3} ${s4}</p>
   <div class="grid">
     ${tile(pct == null ? "&mdash;" : `${pct > 0 ? "+" : ""}${pct}%`, pct == null ? "no allowance" : `${h1_310(Math.abs(diffH))} h ${diffH <= 0 ? "under" : "over"} the ${h1_310(R.allowed)} allowed`, hoursTone)}
-    ${tile(R.onTimeDays == null ? "&mdash;" : R.onTimeDays >= 0 ? "On time" : "Late", R.onTimeDays == null ? "no promise date" : R.onTimeDays === 0 ? "finished on the promised day" : R.onTimeDays > 0 ? `${dayWord(R.onTimeDays)} early` : `${dayWord(R.onTimeDays)} past the promise`, timeTone)}
+    ${tile(R.shopDays == null ? "&mdash;" : `${R.shopDays} day${R.shopDays === 1 ? "" : "s"}`, R.promisedShopDays == null ? "in production &middot; no promise date" : `in production &middot; promised ${R.promisedShopDays} &middot; ${daysOver === 0 ? "on the day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}`, timeTone)}
     ${tile(`${idlePct}%`, `line empty &middot; ${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours`, idleTone)}
-    ${tile(R.kit.shortAtStart ? "Short" : "Complete", R.kit.shortAtStart ? `${partsN || "some"} part${partsN === 1 ? "" : "s"} owed at start${R.kit.clearedAt && !R.kit.clearedAtSignoff ? ", later cleared" : ", never cleared"}` : "kit complete at start", kitTone)}
+    ${tile(R.crewPerDay == null ? "&mdash;" : `${h1_310(R.crewPerDay)} h/day`, `crew pace &middot; ${R.crew.length} on it${R.planPerDay ? ` &middot; plan ${h1_310(R.planPerDay)} per day` : ""}`, paceTone)}
   </div>
   <div class="two">
     <div>
