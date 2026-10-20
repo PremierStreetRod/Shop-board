@@ -3147,7 +3147,15 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
   const TVMODE = ${tv98 ? "true" : "false"};
   const ol = (o) => TVMODE ? o : '<a href="/order/' + encodeURIComponent(o) + '" style="color:inherit">' + o + "</a>";
   // Plain fetch-poll every 30 s — Realtime push replaces this in Stage 3.
+  // Block 298: ONE refresh in flight per screen — a bump that lands mid-refresh is
+  // folded into the next one instead of stacking another /api/board-state call.
+  var inflight298 = false, dirty298 = false;
   async function refresh(){
+    if (inflight298) { dirty298 = true; return; }
+    inflight298 = true;
+    try { await refresh0_298(); } finally { inflight298 = false; if (dirty298) { dirty298 = false; setTimeout(refresh, 250); } }
+  }
+  async function refresh0_298(){
     try{
       const r = await fetch("/api/board-state"); const s = await r.json();
       const bar = { green:"#30d158", amber:"#ffd60a", red:"#C8102E", none:"#5a5a5e" };
@@ -9559,8 +9567,22 @@ async function boardTick() {
 setInterval(boardTick, 3000);
 
 // ---------- the server ----------
+// Block 298 (Daniel, 10/19: "Josh's End of day takes 15+ seconds at 4 pm"): the
+// 4 o'clock pile-up is OURS — every punch bumps the live board, every open
+// board screen re-fetches /api/board-state (1.6–3.3 s, 10+ reads) with no
+// guard, and the bumps stack. Three fixes: the board answer is CACHED for
+// 2.5 s per audience and computed once at a time (single-flight); the board
+// page runs one refresh at a time; and every slow request is remembered here
+// so tomorrow's 4:05 is measured, not argued (/api/perf, admin).
+const perf298 = { inflight: 0, slow: [], byPath: {} };
+const perfNote298 = (path, ms) => { const k = path.replace(/\/[0-9a-f-]{20,}.*$/, "/…").replace(/\?.*$/, ""); const b = perf298.byPath[k] = perf298.byPath[k] || { n: 0, total: 0, max: 0 }; b.n++; b.total += ms; if (ms > b.max) b.max = ms;
+  if (ms >= 1500) { perf298.slow.push({ at: new Date().toISOString(), path: k, ms, inflight: perf298.inflight }); if (perf298.slow.length > 300) perf298.slow.shift(); } };
+const boardCache298 = {};   // audience key -> { at, body, pending }
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
+  const t0_298 = Date.now(); perf298.inflight++;
+  res.once("finish", () => { perf298.inflight = Math.max(0, perf298.inflight - 1); if (url.pathname !== "/api/board-stream") perfNote298(url.pathname, Date.now() - t0_298); });
+  res.once("close", () => { if (!res.writableFinished) perf298.inflight = Math.max(0, perf298.inflight - 1); });
   // Q123: security response headers on EVERY response — set once here (before
   // routing) so they ride along whether a route ends via send(), json(), a
   // redirect, SSE, the CSV download, or the photo proxy (Node merges these
@@ -9620,7 +9642,14 @@ http.createServer(async (req, res) => {
   try {
     // Q74: the external watchdog pings this.
     if (url.pathname === "/health")
-      return json(200, { ok: true, db: DB_READY, at: new Date().toISOString() });
+      return json(200, { ok: true, db: DB_READY, at: new Date().toISOString(), inflight: perf298.inflight, boards: sseClients.size });   // Block 298: live load at a glance
+    // Block 298: the slow-request memory (admin). Resets on every deploy — read it at 4:05.
+    if (url.pathname === "/api/perf") {
+      const eP = await liveSession(req); if (!eP) return json(401, { ok: false, error: "Signed out" });
+      const [mP] = await db(`employee?select=role&id=eq.${eP}`); if (!mP || mP.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const paths = Object.entries(perf298.byPath).map(([path, b]) => ({ path, n: b.n, avg_ms: Math.round(b.total / b.n), max_ms: b.max })).sort((a, z) => z.max_ms - a.max_ms).slice(0, 40);
+      return json(200, { ok: true, inflight: perf298.inflight, boards: sseClients.size, slow: perf298.slow.slice(-150), paths });
+    }
 
     if (url.pathname === "/") return send(200, "text/html; charset=utf-8", shellPage);
 
@@ -10786,6 +10815,19 @@ http.createServer(async (req, res) => {
       // viewer; the public tile shows a "DOWN TODAY" badge with no reason anyway.
       const sessB133 = await liveSession(req);
       const showDownReason133 = Boolean(sessB133);
+      // Block 298: one answer per audience per 2.5 s, computed once at a time. A caller
+      // that arrives while the answer is being built waits for THAT answer instead of
+      // starting another 10-read computation (the 4 pm pile-up). Audience = signed-in
+      // (names + down reason) vs public-on-shop-network (names) vs public-off-network.
+      const bsKey298 = `${Boolean(sessB133)}:${onShopNetwork(req)}`;
+      const bc298 = boardCache298[bsKey298];
+      if (bc298 && bc298.body && Date.now() - bc298.at < 2500) return send(200, "application/json", bc298.body);
+      if (bc298 && bc298.pending) { try { const bodyW = await bc298.pending; return send(200, "application/json", bodyW); } catch (e) { /* fall through and compute */ } }
+      let resolve298 = null, reject298 = null;
+      const pending298 = new Promise((a, z) => { resolve298 = a; reject298 = z; }); pending298.catch(() => {});
+      boardCache298[bsKey298] = { at: bc298 ? bc298.at : 0, body: bc298 ? bc298.body : null, pending: pending298 };
+      const pendTimer298 = setTimeout(() => { if (boardCache298[bsKey298] && boardCache298[bsKey298].pending === pending298) boardCache298[bsKey298].pending = null; reject298(new Error("board-state took too long")); }, 12000);
+      try {
       // Block 212 (v201 SPEED): the board engine feeds the TV, the cockpit and
       // the projections — its six independent reads now land in one round trip.
       const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
@@ -10956,7 +10998,7 @@ http.createServer(async (req, res) => {
           techs: fixOn267[b.id] || [],
           line: (lines.find((l2) => l2.id === b.line_id) || {}).name || "" };
       });
-      return json(200, { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
+      const payload298 = { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]) } : null;
         const upcoming95 = (upOf[l.id] || []).map((u) => ({ order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));
@@ -11051,7 +11093,11 @@ http.createServer(async (req, res) => {
             remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
             steps_total: (tcnt230[b.id] || {}).total || 0, steps_done: (tcnt230[b.id] || {}).done || 0, steps_open: (tcnt230[b.id] || {}).open || 0,
             color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays } };
-      }) });
+      }) };
+      const body298 = JSON.stringify(payload298);
+      clearTimeout(pendTimer298); boardCache298[bsKey298] = { at: Date.now(), body: body298, pending: null }; resolve298(body298);
+      return send(200, "application/json", body298);
+      } catch (e298) { clearTimeout(pendTimer298); if (boardCache298[bsKey298] && boardCache298[bsKey298].pending === pending298) boardCache298[bsKey298].pending = null; reject298(e298); throw e298; }
     }
 
     // MANAGER COCKPIT — manager + admin only (file 07 permissions).
