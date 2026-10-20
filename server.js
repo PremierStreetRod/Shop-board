@@ -13653,11 +13653,13 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/admin/snapshot.json") {
       const [adminS303, failS303] = await requireAdmin(); if (failS303) return failS303;
       const TABLES303 = ["after_hours_photo", "after_hours_session", "build", "build_note", "build_photo", "build_template", "clock_event", "employee", "event_log", "feature_toggle", "line", "line_down", "notification_log", "option_catalog", "option_check", "option_flag", "option_item", "pick_list_item", "prep_standard", "product", "push_subscription", "share_link", "shop_calendar", "shop_setting", "step_actuals_archive", "step_template", "task", "task_note", "time_off_request", "work_log"];
-      const snap303 = { __meta: { generated_at: new Date().toISOString(), source: "supabase project mxmiujjrayquatmleehf, live production", app_version: "v280 (Block 303)", by: adminS303, note: "coyote_intake (raw Coyote payload cache) deliberately EXCLUDED — Coyote is the source of truth; a re-sync rebuilds it. option_item_backup_* / step_template_backup_* scratch copies excluded. Photo BINARIES live in the Supabase storage bucket cab-photos (build_photo rows here hold the metadata + storage paths). employee.pin_hash is included (it is a salted scrypt hash, not a PIN); temp_pin is blanked." }, __counts: {} };
+      const snap303 = { __meta: { generated_at: new Date().toISOString(), source: "supabase project mxmiujjrayquatmleehf, live production", app_version: "v281 (Block 303b)", by: adminS303, note: "coyote_intake (raw Coyote payload cache) deliberately EXCLUDED — Coyote is the source of truth; a re-sync rebuilds it. option_item_backup_* / step_template_backup_* scratch copies excluded. Photo BINARIES live in the Supabase storage bucket cab-photos (build_photo rows here hold the metadata + storage paths). employee.pin_hash is included (it is a salted scrypt hash, not a PIN); temp_pin is blanked." }, __counts: {} };
+      // Tables keyed by something other than id (paging needs a stable order on a real column).
+      const KEY303 = { prep_standard: "family", feature_toggle: "key", shop_setting: "key", shop_calendar: "cal_date", product: "part_number" };
       let rows303 = 0;
       for (const t of TABLES303) {
         try {
-          const r = await dbAll252(`${t}?select=*&order=${t === "prep_standard" ? "family" : "id"}.asc`);
+          const r = await dbAll252(`${t}?select=*&order=${KEY303[t] || "id"}.asc`);
           if (t === "employee") for (const e of r) { if (e.temp_pin) e.temp_pin = "(blanked in snapshot)"; }
           snap303[t] = r; snap303.__counts[t] = r.length; rows303 += r.length;
         } catch (e303) { snap303[t] = null; snap303.__counts[t] = "ERROR: " + String(e303.message).slice(0, 120); }
