@@ -12919,7 +12919,7 @@ http.createServer(async (req, res) => {
         const [lR] = await db(`line?select=id,name&id=eq.${Number(line_id)}`);
         if (!lR) return json(400, { ok: false, error: "No such line" });
         if (Number(line_id) === pR.line_id) return json(400, { ok: false, error: "That punch is already on " + lR.name });
-        const nowIso = new Date(nowP).toISOString();
+        const nowIso = new Date().toISOString();   // Block 297b: the handler's own "now" const is declared BELOW this branch — using it here was a TDZ 500 on the first live use
         await db(`clock_event?id=eq.${pR.id}`, { method: "PATCH", body: JSON.stringify({ line_id: Number(line_id), corrected_by: meId, corrected_at: nowIso, correction_note: note }) });
         const [nxR] = await db(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${pR.employee_id}&claimed_at=gt.${encodeURIComponent(pR.claimed_at)}&order=claimed_at.asc&limit=1`);
         let carried = null;
