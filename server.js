@@ -732,6 +732,17 @@ async function calendarOverrides() {
 // Is a given Phoenix date (YYYY-MM-DD) a WORK day? A calendar override wins;
 // otherwise Mon-Fri is a work day, Sat/Sun are not. (Noon-UTC avoids any
 // date-boundary drift when reading the weekday of a bare date string.)
+// Block 314 (Daniel, 10/20): ONE rule for every "how many days" question —
+//   shop days = allowed hours ÷ (plan hours per day × people planned on the line), rounded up.
+// plan_hours_per_day is an admin setting (8 today); people planned lives on the line and is
+// frozen onto the cab the day it starts, so a staffing change never rewrites an old promise.
+let PLAN_HPD_314 = { value: 8, loadedAt: 0 };
+async function planHoursPerDay314() {
+  if (Date.now() - PLAN_HPD_314.loadedAt < 60000 || !DB_READY) return PLAN_HPD_314.value;
+  try { const [r] = await db("shop_setting?select=value&key=eq.plan_hours_per_day"); const v = r ? Number(r.value) : NaN; if (v > 0 && v <= 24) PLAN_HPD_314.value = v; } catch (e) { /* keep the last value */ }
+  PLAN_HPD_314.loadedAt = Date.now(); return PLAN_HPD_314.value;
+}
+const daysFor314 = (hours, people, hpd) => Math.max(1, Math.ceil(Number(hours) / (Math.max(1, Number(people) || 1) * (Number(hpd) || 8)) - 1e-9));
 async function isWorkDay(phxDateStr) {
   const ov = await calendarOverrides();
   if (phxDateStr in ov) return ov[phxDateStr];
@@ -5222,8 +5233,9 @@ async function cabProjections(board) {
   if (board && Array.isArray(board.lines)) {
     for (const l of board.lines) {
       const c = l.cab;
-      if (!c || !c.total_days || Number(c.total_days) <= 0) continue;   // active/rework only (awaiting/fix have 0)
-      const remaining = Math.max(0, Number(c.total_days) - Number(c.day || 0));
+      if (!c || (c.remaining_days == null && (!c.total_days || Number(c.total_days) <= 0))) continue;   // active/rework only (awaiting/fix have 0)
+      // Block 314: remaining shop days from the HOURS still to earn at this line's people planned (fallback: the old template-days count)
+      const remaining = c.remaining_days != null ? Math.max(0, Number(c.remaining_days)) : Math.max(0, Number(c.total_days) - Number(c.day || 0));
       const crew = crewOf[l.id] || [];
       const dayArr = hdates.map((d) => {
         const open = isOpenDay(d);
@@ -7250,7 +7262,9 @@ function orderHistoryPage(d) {
 // line each cab family routes to. Changes take effect on the next push and on
 // new placements; cabs already on the board are not moved by a reroute.
 async function linesManagerData() {
-  const lines = await db(`line?select=id,name,enabled&order=id`);
+  const lines = await db(`line?select=id,name,enabled,people_planned&order=id`);   // Block 314: +people_planned
+  const rosterRows314 = await db(`employee?select=lines&role=eq.production&active=is.true`).catch(() => []);   // Block 314: how many production people are ASSIGNED to each line
+  const roster314 = {}; for (const e of rosterRows314) for (const lid of (Array.isArray(e.lines) ? e.lines : [])) roster314[lid] = (roster314[lid] || 0) + 1;
   const prods = await db(`product?select=part_number,family,lines,is_smk,retired&order=family,part_number`);
   const tmpls = await db(`build_template?select=id,family,ready`);
   const tmplByFam = {}; for (const t of tmpls) tmplByFam[t.family] = t;
@@ -7271,7 +7285,7 @@ async function linesManagerData() {
   // re-enabling restores the cab exactly). One cab per line, so first wins.
   const onLine122 = await dbAll252(`build?select=order_number,line_id,state&state=in.(active,awaiting_inspection,rework)&order=id.asc`);
   const occ122 = {}; for (const b of onLine122) if (b.line_id != null && !occ122[b.line_id]) occ122[b.line_id] = b.order_number;
-  return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [], occupant: occ122[l.id] || null })), families };
+  return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [], occupant: occ122[l.id] || null, people: Number(l.people_planned) > 0 ? Number(l.people_planned) : 1, roster: roster314[l.id] || 0 })), families, planHpd: await planHoursPerDay314() };
 }
 function linesManagerPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -7282,6 +7296,7 @@ function linesManagerPage(d) {
     <td class="num">${l.id}</td>
     <td><input id="ln-${l.id}" value="${esc(l.name)}" style="${inp};width:100%;max-width:340px"></td>
     <td>${l.enabled ? '<span class="st p">On</span>' : '<span class="st o">Off</span>'}</td>
+    <td style="white-space:nowrap"><select id="pp-${l.id}" onchange="peopleLine(${l.id},this)" style="${inp}">${[1, 2, 3, 4].map((n) => `<option value="${n}"${n === l.people ? " selected" : ""}>${n}</option>`).join("")}</select> <span class="muted" style="font-size:.82rem">roster ${l.roster}</span></td>
     <td>${l.families.length ? l.families.map(esc).join(", ") : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap">
       <button class="b" onclick="renameLine(${l.id},this)">Save name</button>
@@ -7337,9 +7352,10 @@ function linesManagerPage(d) {
 
   <div class="lane">
     <h3>Production lines</h3>
-    <table><tr><th>#</th><th>Name</th><th>Status</th><th>Cabs routing here</th><th></th></tr>
+    <table><tr><th>#</th><th>Name</th><th>Status</th><th>People planned</th><th>Cabs routing here</th><th></th></tr>
       ${d.lines.map(lineRow).join("")}
     </table>
+    <p class="muted" style="font-size:.82rem;margin:6px 0 0"><b>People planned</b> is how many people this line is expected to have on a cab all day. It sets the promise date for every cab that starts here: <b>promised shop days = allowed hours &divide; (${d.planHpd} h &times; people)</b>, and the finish projections use the same rule. Change it when staffing changes; cabs already started keep the promise they were given. "Roster" = production people assigned to this line in People.</p>
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
       <input id="newline" placeholder="New line name (e.g. Line 7 — 47-53)" style="${inp};width:340px;max-width:70%">
       <button class="b grn" onclick="addLine(this)">Add line</button>
@@ -7376,6 +7392,7 @@ function linesManagerPage(d) {
   function ckl(name){ return [].slice.call(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(c){return Number(c.value);}); }
   function addLine(b){ if(!v("newline").trim())return alert("Name the line"); post("/api/admin/line",{action:"add",name:v("newline")},b); }
   function renameLine(id,b){ if(!v("ln-"+id).trim())return alert("Name can't be empty"); post("/api/admin/line",{action:"rename",id:id,name:v("ln-"+id)},b); }
+  function peopleLine(id,sel){ post("/api/admin/line",{action:"people",id:id,people:Number(sel.value)},null); }   // Block 314
   function toggleLine(id,to,b,occ){
     // Block 122 (owner-rep, warn-and-allow): disabling a line that still has a
     // cab on it is ALLOWED (a temporary line-down; re-enabling restores it),
@@ -8917,7 +8934,7 @@ async function cabRecap310(b) {
   const [prod] = b.part_number ? await db(`product?select=family,template_id&part_number=eq.${encodeURIComponent(b.part_number)}`) : [null];
   const family = prod ? prod.family : "";
   const [[ln], tasks, emps, evs, photos, checks, flags, downs, tnotes, hrs, cal] = await Promise.all([
-    b.line_id ? db(`line?select=id,name&id=eq.${b.line_id}`) : [null],
+    b.line_id ? db(`line?select=id,name,people_planned&id=eq.${b.line_id}`) : [null],
     db(`task?select=id,display_no,name,man_hours,state,is_background,source,sort_order,day_no,started_by,completed_by,completed_at,helpers&build_id=eq.${b.id}&order=day_no,sort_order`),
     db("employee?select=id,first_name,last_name,department"),
     dbAll252(`event_log?select=at,event_type,actor_id,payload&payload->>build_id=eq.${b.id}&order=at.asc,id.asc`),
@@ -8958,16 +8975,16 @@ async function cabRecap310(b) {
   const norm = (x) => String(x || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
   let avg = { rows: {} };
   let tplSteps = [], optItems = [];
-  let planPerDay = null;   // Block 312: the family's day budget (template hours ÷ template days — the same rule that sets the promise date, Block 103)
+  // Block 314: the plan = the people the cab was promised against (frozen at start; older cabs fall back to the line's number today) × the plan hours per day
+  const hpd314r = await planHoursPerDay314();
+  const linePeople314 = ln && Number(ln.people_planned) > 0 ? Number(ln.people_planned) : 1;
+  const planPeople = Number(b.people_planned) > 0 ? Number(b.people_planned) : linePeople314;
+  const planPerDay = planPeople * hpd314r;
   if (prod && prod.template_id) {
-    let tplRow = null;
-    [tplSteps, optItems, [tplRow]] = await Promise.all([
+    [tplSteps, optItems] = await Promise.all([
       db(`step_template?select=id,name,man_hours&template_id=eq.${prod.template_id}&retired=is.false`).catch(() => []),
       db(`option_item?select=id,match_text,man_hours&retired=is.false`).catch(() => []),
-      db(`build_template?select=total_days&id=eq.${prod.template_id}`).catch(() => [null]),
     ]);
-    const tplH = (tplSteps || []).reduce((x, st) => x + (Number(st.man_hours) || 0), 0), tplD = tplRow && Number(tplRow.total_days) > 0 ? Number(tplRow.total_days) : 0;
-    if (tplH > 0 && tplD > 0) planPerDay = tplH / tplD;
     try { avg = await stepActuals258(family, tplSteps, optItems); } catch (e) { avg = { rows: {} }; }
   }
   const stepKey = {}; for (const st of tplSteps) stepKey[norm(st.name)] = `step:${st.id}`;
@@ -9081,8 +9098,8 @@ async function cabRecap310(b) {
   const strip = vis.length <= 4 ? vis : [vis[0], vis[Math.floor(vis.length / 3)], vis[Math.floor((2 * vis.length) / 3)], vis[vis.length - 1]];
   const notes = (tnotes || []).filter((n) => !n.hidden).map((n) => ({ task: (tasks.find((t) => t.id === n.task_id) || {}).display_no, note: String(n.note).slice(0, 140) })).slice(0, 8);
   // Block 312: how many shop days the promise allowed (start day → promised day, open days only)
-  let promisedShopDays = null;
-  if (startMs && b.promised_finish && /^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish))) { promisedShopDays = 0; for (let t = startMs; phxDate(t) <= String(b.promised_finish) && promisedShopDays < 120; t += 86400000) { const k = phxDate(t); const dow = new Date(t - PHX_OFFSET_MS).getUTCDay(); if (openDays.has(k) || (dow >= 1 && dow <= 5 && !closedDays.has(k))) promisedShopDays++; } }
+  let promisedShopDays = Number(b.promised_days) > 0 ? Number(b.promised_days) : null;   // Block 314: frozen with the promise
+  if (promisedShopDays == null && startMs && b.promised_finish && /^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish))) { promisedShopDays = 0; for (let t = startMs; phxDate(t) <= String(b.promised_finish) && promisedShopDays < 120; t += 86400000) { const k = phxDate(t); const dow = new Date(t - PHX_OFFSET_MS).getUTCDay(); if (openDays.has(k) || (dow >= 1 && dow <= 5 && !closedDays.has(k))) promisedShopDays++; } }
   const promiseMs = b.promised_finish ? (/^\d{4}-\d{2}-\d{2}$/.test(String(b.promised_finish)) ? new Date(b.promised_finish + "T23:59:59Z").getTime() + PHX_OFFSET_MS : new Date(b.promised_finish).getTime()) : null;   // a date-only promise = end of that Phoenix day
   const earned = steps.filter((s) => s.state === "complete").reduce((s, x) => s + x.std, 0);
   return {
@@ -9091,7 +9108,7 @@ async function cabRecap310(b) {
     promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((new Date(phxDate(promiseMs) + "T00:00:00Z").getTime() - new Date(phxDate(new Date(signEv.at).getTime()) + "T00:00:00Z").getTime()) / 86400000) : null,   // Block 310b: calendar days, Phoenix
     daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays, promisedShopDays, planPerDay, crewPerDay: shopDays ? crewTotalH / shopDays : null,
     avgHeads: shopMs ? crewTotalH / (shopMs / 3600000) : null,   // Block 313: average people clocked onto the line during shop hours (lunch out)
-    planHeads: planPerDay && hrs.close > hrs.open ? planPerDay / ((hrs.close - hrs.open) - 0.5) : null,   // the plan's day budget as people, over an 8.5-h day
+    planHeads: planPeople, planHpd: hpd314r, promisedUnderOldRule: !(Number(b.people_planned) > 0),   // Block 314: the people the cab was promised against
     allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
     unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
@@ -9121,7 +9138,7 @@ const recapPage310 = (R, emp196 = null) => {
   // --- the verdict sentences
   const s1 = R.allowed ? `Built in <b>${h1_310(R.crewHours)} crew hours</b> against ${h1_310(R.allowed)} allowed &mdash; <b>${h1_310(Math.abs(diffH))} hours ${diffH <= 0 ? "under" : "over"}</b> (${pct > 0 ? "+" : ""}${pct}%).` : `<b>${h1_310(R.crewHours)} crew hours</b> on the line (no allowance on record).`;
   const s2 = R.shopDays != null ? `On the line <b>${R.shopDays} shop day${R.shopDays === 1 ? "" : "s"}</b>${R.promisedShopDays != null ? ` against ${R.promisedShopDays} promised &mdash; <b>${daysOver === 0 ? "finished on the promised day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}</b> (promised ${e(phxDay310(R.promised))}, finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : e(phxDay310(R.signedOffAt))})` : " (no promise date on the order)"}.` : "";
-  const s5 = R.avgHeads != null && R.crew.length ? `${R.crew.length === 1 ? "One person" : `${R.crew.length === 2 ? "Two" : R.crew.length} people`} worked it, on the line <b>${onLinePct}% of the day</b> on average${R.planHeads ? ` &mdash; the plan assumes about ${heads1(R.planHeads)} ${R.planHeads >= 1.95 ? "people" : "person"} all day${paceRatio >= 1.25 ? ", so it beat the calendar by putting more people on it" : paceRatio < 0.85 ? ", so the cab moved slower than planned" : ""}` : ""}.` : "";
+  const s5 = R.avgHeads != null && R.crew.length ? `${R.crew.length === 1 ? "One person" : `${R.crew.length === 2 ? "Two" : R.crew.length} people`} worked it, on the line <b>${onLinePct}% of the day</b> on average${R.planHeads ? ` &mdash; the plan for this line is ${R.planHeads} ${R.planHeads === 1 ? "person" : "people"} all day${paceRatio >= 1.25 ? ", so it beat the calendar by putting more people on it" : paceRatio < 0.85 ? ", so the cab moved slower than planned" : ""}` : ""}.` : "";
   const s3 = R.idle.shopH ? `The line sat empty <b>${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours</b> (${idlePct}%).` : "";
   const s4 = R.kit.shortAtStart ? `Kit delivered <b>short &mdash; ${partsN || "some"} part${partsN === 1 ? "" : "s"} owed</b>${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? ", never marked complete by warehouse (cleared at sign-off)" : `, cleared ${e(phxDay310(R.kit.clearedAt))}`) : ", never cleared"}.` : R.kit.deliveredAt ? `Kit complete${R.kit.startedByManager ? ` &mdash; started from the Manager console by ${e(R.kit.startedByManager)}` : "."}` : "";
   const tile = (big, small, t) => `<div class="tile ${t}" style="background:${tone[t]}"><b>${big}</b><span>${small}</span></div>`;
@@ -9186,9 +9203,9 @@ const recapPage310 = (R, emp196 = null) => {
   <p class="verdict">${s1} ${s2} ${s5} ${s3} ${s4}</p>
   <div class="grid">
     ${tile(pct == null ? "&mdash;" : `${pct > 0 ? "+" : ""}${pct}%`, pct == null ? "no allowance" : `${h1_310(Math.abs(diffH))} h ${diffH <= 0 ? "under" : "over"} the ${h1_310(R.allowed)} allowed`, hoursTone)}
-    ${tile(R.shopDays == null ? "&mdash;" : `${R.shopDays} day${R.shopDays === 1 ? "" : "s"}`, R.promisedShopDays == null ? "in production &middot; no promise date" : `in production &middot; promised ${R.promisedShopDays} &middot; ${daysOver === 0 ? "on the day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}`, timeTone)}
+    ${tile(R.shopDays == null ? "&mdash;" : `${R.shopDays} day${R.shopDays === 1 ? "" : "s"}`, R.promisedShopDays == null ? "in production &middot; no promise date" : `in production &middot; promised ${R.promisedShopDays}${R.promisedUnderOldRule ? " (old rule)" : ""} &middot; ${daysOver === 0 ? "on the day" : daysOver < 0 ? `${dayWord(daysOver)} early` : `${dayWord(daysOver)} over`}`, timeTone)}
     ${tile(`${idlePct}%`, `line empty &middot; ${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours`, idleTone)}
-    ${tile(R.crew.length ? `${R.crew.length} ${R.crew.length === 1 ? "person" : "people"}` : "&mdash;", R.avgHeads == null ? "on the cab" : `on the cab &middot; ${heads1(R.avgHeads)} on the line on average &mdash; ${onLinePct}% of the day`, paceTone)}
+    ${tile(R.crew.length ? `${R.crew.length} ${R.crew.length === 1 ? "person" : "people"}` : "&mdash;", R.avgHeads == null ? "on the cab" : `on the cab &middot; ${heads1(R.avgHeads)} on the line on average &mdash; ${onLinePct}% of the day${R.planHeads ? ` &middot; plan ${R.planHeads}` : ""}`, paceTone)}
   </div>
   <div class="two">
     <div>
@@ -9225,7 +9242,7 @@ const recapPage310 = (R, emp196 = null) => {
   <div class="sec">Photos &mdash; ${R.photoTotal}${R.photoTotal ? ` (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ")})` : ""}</div>
   <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
   <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a>
-  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the line&#39;s own lunch removed. People on the line = crew hours &divide; those shop hours.</p>
+  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the line&#39;s own lunch removed. People on the line = crew hours &divide; those shop hours. Promised days = allowed hours &divide; (${R.planHpd || 8} h &times; people planned on the line)${R.promisedUnderOldRule ? " &mdash; this cab was promised under the earlier per-family day count" : ""}.</p>
 </div></body></html>`;
 };
 
@@ -9573,14 +9590,14 @@ async function freezeAndStart(b, empId, startedAt) {
   // flags the day the cab starts (managers + admins, Q106-sandboxed) instead
   // of surfacing the week it ships late. Wrapped: never blocks a start.
   try {
-    const frozen103 = await db(`task?select=man_hours&build_id=eq.${b.id}`);
-    const totalMh103 = frozen103.reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
-    const stepMh103 = steps.reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
-    const [tpl103] = await db(`build_template?select=total_days&id=eq.${prod.template_id}`);
-    const tplDays103 = tpl103 && Number(tpl103.total_days) > 0 ? Number(tpl103.total_days) : 0;
-    if (totalMh103 > 0 && stepMh103 > 0 && tplDays103 > 0) {
-      const dayBudget103 = stepMh103 / tplDays103;
-      const daysNeeded103 = Math.max(1, Math.ceil(totalMh103 / dayBudget103 - 1e-9));
+    const frozen103 = await db(`task?select=man_hours,is_background&build_id=eq.${b.id}`);
+    const totalMh103 = frozen103.filter((t2) => !t2.is_background).reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
+    // Block 314: the template's "total days" is retired — the line's people planned × the plan hours per day is the budget
+    const [ln314] = b.line_id ? await db(`line?select=people_planned&id=eq.${b.line_id}`) : [null];
+    const people314 = ln314 && Number(ln314.people_planned) > 0 ? Number(ln314.people_planned) : 1;
+    const hpd314 = await planHoursPerDay314();
+    if (totalMh103 > 0) {
+      const daysNeeded103 = daysFor314(totalMh103, people314, hpd314);
       let cursor103 = new Date(startedAt).getTime(); let counted103 = 0; let promised103 = null;
       for (let i103 = 0; i103 < 240 && counted103 < daysNeeded103; i103++) {
         const ds103 = phxDate(cursor103);
@@ -9588,7 +9605,7 @@ async function freezeAndStart(b, empId, startedAt) {
         cursor103 += 86400000;
       }
       if (promised103) {
-        await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ promised_finish: promised103 }) });
+        await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ promised_finish: promised103, people_planned: people314, promised_days: daysNeeded103 }) });   // Block 314: frozen with the cab
         const coyOrd103 = b.coyote_root || String(b.order_number || "").split(".")[0];
         let ship103 = "";
         if (coyOrd103) {
@@ -9598,11 +9615,11 @@ async function freezeAndStart(b, empId, startedAt) {
         }
         const conflict103 = Boolean(ship103 && promised103 > ship103);
         logEvent("build.promised", empId, { build_id: b.id, order_number: b.order_number, promised: promised103,
-          ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103 });
+          ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103, people_planned: people314, plan_hours_per_day: hpd314 });   // Block 314
         if (conflict103) {
           const mg103 = await adminIds225();   // Block 225 (Daniel): ship-date risk is admin-only — rare, high-value, off the floor manager's bell
           await notify("build.promise_conflict", mg103, `ORDER ${b.order_number} — can't make the sold ship date`,
-            `Standard hours put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
+            `${totalMh103} allowed hours at ${people314} ${people314 === 1 ? "person" : "people"} × ${hpd314} h/day put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
             "/order/" + encodeURIComponent(b.order_number));
         }
       }
@@ -11548,7 +11565,7 @@ http.createServer(async (req, res) => {
       // Block 212 (v201 SPEED): the board engine feeds the TV, the cockpit and
       // the projections — its six independent reads now land in one round trip.
       const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
-        db(`line?select=id,name,manually_closed,down_today,down_reason&enabled=is.true&order=id`),
+        db(`line?select=id,name,manually_closed,down_today,down_reason,people_planned&enabled=is.true&order=id`),   // Block 314: +people_planned
         db(`employee?select=id,first_name&active=is.true`),
         db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state
         // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
@@ -11584,6 +11601,7 @@ http.createServer(async (req, res) => {
         dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at,fix_build_id&voided=is.false&claimed_at=gte.${windowStart}&order=claimed_at.asc,id.asc`),
         arIds230.length ? db(`task?select=build_id,state,is_background&build_id=in.(${arIds230.join(",")})&limit=4000`) : [],
       ]);
+      const hpd314b = await planHoursPerDay314();   // Block 314 (cached 60 s)
       const tcnt230 = {};
       for (const t of tasksB230) { if (t.is_background) continue; const o = tcnt230[t.build_id] = tcnt230[t.build_id] || { total: 0, done: 0, open: 0 }; o.total++; if (t.state === "complete") o.done++; else if (t.state === "in_progress") o.open++; }
       const tmplMh104 = {}; for (const st of stepRows104) tmplMh104[st.template_id] = (tmplMh104[st.template_id] || 0) + Number(st.man_hours || 0);
@@ -11809,7 +11827,10 @@ http.createServer(async (req, res) => {
             promised: b.promised_finish || null,
             remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
             steps_total: (tcnt230[b.id] || {}).total || 0, steps_done: (tcnt230[b.id] || {}).done || 0, steps_open: (tcnt230[b.id] || {}).open || 0,
-            color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays } };
+            color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays,
+            // Block 314: shop days still needed = hours not yet earned ÷ (plan h/day × people planned on THIS line) — the same rule as the promise
+            people_planned: Number(l.people_planned) > 0 ? Number(l.people_planned) : 1,
+            remaining_days: fixJob || a.total - Number(earned280 || 0) <= 0 ? 0 : daysFor314(a.total - Number(earned280 || 0), l.people_planned, hpd314b) } };
       }) };
       const body298 = JSON.stringify(payload298);
       clearTimeout(pendTimer298); boardCache298[bsKey298] = { at: Date.now(), body: body298, pending: null }; resolve298(body298);
@@ -14615,6 +14636,16 @@ self.addEventListener("notificationclick", (e) => {
         if (!ln) return json(404, { ok: false, error: "Line not found" });
         await db(`line?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
         logEvent("line.renamed", adminId, { id, from: ln.name, to: name });
+        return json(200, { ok: true });
+      }
+      if (act === "people") {   // Block 314: people planned on the line (audited; new cabs only — started cabs keep their promise)
+        const id = Number(p.id), people = Number(p.people);
+        if (!Number.isInteger(id)) return json(400, { ok: false, error: "Bad line reference" });
+        if (!Number.isInteger(people) || people < 1 || people > 4) return json(400, { ok: false, error: "People planned must be 1 to 4" });
+        const [ln] = await db(`line?select=id,name,people_planned&id=eq.${id}`);
+        if (!ln) return json(404, { ok: false, error: "Line not found" });
+        await db(`line?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ people_planned: people }) });
+        logEvent("config.line_people", adminId, { line_id: id, name: ln.name, from: Number(ln.people_planned) || 1, to: people });
         return json(200, { ok: true });
       }
       if (act === "toggle") {
