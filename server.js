@@ -10142,7 +10142,16 @@ http.createServer(async (req, res) => {
       // Double clock-in guard (risk sweep 2026-07-28): a second clock-in used
       // to silently orphan the first interval — real coverage lost. Refuse it
       // plainly instead; the reload shows the clock-out screen.
-      const [already] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      // Block 299 (the 4 pm rush): the three independent reads (last punch, the line's
+      // gate, the person's department) + the cached shop hours land in ONE round trip.
+      // Query strings byte-identical; checks run in the same order as before.
+      const [alreadyRows299, lnGateRows299, hrsIn, meDepRows299] = await Promise.all([
+        db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`line?select=manually_closed,down_today&id=eq.${line_id}`),
+        shopHours(),
+        db(`employee?select=department&id=eq.${empId}`),   // Block 195: warehouse clocks in from 6
+      ]);
+      const [already] = alreadyRows299;
       if (already && already.kind === "clock_in") {
         const [l] = await db(`line?select=name&id=eq.${already.line_id}`);
         return json(400, { ok: false, error: `You're already on the clock${l ? " — " + l.name : ""}. Clock out first, then switch.` });
@@ -10155,7 +10164,7 @@ http.createServer(async (req, res) => {
       // on the cockpit and the timecards until someone owns the claim.
       // Q113: a manually-closed line takes no clock-ins. Q83: also read the
       // "down for today" hold so clocking in can RESUME the line.
-      const [lnGate] = await db(`line?select=manually_closed,down_today&id=eq.${line_id}`);
+      const [lnGate] = lnGateRows299;   // Block 299: read in the wave above
       if (lnGate && lnGate.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
       // Q83/Q84 + Block 133/134 (L9): clocking into a line held "down for today"
@@ -10164,8 +10173,7 @@ http.createServer(async (req, res) => {
       // so an after-hours reject can't tear down the hold + start a cab while
       // recording no clock-in. lnGate.down_today was read above; used again there.
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
-      const hrsIn = await shopHours();
-      const [meDep195] = await db(`employee?select=department&id=eq.${empId}`);   // Block 195: warehouse clocks in from 6
+      const [meDep195] = meDepRows299;   // Block 299: hrsIn + department read in the wave above
       if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)) {
         // Block 214 (Daniel): typed PLAN optional. Block 215 (Daniel, Monday):
         // the "who approved it" question is GONE too — "Ross would and is
@@ -10273,7 +10281,17 @@ http.createServer(async (req, res) => {
       // Timecard-audit fix: an out while NOT clocked in wrote a misleading
       // flagged row (pay math skips orphan outs, people reading don't).
       // Same guard the switch endpoint has.
-      const [lastOut107] = await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      // Block 299 (the 4 pm rush): the four independent reads below used to run one
+      // after another (~130 ms each at Supabase); they now land in ONE round trip.
+      // Every query string is byte-identical; only the waiting moved. The checks
+      // still run in the same order with the same answers.
+      const [lastOutRows299, open163oAll299, tog209Rows299, openAhRows299] = await Promise.all([
+        db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
+        db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
+        db(`after_hours_session?select=id,started_at,approved_by&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),
+      ]);
+      const [lastOut107] = lastOutRows299;
       if (!lastOut107 || lastOut107.kind !== "clock_in")
         return json(400, { ok: false, error: "You're not on the clock" });
       // Block 163 (owner-rep ruling): clocking OUT with steps you started
@@ -10284,7 +10302,7 @@ http.createServer(async (req, res) => {
       // (Daniel: staff "get a pop up message that they are UNSURE of what to
       // do with"). End-of-day and every other reason keep the heads-up.
       if (confirm163 !== true && reason !== "Lunch" && lastOut107.line_id != null) {
-        const open163o = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const open163o = open163oAll299;   // Block 299: read in the wave above
         const real163o = (open163o || []).filter((t) => !t.is_background);
         if (real163o.length) {
           const bIds163o = [...new Set(real163o.map((t) => t.build_id))];
@@ -10303,7 +10321,7 @@ http.createServer(async (req, res) => {
       // per cab per day, not one per tech). Managers/admins exempt; lunch
       // and other reasons never gated; a line with no active cab never gated.
       if ((reason === "End of day" || reason === "End of shift") && [1, 2, 3, 4].includes(Number(lastOut107.line_id))) {
-        const [tog209] = await db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`);
+        const [tog209] = tog209Rows299;   // Block 299: read in the wave above
         if (tog209 && tog209.enabled === true) {
           const [me209] = await db(`employee?select=department,role&id=eq.${empId}`);
           if (me209 && me209.department === "Production" && me209.role === "production") {
@@ -10328,7 +10346,7 @@ http.createServer(async (req, res) => {
       // wrap-up. Closing it starts the SIGN-OFF loop — the approver + admins
       // get the wrap note (and photo count), and the session's hours stay
       // HELD off the timecard until a manager/admin signs off in the cockpit.
-      const [openAhOut] = await db(`after_hours_session?select=id,started_at,approved_by&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`);
+      const [openAhOut] = openAhRows299;   // Block 299: read in the wave above
       if (openAhOut) {
         if (!String(wrap_note || "").trim())
           return json(400, { ok: false, error: "After-hours wrap-up: one line on what got done, then clock out" });
@@ -10376,10 +10394,17 @@ http.createServer(async (req, res) => {
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
       if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "Pick a line" });
       // Q113: no switching ONTO a manually-closed line either.
-      const [lnGateS] = await db(`line?select=manually_closed&id=eq.${line_id}`);
+      // Block 299 (the 4 pm rush): the three independent reads land in ONE round trip
+      // (query strings byte-identical; the checks keep their order).
+      const [lnGateSRows299, lastRows299, open163All299] = await Promise.all([
+        db(`line?select=manually_closed&id=eq.${line_id}`),
+        db(`clock_event?select=kind,line_id,reason,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
+      ]);
+      const [lnGateS] = lnGateSRows299;
       if (lnGateS && lnGateS.manually_closed)
         return json(400, { ok: false, error: "That line is closed right now — see the manager" });
-      const [last] = await db(`clock_event?select=kind,line_id,reason,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [last] = lastRows299;
       // Block 163 (owner-rep ruling): leaving a line with steps YOU started
       // still open gets a heads-up FIRST — soft, warn-but-allow. On your own
       // line open steps legitimately carry to tomorrow; on a line you jumped
@@ -10387,7 +10412,7 @@ http.createServer(async (req, res) => {
       // was born — and sometimes another teammate is MEANT to do the final
       // tap, which is fine: OK leaves anyway. Background steps don't count.
       if (confirm163 !== true && last && last.kind === "clock_in" && last.line_id != null) {
-        const open163 = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
+        const open163 = open163All299;   // Block 299: read in the wave above
         const real163 = (open163 || []).filter((t) => !t.is_background);
         if (real163.length) {
           const bIds163 = [...new Set(real163.map((t) => t.build_id))];
