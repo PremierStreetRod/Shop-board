@@ -184,6 +184,16 @@ async function assignTempPin(empId) {
 // endpoint rejects it cleanly first. The UI never sends bad ids — this is
 // defense-in-depth for hand-crafted requests.
 const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+// Block 306: what an uploaded file IS, from its first bytes (null = not a picture we know).
+function sniffImage306(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a) return "image/png";
+  if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (buf.toString("ascii", 0, 4) === "GIF8") return "image/gif";
+  if (buf.toString("ascii", 4, 8) === "ftyp") { const brand = buf.toString("ascii", 8, 12).toLowerCase(); if (/^(heic|heix|hevc|hevx|heim|heis|hevm|hevs|mif1|msf1)$/.test(brand)) return "image/heic"; }
+  return null;
+}
 
 // Signed session cookie: "employeeId.expiresMs.signature".
 // The signature (HMAC) means a phone can't forge someone else's login.
@@ -14655,26 +14665,34 @@ self.addEventListener("notificationclick", (e) => {
       if (!build_id) return json(400, { ok: false, error: "Missing build" });
       // Block 172 (break-pass): guard the id — becomes a storage path + insert value.
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      if (!ctype.startsWith("image/")) return json(400, { ok: false, error: "Photos only" });
-      // HEIC backstop: phones convert before upload; if a raw HEIC still
-      // arrives (odd browser path), answer in plain English instead of
-      // storing a photo desktop screens can't show.
-      if (/hei[cf]/.test(ctype))
-        return json(415, { ok: false, error: "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it" });
+      // Block 306 (Aaron, Fire HD 10, Tue 10/20 — "wrong file type"): judge the photo by its FIRST
+      // BYTES, never by the label the tablet's browser put on it (Silk hands picker files over as a
+      // generic binary). The body is read first; then: a real JPEG/PNG/WebP/GIF is accepted whatever
+      // it was called; a HEIC gets the plain-English answer; anything else is refused — and EVERY
+      // refusal is logged (photo.rejected) with the reason, the label and the device, so the next
+      // report is one query, not a guess.
       const chunks = []; let size = 0, over = false;
       await new Promise((resolve) => {
         req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
         req.on("end", resolve); req.on("close", resolve);
       });
-      if (over) return json(413, { ok: false, error: "Photo too large (8 MB max)" });
+      const reject306 = (status, reason, error) => { logEvent("photo.rejected", empId, { build_id, reason, label: ctype.slice(0, 60), bytes: size, device: String(req.headers["user-agent"] || "").slice(0, 160) }); return json(status, { ok: false, error }); };
+      if (over) return reject306(413, "too_large", "Photo too large (8 MB max)");
       const buf = Buffer.concat(chunks);
+      const sniffed306 = sniffImage306(buf);
+      if (sniffed306 === "image/heic")
+        return reject306(415, "heic", "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it");
+      if (!sniffed306 && !ctype.startsWith("image/")) return reject306(400, "not_an_image", "That file isn't a photo the board can use — take it with the camera button and try again");
+      if (!sniffed306 && /hei[cf]/.test(ctype)) return reject306(415, "heic_label", "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it");
+      const storeType306 = sniffed306 || ctype;   // what it IS beats what it was called
+      if (sniffed306 && !ctype.startsWith("image/")) logEvent("photo.relabeled", empId, { build_id, label: ctype.slice(0, 60), is: sniffed306, device: String(req.headers["user-agent"] || "").slice(0, 160) });
       // task_id present = a PER-TASK photo (file 11); absent = a finish-gate photo.
       const task_id = url.searchParams.get("task_id") || null;
       if (task_id != null && !isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" }); // Block 172 (break-pass)
-      const ext = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp" : "jpg";
+      const ext = storeType306.includes("png") ? "png" : storeType306.includes("webp") ? "webp" : storeType306.includes("gif") ? "gif" : "jpg";
       const path = `${build_id}/${Date.now()}.${ext}`;
       const up = await fetch(`${SUPABASE_URL}/storage/v1/object/cab-photos/${path}`, {
-        method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": ctype },
+        method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": storeType306 },
         body: buf });
       if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
       // Block 209 (owner, Sat 8/22): kind=progress marks an END-OF-DAY cab
