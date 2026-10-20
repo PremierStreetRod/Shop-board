@@ -2510,20 +2510,40 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   function noteOpen288(){ return [...document.querySelectorAll(".np")].some(function(p){ return p.style.display !== "none"; }); }
   function armMv288(btn, msg, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const o = btn.innerHTML; btn.textContent = msg; btn.style.borderColor = "#ffd60a"; btn.style.color = "#ffd60a"; setTimeout(function(){ btn.dataset.armed = ""; btn.innerHTML = o; btn.style.borderColor = ""; btn.style.color = ""; }, 5000); } }
   function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
+  // Block 304 (Eric's first prep tap, Tue 10/20 07:43): the server finished in one
+  // second but the phone never got the answer, and a tap with no time limit left
+  // the button grey for good. Now: 8 s and the page re-reads itself ("checking…")
+  // — the prep endpoints are idempotent, so the truth is always safe to show.
+  // Prep taps also redraw in place (the Block 292 swap) instead of reloading.
   async function post(url, payload, btn){
     if (btn) btn.disabled = true;
+    const ctl304 = typeof AbortController === "function" ? new AbortController() : null;
+    const tm304 = ctl304 ? setTimeout(function(){ ctl304.abort(); }, 8000) : null;
     try {
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }) });
+        body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }), signal: ctl304 ? ctl304.signal : undefined });
+      if (tm304) clearTimeout(tm304);
       const out = await r.json();
-      if (out.ok) return /\/api\/clock\//.test(url) ? swapIn292(".wrap", url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out") : location.reload();   // Block 292: clock taps redraw in place (Eric's tablet has Evan's race too); every other action still reloads
+      if (out.ok) {
+        // Block 304 ROOT CAUSE: this used to be a regex with escaped slashes; inside the page
+        // template the backslashes vanished and the whole line became a comment after "return" —
+        // every successful warehouse tap since v265 saved its data and then did NOTHING on screen.
+        // Plain string tests now; NEVER write "\/" inside a page template.
+        if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out");   // Block 292: clock taps redraw in place
+        if (url.indexOf("/api/prep/") === 0) return swapIn292(".wrap", url.indexOf("/start") > -1 ? "Prepping panels" : url.indexOf("/done") > -1 ? "Panels ready" : "Back on warehouse");   // Block 304
+        return location.reload();   // every other action still reloads
+      }
       // Block 124 (logic audit M6): if the tap failed because we're no longer
       // on the clock (day-end sweep or a manager clocked us out), this screen
       // is stale — reload so it shows the real state, not a silent reject under
       // a still-green "ON THE CLOCK" chip.
       if (/on the clock|clock in first/i.test(out.error || "")) { location.reload(); return; }
       showErr97(btn, out.error || "Something went wrong");
-    } catch (e) { showErr97(btn, "Network hiccup — try again"); }
+    } catch (e) {
+      if (tm304) clearTimeout(tm304);
+      if (e && e.name === "AbortError") { showErr97(btn, "Still working — checking\u2026"); setTimeout(function(){ location.reload(); }, 1200); return; }   // Block 304: no answer in 8 s → show the truth, never a dead grey button
+      showErr97(btn, "Network hiccup — try again");
+    }
     if (btn) btn.disabled = false;
   }
   // Block 97: errors land NEXT to the button you tapped (the old bottom-of-page
