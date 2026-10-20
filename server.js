@@ -13644,6 +13644,30 @@ self.addEventListener("notificationclick", (e) => {
       return [empId, null];
     };
 
+    // ===== Block 303 (Daniel, 10/19 close-out: "completely backed up locally"): THE DATABASE SNAPSHOT =====
+    // Admin-only. Every operational table (coyote_intake excluded by design — Coyote is the source of
+    // truth and a re-sync rebuilds it; the *_backup_* scratch copies excluded; photo BINARIES live in the
+    // cab-photos bucket, the metadata rows are here). Same shape as Backups/shopboard_db_snapshot_*.json
+    // from 8/26, so a restore drill reads either. One tap from an admin session; the browser saves the
+    // file; it goes in the Backups folder. Audited (backup.snapshot {tables, rows, bytes}).
+    if (url.pathname === "/api/admin/snapshot.json") {
+      const [adminS303, failS303] = await requireAdmin(); if (failS303) return failS303;
+      const TABLES303 = ["after_hours_photo", "after_hours_session", "build", "build_note", "build_photo", "build_template", "clock_event", "employee", "event_log", "feature_toggle", "line", "line_down", "notification_log", "option_catalog", "option_check", "option_flag", "option_item", "pick_list_item", "prep_standard", "product", "push_subscription", "share_link", "shop_calendar", "shop_setting", "step_actuals_archive", "step_template", "task", "task_note", "time_off_request", "work_log"];
+      const snap303 = { __meta: { generated_at: new Date().toISOString(), source: "supabase project mxmiujjrayquatmleehf, live production", app_version: "v280 (Block 303)", by: adminS303, note: "coyote_intake (raw Coyote payload cache) deliberately EXCLUDED — Coyote is the source of truth; a re-sync rebuilds it. option_item_backup_* / step_template_backup_* scratch copies excluded. Photo BINARIES live in the Supabase storage bucket cab-photos (build_photo rows here hold the metadata + storage paths). employee.pin_hash is included (it is a salted scrypt hash, not a PIN); temp_pin is blanked." }, __counts: {} };
+      let rows303 = 0;
+      for (const t of TABLES303) {
+        try {
+          const r = await dbAll252(`${t}?select=*&order=${t === "prep_standard" ? "family" : "id"}.asc`);
+          if (t === "employee") for (const e of r) { if (e.temp_pin) e.temp_pin = "(blanked in snapshot)"; }
+          snap303[t] = r; snap303.__counts[t] = r.length; rows303 += r.length;
+        } catch (e303) { snap303[t] = null; snap303.__counts[t] = "ERROR: " + String(e303.message).slice(0, 120); }
+      }
+      const body303 = JSON.stringify(snap303);
+      logEvent("backup.snapshot", adminS303, { tables: TABLES303.length, rows: rows303, bytes: body303.length, errors: Object.values(snap303.__counts).filter((v) => typeof v === "string").length });
+      res.setHeader("Content-Disposition", `attachment; filename="shopboard_db_snapshot_${phxDate(Date.now())}.json"`);
+      return send(200, "application/json", body303);
+    }
+
     if (url.pathname === "/admin") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
