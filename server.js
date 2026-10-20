@@ -986,7 +986,7 @@ async function sweepForgottenClockOuts() {
       // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
       // SESSION open forever — close it honestly so the cockpit lane and the
       // timecards tell the truth about forgetful nights.
-      const [ahSweep] = await db(`after_hours_session?select=id,approved_by&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);
+      const [ahSweep] = await db(`after_hours_session?select=id,approved_by,started_at,line_id&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);   // Block 300: +started_at,line_id for the card
       if (ahSweep) {
         await db(`after_hours_session?id=eq.${ahSweep.id}`, { method: "PATCH", body: JSON.stringify({
           ended_at: new Date(closeAt).toISOString(), wrap_note: "(auto-closed — no wrap-up left)" }) });
@@ -994,11 +994,12 @@ async function sweepForgottenClockOuts() {
         // Block 107: an auto-closed session still needs its sign-off — tell
         // the people who'd give it; the hours stay HELD until someone does.
         try {
-          const [whoAh107] = await db(`employee?select=first_name&id=eq.${ev.employee_id}`);
+          const [whoAh107] = await db(`employee?select=first_name,last_name&id=eq.${ev.employee_id}`);
           const adminsAh107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
-          notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id)])],
-            `After hours auto-closed — ${whoAh107 ? whoAh107.first_name : "?"} left no wrap-up`,
-            "The session closed itself at day end with no wrap-up note. Its hours are HELD off the timecard until an ADMIN signs off in the Admin console.", "/manager");
+          // Block 300: same card shape as a normal wrap-up, with the auto-close said plainly; Approve/Deny on the card.
+          const nmS300 = whoAh107 ? `${whoAh107.first_name} ${((whoAh107.last_name || "")[0] || "")}.`.trim() : "?";
+          const cardS300 = ahWrapNotice300(nmS300, { id: ahSweep.id, started_at: ahSweep.started_at, ended_at: new Date(closeAt).toISOString() }, lineName300(ahSweep.line_id, []), "(auto-closed at day end — no wrap-up left)", 0);
+          notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id)])], cardS300.title, cardS300.body, cardS300.link);
         } catch (e) { console.error("ah sweep notify failed:", e.message); }
       } else {
         // v148 (owner-rep): EVERY system clock-out tells the admins — the machine
@@ -1550,7 +1551,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <p class="msg" style="color:#ffd60a">AFTER HOURS — <span id="ahline"></span>. One quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
     <p class="msg" style="margin-top:10px">What's it for?</p>
     <div class="grid">${ah.reasons.map((r) => `<button class="name ahre" data-ahreason="${r}" style="${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
-    <input id="ahplan" maxlength="200" placeholder="Anything to add? (optional)" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">
+    <input id="ahplan" maxlength="200" placeholder="What are you working on? (optional)" style="width:100%;margin-top:12px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">
     <p class="msg" style="opacity:.55;font-size:.85rem;margin-top:8px">The office approves or denies the hours after you wrap up — that's the OK, nothing else to answer here.</p>
     <p style="text-align:center;margin-top:12px">
       <button class="name" id="ahgo" style="display:inline-block;background:#1d5a2d">Clock in — after hours</button>
@@ -2982,7 +2983,25 @@ function bellLink234(n) {
   }
   return LINK_FALLBACK_234[ev] || null;   // null = informational: plain card, no tap hint
 }
-const inboxPage = (emp, notes) => `<!doctype html>
+// ===== Block 300 (Daniel, Mon 10/19 — "Ross wants quick, easy and fast"): THE BELL IS THE APPROVAL =====
+// Ross approved two of Evan's Saturday after-hours sessions "from the bell" and they stayed
+// un-signed: the card was only a link, it landed on the Manager console's 4th lane, and that
+// lane offered Confirm (vouch) + a two-tap Sign off; he tapped Confirm. Now: an after-hours
+// wrap-up card carries ONE-TAP Approve / Deny for admins right in the inbox (same audited
+// endpoints as the Admin panel, no "sure?"), cards that need a decision are tagged and sorted
+// first, and the Manager console lane for admins is the same one-tap pair.
+const DEPT_LINE_NAMES_300 = { 9: "Warehouse", 10: "Shop time", 12: "Build time", 13: "Body Shop time", 14: "Off the line", 15: "Fix work", 16: "Accounting time", 17: "Marketing — at the shop", 18: "Marketing — remote" };
+const lineName300 = (lineId, lines) => ((lines || []).find((l) => l.id === lineId) || {}).name || DEPT_LINE_NAMES_300[lineId] || (lineId ? "Line " + lineId : "");
+const NEEDS_YOU_300 = new Set(["build.ready_inspection", "timeoff.requested", "note.triage"]);   // a claimed (still-open) session is news until it wraps
+const ahIdOf300 = (n) => { const m = /[?&]ah=([0-9a-f-]{36})/i.exec(String(n && n.link || "")); return m ? m[1] : null; };
+// The wrap-up notice: who, when, how long, where, their words — and the session id in the link so the card can act.
+const ahWrapNotice300 = (name, s, lineName, wrap, nPhotos) => {
+  const hrs = s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null;
+  const title = `${name} — after hours ${dayShort291(phxDate(new Date(s.started_at).getTime()))} ${phx12_290(s.started_at)}${s.ended_at ? "–" + phx12_290(s.ended_at) : ""}${hrs != null ? ` · ${hrs}h` : ""}`;
+  const body = `${lineName}${wrap ? ` · "${wrap}"` : ""}${nPhotos ? ` + ${nPhotos} photo${nPhotos > 1 ? "s" : ""}` : ""}`;
+  return { title, body, link: `/inbox?ah=${s.id}` };
+};
+const inboxPage = (emp, notes, ahState300 = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
@@ -2990,28 +3009,64 @@ const inboxPage = (emp, notes) => `<!doctype html>
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   <h2>Notifications</h2>
-  ${notes.length ? notes.map((n) => {
+  ${(() => {
+    // Block 300: which cards NEED Ross — an undecided after-hours wrap-up (admin), or an unread ask.
+    if (!notes.length) return `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`;
+    const isAdmin300 = emp && emp.role === "admin";
+    const needs300 = (n) => { const ah = n.event_type === "afterhours.wrapped" ? ahIdOf300(n) : null;
+      if (ah && isAdmin300) { const st = ahState300[ah]; return !!st && !st.signed_off_by && !st.declined_by && !!st.ended_at; }
+      return !n.read_at && NEEDS_YOU_300.has(String(n.event_type)); };
+    const sorted300 = [...notes].map((n, i) => ({ n, i, need: needs300(n) })).sort((a, b) => (b.need - a.need) || (a.i - b.i));
+    for (const x of sorted300) { const ah = x.n.event_type === "afterhours.wrapped" ? ahIdOf300(x.n) : null; if (ah && isAdmin300 && ahState300[ah]) x.n.__ahState = ahState300[ah]; }
+    const nNeed = sorted300.filter((x) => x.need).length;
+    return (nNeed ? `<p style="text-align:center;margin:-6px 0 12px"><span id="needcnt300" style="background:#2a2200;border:1px solid #7a5900;color:#ffd60a;border-radius:10px;padding:4px 12px;font-weight:800">${nNeed} need${nNeed === 1 ? "s" : ""} you</span></p>` : "") + sorted300.map((x) => cardHtml300(x.n, x.need)).join("");
+  })()}
+  <p style="text-align:center;margin-top:20px">
+    <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
+    <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div>
+<script>
+  // Block 300: one tap from the card — the same audited endpoints the Admin panel uses.
+  async function ahCard300(id, what, btn){
+    var row = document.getElementById("ahrow-" + id); var msg = document.getElementById("ahmsg-" + id);
+    var payload = { session_id: id };
+    if (what === "decline") { var r = (document.getElementById("ahrsn-" + id) || { value: "" }).value.trim(); if (!r) { msg.textContent = "Type the reason first \u2014 it goes on the record"; return; } payload.reason = r; }
+    btn.disabled = true; msg.textContent = "";
+    try { var res = await fetch(what === "decline" ? "/api/afterhours/decline" : "/api/afterhours/signoff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      var out = await res.json();
+      if (out.ok) { row.innerHTML = what === "decline" ? '<span style="color:#ff8a80;font-weight:800">\u2715 Denied \u2014 hours don\u2019t count. They\u2019ve been told.</span>' : '<span style="color:#30d158;font-weight:800">\u2713 Approved \u2014 the hours are on the timecard.</span>';
+        var tag = document.getElementById("ahtag-" + id); if (tag) tag.remove(); var cnt = document.getElementById("needcnt300"); if (cnt) cnt.remove(); return; }
+      msg.textContent = out.error || "Something went wrong";
+    } catch (e) { msg.textContent = "Network hiccup \u2014 try again"; }
+    btn.disabled = false;
+  }
+  function ahDeny300(id){ var d = document.getElementById("ahdeny-" + id); if (d) { d.style.display = "block"; var i = document.getElementById("ahrsn-" + id); if (i) i.focus(); } }
+</script>
+</body></html>`;
+// Block 300: one card. An after-hours wrap-up for an ADMIN is a DIV with Approve / Deny (or its verdict); everything else stays the whole-card link.
+const cardHtml300 = (n, need) => {
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
     const unread = !n.read_at;
     // Block 233 (Ross): the WHOLE CARD is a link — tap a notification and land
     // where the action is. Block 234 (Daniel): the destination comes from
     // bellLink234 (stored link, or derived for pre-0056 rows); a notice with
     // no real destination renders as a PLAIN card — no dead "Tap to open".
-    const go234 = bellLink234(n);
-    const card234 = `style="display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid ${unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px"`;
+    const ahId = n.event_type === "afterhours.wrapped" ? ahIdOf300(n) : null;
+    const st = ahId ? n.__ahState : null;   // set by inboxPage for admins
+    const tag = need ? `<span id="ahtag-${ahId || n.id}" style="background:#ffd60a;color:#000;border-radius:7px;padding:1px 7px;font-size:.72rem;font-weight:900;letter-spacing:.04em;margin-right:6px;vertical-align:middle">NEEDS YOU</span>` : "";
+    const go234 = ahId && st ? null : bellLink234(n);
+    const card234 = `style="display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid ${need ? "#ffd60a" : unread ? "#C8102E" : "var(--line)"};border-radius:12px;padding:12px 14px;margin-bottom:10px"`;
+    const verdict = st ? (st.declined_by ? `<span style="color:#ff8a80;font-weight:800">&#10005; Denied</span>` : st.signed_off_by ? `<span style="color:#30d158;font-weight:800">&#10003; Approved &mdash; hours on the timecard</span>` : !st.ended_at ? `<span style="opacity:.6">Still on the clock &mdash; approve once the wrap-up lands.</span>`
+      : `<button onclick="ahCard300('${ahId}','signoff',this)" style="background:#1d5a2d;border:1px solid #30d158;border-radius:10px;color:#fff;font-weight:800;padding:10px 16px;font-size:1rem;cursor:pointer">&#10003; Approve${st.hrs != null ? " " + st.hrs + " h" : ""}</button> <button onclick="ahDeny300('${ahId}')" style="background:transparent;border:1px solid #5a1d1d;border-radius:10px;color:#ff8a80;font-weight:700;padding:10px 14px;font-size:.95rem;cursor:pointer">Deny</button>
+         <div id="ahdeny-${ahId}" style="display:none;margin-top:8px"><input id="ahrsn-${ahId}" maxlength="200" placeholder="Why these hours don't count — one line, goes on the record" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:9px;font-size:16px"> <button onclick="ahCard300('${ahId}','decline',this)" style="margin-top:6px;background:#8f1622;border:none;border-radius:10px;color:#fff;font-weight:800;padding:9px 14px;cursor:pointer">Deny &mdash; hours don't count</button></div>`) : "";
     return `<${go234 ? `a href="${String(go234).replace(/"/g, "&quot;")}"` : "div"} ${card234}>
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
-        <b>${unread ? "\uD83D\uDD34 " : ""}${String(n.title).replace(/</g, "&lt;")}</b>
+        <b>${tag}${unread && !need ? "\uD83D\uDD34 " : ""}${String(n.title).replace(/</g, "&lt;")}</b>
         <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
       </div>
       <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
-      ${go234 ? `<div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>` : ""}
-    </${go234 ? "a" : "div"}>`; }).join("")
-  : `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`}
-  <p style="text-align:center;margin-top:20px">
-    <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
-    <a href="/logout" style="color:#8e8e93">Sign out</a></p>
-</div></body></html>`;
+      ${st ? `<div id="ahrow-${ahId}" style="margin-top:10px">${verdict}</div><div id="ahmsg-${ahId}" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>` : go234 ? `<div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>` : ""}
+    </${go234 ? "a" : "div"}>`; };
 
 // Q86 hand-off: the NO-LOGIN phone page. With a valid code it shows a photo
 // upload that posts straight to the code's one cab; without one it shows a
@@ -4062,6 +4117,25 @@ const prodLanes295 = (onClock, longRunners, recentDone) => `
     recentDone.length ? recentDone.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
       <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("") : `<div style="opacity:.6">Nothing checked off yet today.</div>`, recentDone.length)}`;
+// Block 300: the after-hours lane as a function so admins get it at the top and managers where it was.
+const ahLane300 = (afterHours, isAdmin, insp188, acct189) => `  ${!insp188 && !acct189 && afterHours.length ? `
+  <!-- Q112 + blocks 107/108 (owner-rep): WHO worked leads each row, big and
+       bold, lines below the name. Managers CONFIRM the approval claim here;
+       the SIGN-OFF that releases pay hours is an ADMIN job (Admin console). -->
+  <div class="lane" style="border-color:#7a5900" id="ahlane300"><h3>After hours — ${isAdmin ? "needs your OK" : "confirm; admin approves"}</h3>
+    ${afterHours.map((s) => `<div class="qrow" style="display:block;padding:10px 0">
+      <div style="font-size:1.15rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
+      <div style="margin:2px 0 0">${s.lineName}</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason}${s.appr ? ` · says ${s.appr} approved` : ""}${s.plan ? ` · "${s.plan}"` : ""}</div>
+      ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock)</div>`}
+      <!-- Block 300 (Ross: "quick, easy, fast"): an ADMIN gets the same one-tap pair as the Admin panel — Approve (auto-confirms) / Deny, no "sure?". Managers keep Confirm (vouching). -->
+      <div style="margin-top:8px">${isAdmin ? (s.ended ? `<button class="btn" style="background:#1d5a2d;padding:8px 16px;margin-top:0;font-size:1rem" onclick="signAh('${s.id}',this)">&#10003; Approve${s.hrs != null ? " " + s.hrs + " h" : ""}</button> <button class="btn gray" style="padding:8px 14px;margin-top:0" onclick="document.getElementById('dcm-${s.id}').style.display='block';document.getElementById('dcmr-${s.id}').focus()">Deny</button>` : `<span style="opacity:.55;font-size:.85rem">Still on the clock — approve once the wrap-up lands.</span>`)
+        : `${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN approval — hours held till then.</span>` : ""}`}</div>
+      ${s.ended && isAdmin ? `<div id="dcm-${s.id}" style="display:none;margin-top:6px"><input id="dcmr-${s.id}" maxlength="200" placeholder="Why these hours don't count — one line, goes on the record" style="min-width:300px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px"> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="declAh110('${s.id}',this)">Deny — hours don't count</button></div>` : ""}
+    </div>`).join("")}
+    <div style="opacity:.5;font-size:.85rem">${isAdmin ? "Approve puts the hours on the timecard; Deny needs one typed line and the person is told. One tap each." : "Confirming says the named approval was real. An ADMIN approves — that releases the hours onto the timecard; until then they're HELD and flagged."}</div>
+  </div>` : ""}
+`;
 const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -4108,6 +4182,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : acct189 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— time &amp; pay</span>` : ""}</h2>
   ${!isAdmin && !insp188 && !acct189 ? FOLD_CSS_295 + `<div class="x295">Your lines, the cab on each, and anything waiting on you. The other lists are folded below &mdash; tap <b>+ Show</b> to open one; the tablet remembers.</div>` : ""}
+  ${isAdmin ? ahLane300(afterHours, isAdmin, insp188, acct189) : ""}   <!-- Block 300: a pay decision waits at the top, not the 4th lane -->
   ${isAdmin && !insp188 && !acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM · Block 295: the Production manager gets it FOLDED at the bottom (prodLanes295) -->
   ${isAdmin && !insp188 && !acct189 && longRunners.length ? `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
@@ -4128,21 +4203,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
   </div>` : ""}
-  ${!insp188 && !acct189 && afterHours.length ? `
-  <!-- Q112 + blocks 107/108 (owner-rep): WHO worked leads each row, big and
-       bold, lines below the name. Managers CONFIRM the approval claim here;
-       the SIGN-OFF that releases pay hours is an ADMIN job (Admin console). -->
-  <div class="lane" style="border-color:#7a5900"><h3>After hours — ${isAdmin ? "needs your sign-off" : "confirm; admin signs off"}</h3>
-    ${afterHours.map((s) => `<div class="qrow" style="display:block;padding:10px 0">
-      <div style="font-size:1.15rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
-      <div style="margin:2px 0 0">${s.lineName}</div>
-      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved ${s.plan ? ` · plan: "${s.plan}"` : ""}</div>
-      ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock)</div>`}
-      <div style="margin-top:8px">${s.confirmed ? "" : `<button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="confirmAh('${s.id}',this)">Confirm approval</button> `}${s.ended ? (isAdmin ? `<button class="btn" style="background:#1d5a2d;padding:6px 12px;margin-top:0" onclick="armM(this,()=>signAh('${s.id}',this))">Sign off — count the hours</button> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="document.getElementById('dcm-${s.id}').style.display='block';document.getElementById('dcmr-${s.id}').focus()">Decline</button>` : `<span style="opacity:.55;font-size:.85rem">Awaiting ADMIN sign-off — hours held till then.</span>`) : ""}</div>
-      ${s.ended && isAdmin ? `<div id="dcm-${s.id}" style="display:none;margin-top:6px"><input id="dcmr-${s.id}" maxlength="200" placeholder="Why these hours don't count — required, goes on the record" style="min-width:300px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px"> <button class="btn" style="padding:6px 12px;margin-top:0" onclick="armM(this,()=>declAh110('${s.id}',this))">Decline — hours don't count</button></div>` : ""}
-    </div>`).join("")}
-    <div style="opacity:.5;font-size:.85rem">Confirming says the named approval was real. Sign-off is an ADMIN job — it releases the session's hours onto the timecard; until then they're HELD and flagged.</div>
-  </div>` : ""}
+  ${isAdmin ? "" : ahLane300(afterHours, isAdmin, insp188, acct189)}   <!-- Block 300: admins see this lane at the TOP instead -->
   ${!acct189 && rows.some((r) => r.active && r.active.ready194 && r.active.ready194.allDone) ? `
   <!-- Block 194: cabs whose every step is checked but that haven't been SENT
        yet surface at the very top of the Inspection lane's territory — this
@@ -5246,7 +5307,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     ${afterHours.map((s) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
       <div style="font-size:1.2rem;font-weight:800">${s.who} <span style="opacity:.6;font-weight:400;font-size:.9rem">— after hours ${s.when}${s.ended && s.hrs != null ? ` · ${s.hrs}h` : ""}</span></div>
       <div style="margin:2px 0 0">${s.lineName}</div>
-      <div style="opacity:.7;margin:2px 0 0">${s.reason} · says ${s.appr} approved ${s.plan ? ` · plan: "${s.plan}"` : ""}</div>
+      <div style="opacity:.7;margin:2px 0 0">${s.reason}${s.appr ? ` · says ${s.appr} approved` : ""}${s.plan ? ` · "${s.plan}"` : ""}</div>
       ${s.ended ? `<div style="margin:4px 0 0">wrap-up: "${s.wrap || ""}"${s.photos.length ? s.photos.map((p2, i2) => ` <a href="/photo-view/${p2}" target="_blank" style="color:#ffd60a">&#128247; photo ${i2 + 1}</a>`).join("") : ""}</div>` : `<div style="color:#ffd60a;margin:4px 0 0">(still on the clock — sign off after the wrap-up lands)</div>`}
       <!-- Block 214 (Daniel: "should just be two... one tap"): APPROVE + DENY.
            The old "Confirm approval" was for managers vouching for the claim
@@ -10289,7 +10350,7 @@ http.createServer(async (req, res) => {
         db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
         db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
         db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
-        db(`after_hours_session?select=id,started_at,approved_by&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),
+        db(`after_hours_session?select=id,started_at,approved_by,line_id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),   // Block 300: line_id names the card
       ]);
       const [lastOut107] = lastOutRows299;
       if (!lastOut107 || lastOut107.kind !== "clock_in")
@@ -10356,12 +10417,18 @@ http.createServer(async (req, res) => {
         logEvent("afterhours.end", empId, { session_id: openAhOut.id, wrap_note: String(wrap_note).trim() });
         try {
           const hrs107 = Math.round(Math.max(0, new Date(endIso107).getTime() - new Date(openAhOut.started_at).getTime()) / 360000) / 10;
-          const [meOut107] = await db(`employee?select=first_name&id=eq.${empId}`);
-          const admins107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
-          const nPhotos107 = (await db(`after_hours_photo?select=id&session_id=eq.${openAhOut.id}`)).length;
-          notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id)])],
-            `After hours wrapped up — ${meOut107 ? meOut107.first_name : "?"}, ${hrs107}h`,
-            `"${String(wrap_note).trim()}"${nPhotos107 ? ` + ${nPhotos107} photo${nPhotos107 > 1 ? "s" : ""}` : ""} — an ADMIN signs off in the Admin console so the hours count on the timecard.`, "/manager");
+          // Block 300: the card names who / when / how long / where / their words and carries the session so the inbox can Approve in one tap.
+          const [meOut107, admins107, ahPhotos300, lnRows300] = await Promise.all([
+            db(`employee?select=first_name,last_name&id=eq.${empId}`).then((r) => r[0]),
+            db(`employee?select=id&active=is.true&role=eq.admin`),
+            db(`after_hours_photo?select=id&session_id=eq.${openAhOut.id}`),
+            openAhOut.line_id ? db(`line?select=id,name&id=eq.${openAhOut.line_id}`) : [],
+          ]);
+          const nPhotos107 = ahPhotos300.length;
+          const nm300 = meOut107 ? `${meOut107.first_name} ${((meOut107.last_name || "")[0] || "")}.`.trim() : "?";
+          const card300 = ahWrapNotice300(nm300, { id: openAhOut.id, started_at: openAhOut.started_at, ended_at: endIso107 }, lineName300(openAhOut.line_id, lnRows300), String(wrap_note).trim(), nPhotos107);
+          void hrs107;
+          notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id)])], card300.title, card300.body, card300.link);
         } catch (e) { console.error("ah wrap notify failed:", e.message); }
       }
       // Block 97 (owner-rep): "End of day" and "End of shift" are the SAME
@@ -10526,7 +10593,14 @@ http.createServer(async (req, res) => {
       const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const notes = await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=100`);   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056). Block 234: event_type feeds bellLink234's fallback for pre-0056 rows
-      const html = inboxPage(emp, notes);
+      // Block 300: the after-hours cards act — read each session's verdict so the card shows Approve/Deny or the outcome.
+      let ahState300 = {};
+      if (emp.role === "admin") {
+        const ids300 = [...new Set(notes.map(ahIdOf300).filter(Boolean))];
+        if (ids300.length) for (const sRow of await db(`after_hours_session?select=id,started_at,ended_at,signed_off_by,declined_by&id=in.(${ids300.join(",")})`))
+          ahState300[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
+      }
+      const html = inboxPage(emp, notes, ahState300);
       const unreadIds = notes.filter((n) => !n.read_at).map((n) => n.id);
       if (unreadIds.length)
         await db(`notification_log?id=in.(${unreadIds.join(",")})`, { method: "PATCH", body: JSON.stringify({ read_at: new Date().toISOString() }) });
@@ -11329,8 +11403,8 @@ http.createServer(async (req, res) => {
       // (repTog, ahRows, ahPh107 all fetched in the Block-212 waves above.)
       const phxDT = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const afterHours = ahRows.map((s) => ({ id: s.id,
-        who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "?",
-        lineName: (lines.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
+        who: nameOf[s.employee_id] || "?", appr: nameOf[s.approved_by] || "",   // Block 300: no more "says ? approved"
+        lineName: lineName300(s.line_id, lines),   // Block 300: dept buckets read by name (Build time), never "Line 12"
         when: phxDT(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note,
         ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
         hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
@@ -13460,8 +13534,8 @@ self.addEventListener("notificationclick", (e) => {
       const nmA108 = {}; for (const p of emps) nmA108[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
       const phxDTA = (ts) => ts ? new Date(new Date(ts).getTime() - 7 * 3600000).toISOString().slice(5, 16).replace("T", " ") : "";
       const ahAdmin = ahRowsA.map((s) => ({ id: s.id,
-        who: nmA108[s.employee_id] || "?", appr: nmA108[s.approved_by] || "?",
-        lineName: (linesA108.find((l) => l.id === s.line_id) || {}).name || (s.line_id === 10 ? "Shop time" : "Line " + s.line_id),
+        who: nmA108[s.employee_id] || "?", appr: nmA108[s.approved_by] || "",   // Block 300
+        lineName: lineName300(s.line_id, linesA108),   // Block 300
         when: phxDTA(s.started_at), reason: s.reason, plan: s.plan, wrap: s.wrap_note,
         ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
         hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
