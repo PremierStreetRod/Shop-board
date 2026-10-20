@@ -8996,7 +8996,7 @@ async function cabRecap310(b) {
   // ---- idle: shop-open hours on the line with nobody clocked onto it (lunch gap removed) ----
   const closedDays = new Set((cal || []).filter((c) => c.is_open === false).map((c) => c.cal_date));
   const openDays = new Set((cal || []).filter((c) => c.is_open === true).map((c) => c.cal_date));
-  const idleDays = []; let shopMs = 0, idleMs = 0, lunchMs = 0;
+  const idleDays = []; let shopMs = 0, idleMs = 0, lunchMs = 0, shopDays = 0;
   if (startMs) {
     for (let d = new Date(startMs - PHX_OFFSET_MS); ; d = new Date(d.getTime() + 86400000)) {
       const dayKey = d.toISOString().slice(0, 10);
@@ -9007,6 +9007,7 @@ async function cabRecap310(b) {
       if (!isOpen) continue;
       const a = Math.max(dayStart + hrs.open * 3600000, startMs), z = Math.min(dayStart + hrs.close * 3600000, endMs);
       if (z <= a) continue;
+      shopDays++;
       const covered = unionMs310(lineIvs, a, z);
       // the shop's lunch that day = the longest stretch between 11:00 and 14:30 with NOBODY on ANY line, capped at 60 min
       const la = dayStart + 11 * 3600000, lz = dayStart + 14.5 * 3600000;
@@ -9075,94 +9076,136 @@ async function cabRecap310(b) {
     order: b.order_number, cab: b.cab_number || "", customer: b.customer_name || "", family, part: b.part_number || "", line: ln ? ln.name : "", state: b.state,
     startedAt: startMs ? new Date(startMs).toISOString() : null, finishedAt: finishEv ? finishEv.at : null, signedOffAt: signEv ? signEv.at : null, signedOffBy: signEv ? name(signEv.actor_id) : "", signedOff,
     promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((new Date(phxDate(promiseMs) + "T00:00:00Z").getTime() - new Date(phxDate(new Date(signEv.at).getTime()) + "T00:00:00Z").getTime()) / 86400000) : null,   // Block 310b: calendar days, Phoenix
-    daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null,
+    daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays,
     allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
     unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
     kit, options, optionFlags, oddities: odd, noPhotoDays, photoCounts, photoTotal: vis.length, strip: strip.map((p) => p.id), notes, finalNote: b.final_note || "",
   };
 }
-// The one-page render. Screen = the app's dark theme; print = light, letter, one page.
+// The one-page render — Block 311 layout (Daniel 10/20 14:18: "if you were Rob or Ross… WHAT would they want to
+// see at the finish of production for every cab?"). Reading order: the verdict in plain sentences + four colored
+// tiles → who built it → where the hours went (five columns, over/under) → what went sideways (one plain list)
+// → customer selections → photos + notes. No clock times unless they matter. Screen dark, print = one letter page.
 const recapPage310 = (R, emp196 = null) => {
   const e = escH;
   const pct = R.allowed ? Math.round(((R.crewHours - R.allowed) / R.allowed) * 100) : null;
-  const flagsOf = (s) => s.flags.length ? s.flags.map((f) => `<span class="fl">${e(f)}</span>`).join(" ") : "";
-  const stepRow = (s) => `<tr${s.isOpt ? ' class="opt"' : ""}><td>${s.isOpt ? "U" : e(String(s.no))}</td><td>${e(s.name)}${s.source === "rework" || s.source === "fix" ? ' <span class="fl">rework</span>' : ""}</td><td class="n">${h1_310(s.std)}</td><td class="n b">${s.actual == null ? "—" : h1_310(s.actual)}</td><td class="n">${s.avg == null ? `<span class="mut">—${s.avgN ? ` (${s.avgN})` : ""}</span>` : h1_310(s.avg)}</td><td>${e(s.who)}</td><td class="mut">${s.started ? e(phxStamp310(new Date(s.started).toISOString())) : ""}${s.done ? ` → ${e(phxStamp310(new Date(s.done).toISOString()))}` : ""}</td><td>${flagsOf(s)}</td></tr>`;
+  const diffH = R.crewHours - R.allowed;
+  const idlePct = R.idle.shopH ? Math.round((R.idle.idleH / R.idle.shopH) * 100) : 0;
+  const tone = { good: "#1d5a2d", ok: "#5c4a10", bad: "#6e1d1d", flat: "#2c2c2e" };
+  const hoursTone = pct == null ? "flat" : pct <= 0 ? "good" : pct <= 10 ? "ok" : "bad";
+  const timeTone = R.onTimeDays == null ? "flat" : R.onTimeDays >= 0 ? "good" : R.onTimeDays >= -2 ? "ok" : "bad";
+  const idleTone = idlePct <= 8 ? "good" : idlePct <= 15 ? "ok" : "bad";
+  const kitTone = !R.kit.shortAtStart ? "good" : R.kit.clearedAt && !R.kit.clearedAtSignoff ? "ok" : "bad";
+  const dayWord = (n) => `${Math.abs(n)} day${Math.abs(n) === 1 ? "" : "s"}`;
+  const partsN = R.kit.missing ? R.kit.missing.split(/[,;]+/).map((x) => x.trim()).filter(Boolean).length : 0;
+  // --- the verdict sentences
+  const s1 = R.allowed ? `Built in <b>${h1_310(R.crewHours)} crew hours</b> against ${h1_310(R.allowed)} allowed &mdash; <b>${h1_310(Math.abs(diffH))} hours ${diffH <= 0 ? "under" : "over"}</b> (${pct > 0 ? "+" : ""}${pct}%).` : `<b>${h1_310(R.crewHours)} crew hours</b> on the line (no allowance on record).`;
+  const s2 = R.promised ? `Promised ${e(phxDay310(R.promised))}, finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : e(phxDay310(R.signedOffAt))} &mdash; <b>${R.onTimeDays == null ? "" : R.onTimeDays === 0 ? "on the day" : R.onTimeDays > 0 ? `${dayWord(R.onTimeDays)} early` : `${dayWord(R.onTimeDays)} late`}</b>.` : `No promise date on the order; ${R.daysOnLine} days on the line.`;
+  const s3 = R.idle.shopH ? `The line sat empty <b>${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours</b> (${idlePct}%).` : "";
+  const s4 = R.kit.shortAtStart ? `Kit delivered <b>short &mdash; ${partsN || "some"} part${partsN === 1 ? "" : "s"} owed</b>${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? ", never marked complete by warehouse (cleared at sign-off)" : `, cleared ${e(phxDay310(R.kit.clearedAt))}`) : ", never cleared"}.` : R.kit.deliveredAt ? `Kit complete${R.kit.startedByManager ? `; started from the Manager console by ${e(R.kit.startedByManager)}` : ""}.` : "";
+  const tile = (big, small, t) => `<div class="tile ${t}" style="background:${tone[t]}"><b>${big}</b><span>${small}</span></div>`;
+  // --- the steps table: five columns
+  const stepRow = (s) => { const d = s.actual == null ? null : s.actual - s.std; const over = d != null && s.std > 0 ? Math.round((d / s.std) * 100) : null;
+    return `<tr${s.isOpt ? ' class="opt"' : ""}><td class="num">${s.isOpt ? "" : e(String(s.no))}</td><td>${e(s.isOpt ? s.name.replace(/^(UPGRADE|EXTRA)\s*—\s*/i, "") : s.name)}${s.isOpt ? ' <span class="tag">upgrade</span>' : ""}${s.state !== "complete" ? ' <span class="tag warn">not finished</span>' : ""}</td><td class="n">${h1_310(s.std)}</td><td class="n b">${s.actual == null ? "&mdash;" : h1_310(s.actual)}</td><td class="n mut">${s.avg == null ? "&mdash;" : h1_310(s.avg)}</td><td class="n ${d == null ? "mut" : d <= 0 ? "under" : over > 25 ? "over2" : "over"}">${d == null ? "&mdash;" : `${d <= 0 ? "&minus;" : "+"}${h1_310(Math.abs(d))}`}</td></tr>`; };
+  const mainSteps = R.steps.filter((s) => !s.isOpt), optSteps = R.steps.filter((s) => s.isOpt);
+  const sumActual = R.steps.reduce((s, x) => s + (x.actual || 0), 0);
+  // --- what went sideways: one plain list
+  const side = [];
+  const redo = R.steps.filter((s) => s.flags.some((f) => /un-done/.test(f))).map((s) => { const n = Number((s.flags.find((f) => /un-done/.test(f)) || "").replace(/\D/g, "")) || 1; return { label: s.isOpt ? "the " + s.name.replace(/^(UPGRADE|EXTRA)\s*—\s*/i, "").split(":")[0].toLowerCase() : String(s.no), n }; });
+  if (redo.length) { const total = redo.reduce((s, x) => s + x.n, 0); side.push(`Steps checked off, then un-done and redone: ${redo.map((r) => r.label + (r.n > 1 ? ` (${r.n}&times;)` : "")).join(", ")} &mdash; ${total} re-do${total === 1 ? "" : "s"} in all.`); }
+  const fast = R.steps.filter((s) => s.flags.some((f) => /min after start|crew-h on a/.test(f)));
+  if (fast.length) side.push(`Checked off with almost no time on them: ${fast.map((s) => `${s.isOpt ? "upgrade" : "step " + s.no} (${h1_310(s.actual || 0)} h of ${h1_310(s.std)})`).join(", ")} &mdash; either done inside another step or a bookkeeping tap.`);
+  const mistaken = R.steps.filter((s) => s.flags.some((f) => /started by mistake/.test(f)));
+  if (mistaken.length) side.push(`Started by mistake and backed out: ${mistaken.map((s) => s.isOpt ? "upgrade" : "step " + s.no).join(", ")}.`);
+  const mgr = R.steps.filter((s) => s.flags.some((f) => /manager/.test(f)));
+  if (mgr.length) side.push(`Checked off by a manager, not the crew: ${mgr.map((s) => "step " + s.no).join(", ")}.`);
+  const openAtEnd = R.steps.filter((s) => s.state !== "complete");
+  if (openAtEnd.length) side.push(`Signed off with ${openAtEnd.length} step${openAtEnd.length === 1 ? "" : "s"} never finished: ${openAtEnd.map((s) => s.isOpt ? "upgrade" : "step " + s.no).join(", ")}.`);
+  if (R.unattributedH >= 0.5) side.push(`${h1_310(R.unattributedH)} h clocked on the line with no step open (in crew hours, on no step).`);
+  if (R.idle.days.length) { const worst = [...R.idle.days].sort((a, b) => b.idleH - a.idleH)[0]; side.push(`Line empty ${h1_310(R.idle.idleH)} h over ${R.idle.days.length} day${R.idle.days.length === 1 ? "" : "s"}; the biggest gap ${e(worst.day)} (${h1_310(worst.idleH)} h).`); }
+  for (const o of R.oddities) side.push(`${e(o.what)} <span class="mut">(${e(phxDay310(o.at))})</span>`);
+  if (R.noPhotoDays.length) side.push(`No photo on ${R.noPhotoDays.length} shop day${R.noPhotoDays.length === 1 ? "" : "s"}: ${R.noPhotoDays.map(e).join(", ")}.`);
+  const half = Math.ceil(R.options.length / 2);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">
 <title>Cab recap — Order ${e(R.order)}</title>${style}
 <style>
-  .rc{max-width:1000px;margin:0 auto;padding:0 12px}
-  .rc h2{margin:6px 0 2px}.rc .sub{opacity:.7;margin:0 0 10px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:10px 0}
-  .tile{background:#1c1c1e;border:1px solid #2c2c2e;border-radius:12px;padding:10px 12px}.tile b{display:block;font-size:1.5rem}.tile span{opacity:.65;font-size:.85rem}
-  .sec{margin:12px 0 4px;font-weight:800;letter-spacing:.04em;font-size:.85rem;color:#8e8e93;text-transform:uppercase}
-  table.t{width:100%;border-collapse:collapse;font-size:.9rem}table.t th{text-align:left;opacity:.6;font-weight:600;padding:4px 6px;border-bottom:1px solid #2c2c2e}table.t td{padding:4px 6px;border-bottom:1px solid #1c1c1e;vertical-align:top}
-  td.n,th.n{text-align:right;white-space:nowrap}td.b{font-weight:800}.mut{opacity:.55}tr.opt td{color:#c9b6ff}
-  .fl{display:inline-block;background:#3a2a00;color:#ffd60a;border-radius:7px;padding:1px 6px;font-size:.78rem;margin:1px 2px 1px 0}
-  .kv{display:grid;grid-template-columns:150px 1fr;gap:2px 10px;font-size:.92rem}.kv b{opacity:.6;font-weight:600}
-  .strip img{height:92px;border-radius:8px;margin:0 6px 6px 0}
-  ul.od{margin:4px 0;padding-left:18px;font-size:.92rem}ul.od li{margin:2px 0}
-  .noprint{}
+  .rc{max-width:960px;margin:0 auto;padding:0 12px}
+  .rc h2{margin:6px 0 0;font-size:1.5rem}.rc .sub{opacity:.7;margin:2px 0 12px;font-size:1rem}
+  .verdict{font-size:1.15rem;line-height:1.5;margin:0 0 12px}.verdict b{color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 16px}
+  .tile{border-radius:12px;padding:12px 14px;color:#fff}.tile b{display:block;font-size:1.6rem;line-height:1.1}.tile span{display:block;opacity:.85;font-size:.85rem;margin-top:4px}
+  .sec{margin:14px 0 6px;font-weight:800;letter-spacing:.04em;font-size:.82rem;color:#8e8e93;text-transform:uppercase}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  table.t{width:100%;border-collapse:collapse;font-size:.95rem}table.t th{text-align:left;opacity:.6;font-weight:600;padding:5px 6px;border-bottom:1px solid #2c2c2e}table.t td{padding:6px;border-bottom:1px solid #1c1c1e;vertical-align:top}
+  td.n,th.n{text-align:right;white-space:nowrap}td.num{opacity:.6;width:22px}td.b{font-weight:800}.mut{opacity:.55}
+  td.under{color:#30d158;font-weight:700}td.over{color:#ffd60a;font-weight:700}td.over2{color:#ff6b5e;font-weight:800}
+  tr.opt td{color:#c9b6ff}.tag{display:inline-block;background:#2c2c2e;border-radius:6px;padding:0 6px;font-size:.72rem;margin-left:4px;color:#c9b6ff}.tag.warn{color:#ffd60a}
+  ul.od{margin:4px 0;padding-left:18px;font-size:.95rem;line-height:1.45}ul.od li{margin:3px 0}
+  .strip img{height:84px;border-radius:8px;margin:0 6px 6px 0}
+  .crew{font-size:1rem}.crew b{font-size:1.1rem}
+  @media (max-width:640px){.grid{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}}
   @media print{
     @page{size:letter;margin:.45in}
-    html,body{background:#fff!important;color:#000!important;font-size:9.6px;height:auto!important;min-height:0!important;margin:0!important;padding:0!important}
-    .grid{grid-template-columns:repeat(5,1fr);gap:5px;margin:6px 0}.wrap{padding:0}
-    .noprint,.logo,.nav196{display:none!important}
-    .rc{max-width:none;padding:0}.tile{border:1px solid #bbb;background:#fff;padding:6px 8px}.tile b{font-size:1.15rem}
-    table.t{font-size:8.8px}table.t th,table.t td{padding:2px 4px;border-bottom:1px solid #ddd}tr.opt td{color:#4a2a9a}
-    .fl{background:#fff3c2;color:#5a4300;border:1px solid #e0c060}.sec{color:#444;margin:7px 0 2px}.kv{font-size:8.8px;grid-template-columns:120px 1fr}
-    .strip img{height:62px}ul.od{font-size:8.8px}.mut{opacity:.6}
-    a{color:#000;text-decoration:none}
+    html,body{background:#fff!important;color:#000!important;font-size:9.4px;height:auto!important;min-height:0!important;margin:0!important;padding:0!important}
+    .noprint,.logo,.nav196{display:none!important}.wrap{padding:0}
+    .rc{max-width:none;padding:0}.rc h2{font-size:1.3rem}.verdict{font-size:1rem;line-height:1.35;margin-bottom:6px}.verdict b{color:#000}
+    .grid{gap:5px;margin-bottom:8px}.tile{padding:7px 9px;border:1px solid #bbb;color:#000!important;background:#fff!important}.tile b{font-size:1.2rem}.tile span{opacity:.75}
+    .tile.good{border-color:#2e8b57}.tile.ok{border-color:#c9a300}.tile.bad{border-color:#c8102e;border-width:2px}
+    .sec{color:#444;margin:7px 0 2px}table.t{font-size:8.8px}table.t th,table.t td{padding:2px 4px;border-bottom:1px solid #ddd}
+    td.under{color:#1f7a3a}td.over{color:#8a6d00}td.over2{color:#c8102e}tr.opt td{color:#4a2a9a}.tag{background:#eee;color:#4a2a9a}.tag.warn{color:#8a6d00}
+    ul.od{font-size:8.8px;line-height:1.3}.strip img{height:56px}.mut{opacity:.6}a{color:#000;text-decoration:none}.two{gap:12px}
   }
 </style></head>
 <body><div class="rc">
   <div class="logo noprint">SHOP <span>BOARD</span></div>
   <p class="noprint" style="text-align:center;margin:2px 0 8px"><a href="/order/${encodeURIComponent(R.order)}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back to the order</a> &nbsp;&middot;&nbsp; <a href="#" onclick="window.print();return false" style="color:#8ec2f0;font-size:.9rem;text-decoration:none">&#128424; Print / Save as PDF</a></p>
-  <h2>Cab recap &mdash; ORDER ${e(R.order)}${R.cab ? ` &middot; Cab #${e(R.cab)}` : ""}</h2>
-  <p class="sub">${e(R.customer) || "&mdash;"} &middot; ${e(R.family) || e(R.part)} &middot; ${e(R.line)}${R.signedOff ? ` &middot; signed off ${e(phxStamp310(R.signedOffAt))} by ${e(R.signedOffBy)}` : " &middot; <b>not signed off yet</b>"}</p>
+  <h2>ORDER ${e(R.order)}${R.cab ? ` &middot; Cab #${e(R.cab)}` : ""} &mdash; ${e(R.family) || e(R.part)}</h2>
+  <p class="sub">${e(R.customer) || "&mdash;"} &middot; ${e(R.line)} &middot; built by ${R.crew.length ? R.crew.map((c) => e(c.name)).join(" &amp; ") : "&mdash;"}${R.signedOff ? ` &middot; signed off ${e(phxDay310(R.signedOffAt))} by ${e(R.signedOffBy)}` : " &middot; <b>not signed off yet</b>"}</p>
+  <p class="verdict">${s1} ${s2} ${s3} ${s4}</p>
   <div class="grid">
-    <div class="tile"><b>${h1_310(R.crewHours)} h</b><span>crew hours on the line${R.allowed ? ` &middot; <b style="display:inline;font-size:1rem">${pct > 0 ? "+" : ""}${pct}%</b> vs ${h1_310(R.allowed)} allowed` : ""}</span></div>
-    <div class="tile"><b>${h1_310(R.allowed)} h</b><span>allowed &middot; ${h1_310(R.allowedSteps)} steps + ${h1_310(R.allowedOpts)} upgrades${R.allowedFix ? ` (+${h1_310(R.allowedFix)} rework, not counted)` : ""}</span></div>
-    <div class="tile"><b>${h1_310(R.idle.idleH)} h</b><span>line empty of ${h1_310(R.idle.shopH)} shop hours${R.idle.lunchH ? ` (lunch removed)` : ""}</span></div>
-    <div class="tile"><b>${R.daysOnLine == null ? "—" : R.daysOnLine}</b><span>days on the line &middot; ${R.startedAt ? e(phxDay310(R.startedAt)) : "?"} &rarr; ${R.signedOffAt ? e(phxDay310(R.signedOffAt)) : "open"}</span></div>
-    <div class="tile"><b>${R.onTimeDays == null ? "—" : (R.onTimeDays >= 0 ? "On time" : "Late")}</b><span>${R.promised ? `promised ${e(phxDay310(R.promised))}${R.onTimeDays == null ? "" : R.onTimeDays === 0 ? " &middot; finished on the day" : R.onTimeDays > 0 ? ` &middot; ${R.onTimeDays} day${R.onTimeDays === 1 ? "" : "s"} early` : ` &middot; ${-R.onTimeDays} day${R.onTimeDays === -1 ? "" : "s"} late`}` : "no promise date on the order"}</span></div>
+    ${tile(pct == null ? "&mdash;" : `${pct > 0 ? "+" : ""}${pct}%`, pct == null ? "no allowance" : `${h1_310(Math.abs(diffH))} h ${diffH <= 0 ? "under" : "over"} the ${h1_310(R.allowed)} allowed`, hoursTone)}
+    ${tile(R.onTimeDays == null ? "&mdash;" : R.onTimeDays >= 0 ? "On time" : "Late", R.onTimeDays == null ? "no promise date" : R.onTimeDays === 0 ? "finished on the promised day" : R.onTimeDays > 0 ? `${dayWord(R.onTimeDays)} early` : `${dayWord(R.onTimeDays)} past the promise`, timeTone)}
+    ${tile(`${idlePct}%`, `line empty &middot; ${h1_310(R.idle.idleH)} of ${h1_310(R.idle.shopH)} shop hours`, idleTone)}
+    ${tile(R.kit.shortAtStart ? "Short" : "Complete", R.kit.shortAtStart ? `${partsN || "some"} part${partsN === 1 ? "" : "s"} owed at start${R.kit.clearedAt && !R.kit.clearedAtSignoff ? ", later cleared" : ", never cleared"}` : "kit complete at start", kitTone)}
   </div>
-  <div class="sec">Steps &mdash; allowed &middot; this cab &middot; shop average (last 12 cabs)</div>
-  <table class="t"><tr><th>#</th><th>Step</th><th class="n">Allowed</th><th class="n">This cab</th><th class="n">Average</th><th>Who</th><th>When</th><th>Notes</th></tr>
-    ${R.steps.map(stepRow).join("")}
-    <tr><td></td><td><b>Total</b></td><td class="n b">${h1_310(R.allowed)}</td><td class="n b">${h1_310(R.steps.reduce((s, x) => s + (x.actual || 0), 0))}</td><td class="n mut">—</td><td colspan="3" class="mut">${R.unattributedH >= 0.1 ? `<b>${h1_310(R.unattributedH)} h</b> more was clocked on the line with no step open (counted in crew hours, not on a step) &middot; ` : ""}U = upgrade/extra &middot; "This cab" = clocked line hours split across the steps open at the time &middot; Average = median of the last 12 cabs on that step, "—" until 3 cabs</td></tr>
+  <div class="two">
+    <div>
+      <div class="sec">Who built it</div>
+      <div class="crew">${R.crew.length ? R.crew.map((c) => `<div><b>${e(c.name)}</b> &middot; ${h1_310(c.hours)} h &middot; ${Math.round(c.share * 100)}%</div>`).join("") : `<span class="mut">No punches on this line while the cab was on it.</span>`}</div>
+      <div class="mut" style="font-size:.88rem;margin-top:6px">Started ${R.startedAt ? e(phxDay310(R.startedAt)) : "?"} &rarr; finished ${R.finishedAt ? e(phxDay310(R.finishedAt)) : (R.signedOffAt ? e(phxDay310(R.signedOffAt)) : "open")} &middot; ${R.daysOnLine == null ? "" : `${Math.round(R.daysOnLine)} day${Math.round(R.daysOnLine) === 1 ? "" : "s"} on the line (${R.shopDays} shop day${R.shopDays === 1 ? "" : "s"})`}${R.signedOff && R.finishedAt ? ` &middot; signed off ${e(phxDay310(R.signedOffAt))} by ${e(R.signedOffBy)}` : ""}</div>
+    </div>
+    <div>
+      <div class="sec">The kit</div>
+      <div style="font-size:.95rem">${R.kit.startedByManager ? `Started from the Manager console by ${e(R.kit.startedByManager)} ${R.kit.deliveredAt ? e(phxDay310(R.kit.deliveredAt)) : ""}` : R.kit.deliveredAt ? `Delivered ${e(phxDay310(R.kit.deliveredAt))} by ${e(R.kit.deliveredBy)}` : "No delivery on record"}${R.kit.verifiedAt ? ` &middot; verified ${e(phxDay310(R.kit.verifiedAt))} by ${e(R.kit.verifiedBy)}` : " &middot; never verified"}
+      ${R.kit.shortAtStart ? `<div style="margin-top:4px;color:#ff9f0a"><b>Short at start</b> &mdash; ${e(R.kit.missing || "parts not listed")}</div><div class="mut" style="font-size:.88rem">${R.kit.clearedAt ? (R.kit.clearedAtSignoff ? "Never marked complete by warehouse; cleared at sign-off." : `Marked complete ${e(phxDay310(R.kit.clearedAt))} by ${e(R.kit.clearedBy)}.`) : "Never cleared."}</div>` : ""}</div>
+    </div>
+  </div>
+  <div class="sec">Where the hours went &mdash; allowed &middot; this cab &middot; shop average &middot; over / under</div>
+  <table class="t"><tr><th></th><th>Step</th><th class="n">Allowed</th><th class="n">This cab</th><th class="n">Average</th><th class="n">&plusmn;</th></tr>
+    ${mainSteps.map(stepRow).join("")}${optSteps.map(stepRow).join("")}
+    <tr><td></td><td><b>Total</b></td><td class="n b">${h1_310(R.allowed)}</td><td class="n b">${h1_310(sumActual)}</td><td class="n mut">&mdash;</td><td class="n ${sumActual - R.allowed <= 0 ? "under" : "over"}">${sumActual - R.allowed <= 0 ? "&minus;" : "+"}${h1_310(Math.abs(sumActual - R.allowed))}</td></tr>
   </table>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+  <div class="mut" style="font-size:.8rem;margin-top:4px">Average = the last 12 cabs on that step (blank until 3). "This cab" splits the line&#39;s clocked hours across whatever steps were open at the time${R.unattributedH >= 0.1 ? `; ${h1_310(R.unattributedH)} h clocked with nothing open is in crew hours but on no step` : ""}.</div>
+  <div class="sec">What went sideways</div>
+  ${side.length ? `<ul class="od">${side.map((x) => `<li>${x}</li>`).join("")}</ul>` : `<div class="mut">Nothing out of the ordinary on record.</div>`}
+  <div class="two">
     <div>
-      <div class="sec">Crew</div>
-      <table class="t"><tr><th>Who</th><th class="n">Hours</th><th class="n">Share</th></tr>${R.crew.map((c) => `<tr><td>${e(c.name)}</td><td class="n">${h1_310(c.hours)}</td><td class="n">${Math.round(c.share * 100)}%</td></tr>`).join("") || `<tr><td colspan="3" class="mut">No punches on this line while the cab was on it.</td></tr>`}</table>
-      ${R.idle.days.length ? `<div class="sec">Line empty &mdash; by day</div><ul class="od">${R.idle.days.map((d) => `<li>${e(d.day)}: ${h1_310(d.idleH)} of ${h1_310(d.shopH)} h</li>`).join("")}</ul>` : ""}
+      <div class="sec">Customer selections${R.options.length ? ` &mdash; ${R.options.length} confirmed on the cab by ${e(R.options[0].by)} at sign-off` : ""}</div>
+      ${R.options.length ? `<div class="two" style="gap:0 12px"><ul class="od" style="margin:0">${R.options.slice(0, half).map((o) => `<li>${e(o.text)}</li>`).join("")}</ul><ul class="od" style="margin:0">${R.options.slice(half).map((o) => `<li>${e(o.text)}</li>`).join("")}</ul></div>` : `<div class="mut" style="font-size:.9rem">No per-option confirmations on record for this cab.</div>`}
+      ${R.optionFlags.length ? `<div class="mut" style="font-size:.85rem;margin-top:4px">Flags on the cab: ${R.optionFlags.map((f) => e(String(f).slice(0, 120))).join(" &middot; ")}</div>` : ""}
     </div>
     <div>
-      <div class="sec">Kit</div>
-      <div class="kv">
-        <b>Verified</b><span>${R.kit.verifiedAt ? `${e(phxStamp310(R.kit.verifiedAt))} by ${e(R.kit.verifiedBy)}` : "—"}</span>
-        <b>Delivered</b><span>${R.kit.startedByManager ? `started from the Manager console by ${e(R.kit.startedByManager)} ${R.kit.deliveredAt ? e(phxStamp310(R.kit.deliveredAt)) : ""}` : R.kit.deliveredAt ? `${e(phxStamp310(R.kit.deliveredAt))} by ${e(R.kit.deliveredBy)}${R.kit.pullMin != null ? ` &middot; ${R.kit.pullMin < 480 ? `${R.kit.pullMin} min pull` : `pulled over ${h1_310(R.kit.pullMin / 60 / 24)} days`}` : ""}` : "—"}</span>
-        <b>Missing parts at start</b><span>${R.kit.shortAtStart ? `<b style="color:#ff9f0a;opacity:1">YES</b>${R.kit.missing ? ` &mdash; ${e(R.kit.missing)}` : ""}${R.kit.clearedAt ? `<br>cleared ${e(phxStamp310(R.kit.clearedAt))}${R.kit.clearedAtSignoff ? " at sign-off (never tapped by warehouse)" : ` by ${e(R.kit.clearedBy)}`}` : "<br>never cleared"}` : "no"}</span>
-      </div>
-      <div class="sec">Customer selections${R.options.length ? ` &mdash; ${R.options.length} confirmed at sign-off` : ""}</div>
-      ${R.options.length ? `<ul class="od">${R.options.map((o) => `<li>&#10003; ${e(o.text)} <span class="mut">(${e(o.by)})</span></li>`).join("")}</ul>` : `<div class="mut" style="font-size:.9rem">No per-option confirmations on record for this cab${R.signedOff ? " (either the order carried no customer options, or the sign-off predates per-option checks)" : ""}.</div>`}
-      ${R.optionFlags.length ? `<div class="mut" style="font-size:.85rem">Flagged on the cab: ${R.optionFlags.map(e).join(" · ")}</div>` : ""}
-    </div>
-  </div>
-  <div class="sec">Oddities &mdash; build and punches</div>
-  ${R.oddities.length || R.noPhotoDays.length ? `<ul class="od">${R.oddities.map((o) => `<li><span class="mut">${e(phxStamp310(o.at))}</span> &middot; ${e(o.what)}</li>`).join("")}${R.noPhotoDays.length ? `<li>No photo at all on ${R.noPhotoDays.length} shop day${R.noPhotoDays.length === 1 ? "" : "s"}: ${R.noPhotoDays.map(e).join(", ")}</li>` : ""}</ul>` : `<div class="mut" style="font-size:.9rem">Nothing out of the ordinary on record.</div>`}
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-    <div><div class="sec">Photos &mdash; ${R.photoTotal} (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ") || "none"})</div>
-      <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
-      <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a></div>
-    <div><div class="sec">Notes</div>
-      ${R.finalNote ? `<div style="font-size:.9rem"><b>Crew&#39;s final note:</b> ${e(R.finalNote)}</div>` : ""}
+      <div class="sec">Notes from the floor</div>
+      ${R.finalNote ? `<div style="font-size:.95rem"><b>At finish:</b> ${e(R.finalNote)}</div>` : ""}
       ${R.notes.length ? `<ul class="od">${R.notes.map((n) => `<li>${n.task ? `Step ${e(String(n.task))}: ` : ""}${e(n.note)}</li>`).join("")}</ul>` : (R.finalNote ? "" : `<div class="mut" style="font-size:.9rem">No notes.</div>`)}
     </div>
   </div>
-  <p class="mut" style="font-size:.78rem;margin-top:10px">Production phase only &mdash; Body Shop time is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap (the wait for inspection is listed under oddities, not counted). Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the shop&#39;s lunch removed.</p>
+  <div class="sec">Photos &mdash; ${R.photoTotal}${R.photoTotal ? ` (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ")})` : ""}</div>
+  <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
+  <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a>
+  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, lunch removed.</p>
 </div></body></html>`;
 };
 
