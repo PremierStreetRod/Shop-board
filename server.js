@@ -8934,7 +8934,10 @@ async function cabRecap310(b) {
   const ev = (type) => evs.filter((e) => e.event_type === type);
   const startEv = ev("build.start")[0] || null, finishEv = ev("build.finish").slice(-1)[0] || null, signEv = ev("build.production_complete").slice(-1)[0] || null;
   const startMs = b.started_at ? new Date(b.started_at).getTime() : (startEv ? new Date(startEv.at).getTime() : null);
-  const endMs = signEv ? new Date(signEv.at).getTime() : nowMs;
+  // Block 310b: the work window ends at the crew's FINISH tap (the 10/13 report's rule); the wait for
+  // inspection is its own oddity line, not crew time. A cab finished-then-sent-back ends at sign-off.
+  const finishMs = finishEv ? new Date(finishEv.at).getTime() : null;
+  const endMs = finishMs && (!signEv || finishMs <= new Date(signEv.at).getTime()) && !ev("build.rework_assigned").some((e) => new Date(e.at).getTime() > finishMs) ? finishMs : (signEv ? new Date(signEv.at).getTime() : nowMs);
   const signedOff = Boolean(signEv);
   // ---- punches on this line while the cab was on it (voided out, Zz out) ----
   let ivs = [];
@@ -8968,9 +8971,9 @@ async function cabRecap310(b) {
   const undoCount = {}, unstartCount = {};
   for (const e of tEvs) { if (e.type === "undo") undoCount[e.task_id] = (undoCount[e.task_id] || 0) + 1; if (e.type === "unstart") unstartCount[e.task_id] = (unstartCount[e.task_id] || 0) + 1; }
   const mgrDone = new Set(ev("task.manager_completed").map((e) => e.payload.task_id));
-  const steps = tasks.filter((t) => !t.is_background).map((t) => {
+  const steps = tasks.filter((t) => !t.is_background && t.source !== "rework" && t.source !== "fix").map((t) => {   // Block 310b: fix/rework rows are oddities, not steps
     const L = labor[t.id] || null;
-    const isOpt = t.source === "option" || t.source === "extra" || /^UPGRADE/i.test(t.name);
+    const isOpt = t.source === "option" || t.source === "extra" || /^(UPGRADE|EXTRA)\b/i.test(t.name) || String(t.display_no) === "X";
     const key = isOpt ? optKey[norm(String(t.name).replace(/^UPGRADE\s*—\s*/, ""))] : stepKey[norm(t.name)];
     const a = key ? (avg.rows || {})[key] : null;
     const std = Number(t.man_hours) || 0;
@@ -8988,7 +8991,7 @@ async function cabRecap310(b) {
   });
   const allowedSteps = steps.filter((s) => !s.isOpt && s.source !== "rework" && s.source !== "fix").reduce((s, x) => s + x.std, 0);
   const allowedOpts = steps.filter((s) => s.isOpt).reduce((s, x) => s + x.std, 0);
-  const allowedFix = steps.filter((s) => s.source === "rework" || s.source === "fix").reduce((s, x) => s + x.std, 0);
+  const allowedFix = tasks.filter((t) => !t.is_background && (t.source === "rework" || t.source === "fix")).reduce((s, x) => s + (Number(x.man_hours) || 0), 0);
   const allowed = allowedSteps + allowedOpts;
   // ---- idle: shop-open hours on the line with nobody clocked onto it (lunch gap removed) ----
   const closedDays = new Set((cal || []).filter((c) => c.is_open === false).map((c) => c.cal_date));
@@ -9060,6 +9063,7 @@ async function cabRecap310(b) {
   const noPhotoDays = [];
   if (startMs) for (let t = startMs; t <= endMs; t += 86400000) { const k = phxDate(t); const dow = new Date(t - PHX_OFFSET_MS).getUTCDay(); if (dow === 0 || dow === 6 || closedDays.has(k)) continue; if (!photoDays.has(k)) noPhotoDays.push(phxDay310(new Date(t).toISOString())); }
   odd.sort((x, y) => new Date(x.at) - new Date(y.at));
+  for (let i = 0; i < odd.length; i++) { let n = 1; while (i + 1 < odd.length && odd[i + 1].what === odd[i].what && Math.abs(new Date(odd[i + 1].at) - new Date(odd[i].at)) < 120000) { odd.splice(i + 1, 1); n++; } if (n > 1) odd[i].what += ` (×${n})`; }   // Block 310b: Kailey's paired corrections read once
   // ---- photos / notes ----
   const vis = (photos || []).filter((p) => !p.hidden);
   const photoCounts = {}; for (const p of vis) photoCounts[p.kind] = (photoCounts[p.kind] || 0) + 1;
@@ -9070,9 +9074,10 @@ async function cabRecap310(b) {
   return {
     order: b.order_number, cab: b.cab_number || "", customer: b.customer_name || "", family, part: b.part_number || "", line: ln ? ln.name : "", state: b.state,
     startedAt: startMs ? new Date(startMs).toISOString() : null, finishedAt: finishEv ? finishEv.at : null, signedOffAt: signEv ? signEv.at : null, signedOffBy: signEv ? name(signEv.actor_id) : "", signedOff,
-    promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((promiseMs - new Date(signEv.at).getTime()) / 86400000) : null,
+    promised: b.promised_finish || null, onTimeDays: promiseMs && signEv ? Math.round((new Date(phxDate(promiseMs) + "T00:00:00Z").getTime() - new Date(phxDate(new Date(signEv.at).getTime()) + "T00:00:00Z").getTime()) / 86400000) : null,   // Block 310b: calendar days, Phoenix
     daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null,
     allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
+    unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
     kit, options, optionFlags, oddities: odd, noPhotoDays, photoCounts, photoTotal: vis.length, strip: strip.map((p) => p.id), notes, finalNote: b.final_note || "",
   };
@@ -9121,12 +9126,12 @@ const recapPage310 = (R, emp196 = null) => {
     <div class="tile"><b>${h1_310(R.allowed)} h</b><span>allowed &middot; ${h1_310(R.allowedSteps)} steps + ${h1_310(R.allowedOpts)} upgrades${R.allowedFix ? ` (+${h1_310(R.allowedFix)} rework, not counted)` : ""}</span></div>
     <div class="tile"><b>${h1_310(R.idle.idleH)} h</b><span>line empty of ${h1_310(R.idle.shopH)} shop hours${R.idle.lunchH ? ` (lunch removed)` : ""}</span></div>
     <div class="tile"><b>${R.daysOnLine == null ? "—" : R.daysOnLine}</b><span>days on the line &middot; ${R.startedAt ? e(phxDay310(R.startedAt)) : "?"} &rarr; ${R.signedOffAt ? e(phxDay310(R.signedOffAt)) : "open"}</span></div>
-    <div class="tile"><b>${R.onTimeDays == null ? "—" : (R.onTimeDays >= 0 ? "On time" : "Late")}</b><span>${R.promised ? `promised ${e(phxDay310(R.promised))}${R.onTimeDays == null ? "" : R.onTimeDays >= 0 ? ` &middot; ${R.onTimeDays} day${R.onTimeDays === 1 ? "" : "s"} early` : ` &middot; ${-R.onTimeDays} day${R.onTimeDays === -1 ? "" : "s"} late`}` : "no promise date on the order"}</span></div>
+    <div class="tile"><b>${R.onTimeDays == null ? "—" : (R.onTimeDays >= 0 ? "On time" : "Late")}</b><span>${R.promised ? `promised ${e(phxDay310(R.promised))}${R.onTimeDays == null ? "" : R.onTimeDays === 0 ? " &middot; finished on the day" : R.onTimeDays > 0 ? ` &middot; ${R.onTimeDays} day${R.onTimeDays === 1 ? "" : "s"} early` : ` &middot; ${-R.onTimeDays} day${R.onTimeDays === -1 ? "" : "s"} late`}` : "no promise date on the order"}</span></div>
   </div>
   <div class="sec">Steps &mdash; allowed &middot; this cab &middot; shop average (last 12 cabs)</div>
   <table class="t"><tr><th>#</th><th>Step</th><th class="n">Allowed</th><th class="n">This cab</th><th class="n">Average</th><th>Who</th><th>When</th><th>Notes</th></tr>
     ${R.steps.map(stepRow).join("")}
-    <tr><td></td><td><b>Total</b></td><td class="n b">${h1_310(R.allowed)}</td><td class="n b">${h1_310(R.steps.reduce((s, x) => s + (x.actual || 0), 0))}</td><td class="n mut">—</td><td colspan="3" class="mut">U = upgrade &middot; "This cab" = clocked line hours split across the steps open at the time (Block 258 rule) &middot; Average = median of the last 12 cabs on that step, "—" until 3 cabs</td></tr>
+    <tr><td></td><td><b>Total</b></td><td class="n b">${h1_310(R.allowed)}</td><td class="n b">${h1_310(R.steps.reduce((s, x) => s + (x.actual || 0), 0))}</td><td class="n mut">—</td><td colspan="3" class="mut">${R.unattributedH >= 0.1 ? `<b>${h1_310(R.unattributedH)} h</b> more was clocked on the line with no step open (counted in crew hours, not on a step) &middot; ` : ""}U = upgrade/extra &middot; "This cab" = clocked line hours split across the steps open at the time &middot; Average = median of the last 12 cabs on that step, "—" until 3 cabs</td></tr>
   </table>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div>
@@ -9138,11 +9143,11 @@ const recapPage310 = (R, emp196 = null) => {
       <div class="sec">Kit</div>
       <div class="kv">
         <b>Verified</b><span>${R.kit.verifiedAt ? `${e(phxStamp310(R.kit.verifiedAt))} by ${e(R.kit.verifiedBy)}` : "—"}</span>
-        <b>Delivered</b><span>${R.kit.startedByManager ? `started from the Manager console by ${e(R.kit.startedByManager)} ${R.kit.deliveredAt ? e(phxStamp310(R.kit.deliveredAt)) : ""}` : R.kit.deliveredAt ? `${e(phxStamp310(R.kit.deliveredAt))} by ${e(R.kit.deliveredBy)}${R.kit.pullMin != null ? ` &middot; ${R.kit.pullMin} min pull` : ""}` : "—"}</span>
+        <b>Delivered</b><span>${R.kit.startedByManager ? `started from the Manager console by ${e(R.kit.startedByManager)} ${R.kit.deliveredAt ? e(phxStamp310(R.kit.deliveredAt)) : ""}` : R.kit.deliveredAt ? `${e(phxStamp310(R.kit.deliveredAt))} by ${e(R.kit.deliveredBy)}${R.kit.pullMin != null ? ` &middot; ${R.kit.pullMin < 480 ? `${R.kit.pullMin} min pull` : `pulled over ${h1_310(R.kit.pullMin / 60 / 24)} days`}` : ""}` : "—"}</span>
         <b>Missing parts at start</b><span>${R.kit.shortAtStart ? `<b style="color:#ff9f0a;opacity:1">YES</b>${R.kit.missing ? ` &mdash; ${e(R.kit.missing)}` : ""}${R.kit.clearedAt ? `<br>cleared ${e(phxStamp310(R.kit.clearedAt))}${R.kit.clearedAtSignoff ? " at sign-off (never tapped by warehouse)" : ` by ${e(R.kit.clearedBy)}`}` : "<br>never cleared"}` : "no"}</span>
       </div>
       <div class="sec">Customer selections${R.options.length ? ` &mdash; ${R.options.length} confirmed at sign-off` : ""}</div>
-      ${R.options.length ? `<ul class="od">${R.options.map((o) => `<li>&#10003; ${e(o.text)} <span class="mut">(${e(o.by)})</span></li>`).join("")}</ul>` : `<div class="mut" style="font-size:.9rem">No customer options on this order${R.signedOff ? " (acknowledged at sign-off)" : ""}.</div>`}
+      ${R.options.length ? `<ul class="od">${R.options.map((o) => `<li>&#10003; ${e(o.text)} <span class="mut">(${e(o.by)})</span></li>`).join("")}</ul>` : `<div class="mut" style="font-size:.9rem">No per-option confirmations on record for this cab${R.signedOff ? " (either the order carried no customer options, or the sign-off predates per-option checks)" : ""}.</div>`}
       ${R.optionFlags.length ? `<div class="mut" style="font-size:.85rem">Flagged on the cab: ${R.optionFlags.map(e).join(" · ")}</div>` : ""}
     </div>
   </div>
@@ -9157,7 +9162,7 @@ const recapPage310 = (R, emp196 = null) => {
       ${R.notes.length ? `<ul class="od">${R.notes.map((n) => `<li>${n.task ? `Step ${e(String(n.task))}: ` : ""}${e(n.note)}</li>`).join("")}</ul>` : (R.finalNote ? "" : `<div class="mut" style="font-size:.9rem">No notes.</div>`)}
     </div>
   </div>
-  <p class="mut" style="font-size:.78rem;margin-top:10px">Production phase only &mdash; Body Shop time is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} between the cab&#39;s start and sign-off. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the shop&#39;s lunch removed.</p>
+  <p class="mut" style="font-size:.78rem;margin-top:10px">Production phase only &mdash; Body Shop time is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap (the wait for inspection is listed under oddities, not counted). Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the shop&#39;s lunch removed.</p>
 </div></body></html>`;
 };
 
