@@ -2378,6 +2378,7 @@ const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
 const prepStrip301 = (b, canPrep, clockedIn) => {
   const p = b.prep || { state: "none", hrs: 0, std: 3, by: "", mine: false };
   const chip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready${p.hrs ? ` &middot; ${p.hrs}h` : ""}${p.by ? ` &middot; ${whEsc288(p.by)}` : ""}</span>`
+    : p.state === "in_progress" && !p.mine && !p.active ? `<span class="chip" style="background:#2a2200;border-color:#7a5900;color:#ffd60a">&#9208; Panels paused &middot; ${p.hrs}h so far of ${p.std}h</span>`   // Block 305: parked, nobody on it
     : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;border-color:#7a5900;color:#ffd60a">&#9881; Panels in progress &middot; ${p.hrs}h of ${p.std}h</span>`
     : `<span class="chip unv">Panels not prepped &middot; ${p.std}h allowed</span>`;
   if (!canPrep || p.state === "done") return `<div class="prep301">${chip}</div>`;
@@ -2385,8 +2386,8 @@ const prepStrip301 = (b, canPrep, clockedIn) => {
   if (p.mine) return `<div class="prep301 on"><b style="color:#ffd60a">&#9881; You're prepping this cab &middot; ${p.hrs}h</b>
       <button class="b grn"${dis} onclick="post('/api/prep/done',{build_id:'${b.id}'},this)">&#10003; Panels ready</button>
       <button class="b mv" onclick="document.getElementById('ppf-${b.id}').click()">&#128247; Photo</button><input type="file" id="ppf-${b.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="prepPhoto302('${b.id}',this)">
-      <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">Back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
-  return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "Keep prepping" : "Prep panels &mdash; start"}</button></div>`;
+      <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">&#9208; Pause &mdash; back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
+  return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "&#9654; Resume prepping" : "Prep panels &mdash; start"}</button></div>`;
 };
 const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -9947,7 +9948,12 @@ http.createServer(async (req, res) => {
         const [prepHrs301, stdRows301, whoRows301] = await Promise.all([prepHours301(prepIds301), db(`prep_standard?select=family,hours`).catch(() => []), prepIds301.length ? db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []) : []]);
         const stdOf301 = Object.fromEntries((stdRows301 || []).map((r) => [r.family, Number(r.hours)]));
         const whoOf301 = Object.fromEntries((whoRows301 || []).map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`.trim()]));
-        buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id) }; });
+        // Block 305 (Daniel: a PAUSE for Eric): a cab is "paused" only when NOBODY with the prep flag is
+        // clocked onto it right now — one tiny read per prepper (Eric today), so the chip stays honest
+        // if a second person ever gets the flag.
+        const lastPreppers305 = await Promise.all((whoRows301 || []).filter((e2) => e2.id !== empId).map((e2) => db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${e2.id}&order=claimed_at.desc&limit=1`).then((r) => r[0]).catch(() => null)));
+        const activeOn305 = new Set(lastPreppers305.filter((ev) => ev && ev.kind === "clock_in" && ev.line_id === PREP_LINE_ID && ev.fix_build_id).map((ev) => ev.fix_build_id)); if (myPrep301 && myPrep301.build_id) activeOn305.add(myPrep301.build_id);
+        buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id), active: activeOn305.has(b.id) }; });
         const prep301 = { can: canPrep301, mine: myPrep301 };
         const rowsW = linesW.map((l) => ({ line: l,
           active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
