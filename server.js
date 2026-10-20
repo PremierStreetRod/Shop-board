@@ -1523,10 +1523,22 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        in any cab's pace math). Lines are worked via on/off taps AFTER the
        punch — the line tap is no longer the paycheck punch. Shop time stays,
        reachable from the work-a-line picker. -->
+  <!-- Block 297 (Daniel, Mon 10/19 — Mel's lost line, Andrew's afternoons):
+       ONE TAP clocks you in AND onto your line. The Block 98b two-step (CLOCK
+       IN onto 14, then "pick a line") lost the second tap 13 times in three
+       weeks — the reload after the first tap ate it, and the screen that came
+       back led with Lunch / End of day, so it looked finished. Usual lines
+       first and big; Shop time beside them (jig, meetings, in-house work);
+       "without a line yet" small for the rare case. Same /api/clock/in, one
+       punch on the line — what Warehouse, Build and Body already do. -->
   <div id="in" style="display:${state.clockedIn ? "none" : "block"}">
-    <div style="text-align:center">
-      <button class="name" data-line="14" style="display:inline-block;width:auto;background:#1d5a2d;border-color:#30d158;font-size:1.3rem;padding:18px 44px">CLOCK IN<small>start your work day — then tap onto a line</small></button>
+    <p class="msg">Clock in — where are you working?</p>
+    <div class="grid">
+      ${(usualLines.length ? usualLines : otherLines).map((l) => `<button class="name" data-line="${l.id}" style="background:#1d5a2d;border-color:#30d158;font-size:1.15rem;padding:18px 14px">CLOCK IN<small>${l.name}</small></button>`).join("")}
+      <button class="name" data-line="10" style="background:#1d3a24;border-color:#30d158;font-size:1.15rem;padding:18px 14px">CLOCK IN<small>Shop time — jig, meetings, in-house work</small></button>
     </div>
+    ${usualLines.length && otherLines.length ? `<details style="margin-top:8px"><summary style="color:#8e8e93;cursor:pointer;list-style:none;text-align:center">Another line &#9656;</summary><div class="grid" style="margin-top:8px">${otherLines.map((l) => `<button class="name" data-line="${l.id}" style="opacity:.85">CLOCK IN<small>${l.name}</small></button>`).join("")}</div></details>` : ""}
+    <p style="text-align:center;margin-top:10px"><a href="#" data-line="14" style="color:#8e8e93;font-size:.9rem">Clock in without a line yet</a></p>
   </div>
 
   <!-- Q112: AFTER HOURS — same clock, plus its governance. This panel only
@@ -1572,6 +1584,16 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div id="out" style="display:${state.clockedIn ? "block" : "none"}">
     <!-- Block 195 (owner): clock-out kinds come FIRST — same shape as the
          warehouse/body/build pages he likes. Line switching moved BELOW. -->
+    <!-- Block 297: EXCEPT when you're on the clock but not on a line (14) — then
+         the line picker leads, with a plain banner, and the outs move below.
+         Nobody should see Lunch / End of day as the first thing after clocking in. -->
+    ${state.lineId === 14 ? `<div id="offline297" style="background:#2a2200;border:1px solid #7a5900;border-radius:14px;padding:14px 16px;margin:0 0 12px;text-align:center">
+      <b style="color:#ffd60a">You're on the clock but not on a line yet.</b><div style="opacity:.8;font-size:.95rem;margin-top:4px">Tap your line to start working — or Shop time for the jig, meetings and in-house work.</div></div>
+    <div class="grid">
+      ${[...usualLines, ...otherLines].map((l) => `<button class="name" style="background:#1d5a2d;border-color:#30d158" data-switch="${l.id}">${l.name}</button>`).join("")}
+      <button class="name" style="background:#1d3a24;border-color:#30d158" data-switch="10">Shop time<small>jig, meetings, in-house work</small></button>
+    </div>
+    <p class="msg" style="margin-top:18px;opacity:.7">&hellip;or clock out:</p>` : ""}
     ${ah.open ? `<div id="wrap107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:14px;margin:6px 0 12px;text-align:left">
       <p class="msg" style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
       <input id="wrapnote" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:16px">   <!-- Block 169: 16px stops iOS Safari's auto-zoom-on-focus (it zooms any input under 16px) -->
@@ -1601,12 +1623,12 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
     <div id="hoth97" style="display:none;margin-top:10px;text-align:center"><input id="hothn97" maxlength="120" placeholder="quick note — why / what kind" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;width:60%;font-size:16px"> <button class="name" id="hothgo97" style="display:inline-block;width:auto;padding:12px 22px">Clock out</button></div>
     <!-- Q111: meeting over, or shop work done? One tap moves you — the
          server does the out+in as a single audited second (Q107). -->
-    <p class="msg" style="margin-top:18px">${state.lineId === 14 ? "&hellip;or pick a line to start working" : "&hellip;or work a line — tap to jump on"}</p>
+    ${state.lineId === 14 ? "" : `<p class="msg" style="margin-top:18px">&hellip;or work a line — tap to jump on</p>
     <div class="grid">
-      ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" ${state.lineId === 14 ? "" : 'style="opacity:.8"'} data-switch="${l.id}">${l.name}</button>`).join("")}
+      ${[...usualLines, ...otherLines].filter((l) => l.id !== state.lineId).map((l) => `<button class="name" style="opacity:.8" data-switch="${l.id}">${l.name}</button>`).join("")}
       ${state.lineId === 10 ? "" : `<button class="name" style="opacity:.8" data-switch="10">Shop time</button>`}
-      ${state.lineId === 14 ? "" : `<button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>`}
-    </div>
+      <button class="name" style="opacity:.8;border-color:#7a5900" data-switch="14">&#9208; Off the line — stay on the clock</button>
+    </div>`}
   </div>
 
   <!-- Q92: request time off — a date range + a reason, right from the phone.
@@ -1674,6 +1696,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   let ahLine = 0, ahReason = "${(ah.lastReason || "").replace(/"/g, '\\"')}";   // Block 214/215: last reason pre-picked; approver question retired
   document.getElementById("in").addEventListener("click",(e)=>{
     const b=e.target.closest("[data-line]"); if(!b) return;
+    if (b.tagName === "A") e.preventDefault();   // Block 297: the small "without a line yet" link
     if (AH) { ahLine = Number(b.dataset.line);
       document.getElementById("ahline").textContent = ahLine === 10 ? "Shop time" : "clocking into a line";
       document.getElementById("in").style.display = "none";
@@ -3993,7 +4016,7 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
 const tcc12_293 = (hhmm) => { if (!hhmm) return ""; const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`; };   // Block 293: folded-day summaries read 7:00 AM–11:00 AM
 const ocLane293 = (onClock) => onClock.length ? `
   <div class="lane" id="oc"><h3>On the clock</h3>
-    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
+    ${onClock.map((p) => `<div class="qrow">${p.name} · ${p.offMin297 != null ? `<span style="color:#ffd60a;font-weight:700">Off the line ${p.offMin297} min</span>` : p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">For the tap somebody forgot. Anything still open 4+ hrs past day end closes itself automatically.</div>
   </div>` : "";
@@ -4022,7 +4045,7 @@ const FOLD_CSS_295 = `<style>
 // endpoints as the always-open lanes everyone else sees; only the wrapper changed.
 const prodLanes295 = (onClock, longRunners, recentDone) => `
   ${fold295("oc", "On the clock", "Who's punched in right now. The Clock out button is only for the tap somebody forgot.",
-    onClock.length ? onClock.map((p) => `<div class="qrow">${p.name} · ${p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
+    onClock.length ? onClock.map((p) => `<div class="qrow">${p.name} · ${p.offMin297 != null ? `<span style="color:#ffd60a;font-weight:700">Off the line ${p.offMin297} min</span>` : p.line} · since ${p.since_hhmm}${p.open ? ` · <span style="${p.open >= 3 ? "color:#ffd60a;font-weight:700" : "opacity:.6"}">${p.open} step${p.open > 1 ? "s" : ""} open</span>` : ""}
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="forceOut('${p.id}',this)">Clock out</button></div>`).join("") : `<div style="opacity:.6">Nobody is on the clock.</div>`, onClock.length)}
   ${fold295("rl", "Running long", "Steps that have been open 4+ hours. Just a glance — usually someone went to help elsewhere. Changes no math.",
     longRunners.length ? longRunners.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
@@ -4397,7 +4420,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         ${tc.punches.map((p) => `<tr style="${p.voided ? "text-decoration:line-through;opacity:.45" : ""}">
           <td>${p.hhmm}</td>
           <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}</td>
-          <td>${p.lineName}</td>
+          <td>${isAdmin && !p.voided && p.kind === "clock_in" && p.line_id !== FIX_LINE_ID ? `<select id="tcl-${p.id}" style="max-width:11em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:5px">${[...tc.lines, { id: 14, name: "Off the line" }].map((l) => `<option value="${l.id}"${l.id === p.line_id ? " selected" : ""}>${l.name}</option>`).join("")}</select> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcReline297('${p.id}'))">Change line</button>` : p.lineName}</td>
           <td style="opacity:.7">${p.voided ? "VOIDED" : p.corrected ? "corrected" : p.added ? "added" : ""}${p.note ? `: ${p.note}` : ""}</td>
           <td>${p.voided ? "" : `<input type="time" id="tcm-${p.id}" value="${p.hhmm}" step="60"> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcMove('${p.id}'))">Move</button>`}</td>
           <td>${p.voided ? "" : `<button class="btn red" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcVoid('${p.id}'))">Void</button>`}</td>
@@ -4836,6 +4859,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   function tcMove(id){ const d=document.getElementById("tc-date").value, t=document.getElementById("tcm-"+id).value;
     if(!t) return; tcPost({ action:"move", punch_id:id, new_at: tcIso(d,t) }); }
   function tcVoid(id){ tcPost({ action:"void", punch_id:id }); }
+  // Block 297 (Mel's lost line tap): an admin puts a clock-in on the line it should have been on — time untouched, pay untouched.
+  function tcReline297(id){ var sel = document.getElementById("tcl-"+id); if (!sel) return; tcPost({ action:"reline", punch_id:id, line_id:Number(sel.value) }); }
   function tcAdd(){ const d=document.getElementById("tc-date").value;
     const i=document.getElementById("tca-in").value, o=document.getElementById("tca-out").value;
     if(!i){ document.getElementById("err").textContent="The IN time is needed"; return; }
@@ -11162,6 +11187,7 @@ http.createServer(async (req, res) => {
         .map((e) => { const emp = empNames.find((x) => x.id === e.employee_id);
           return emp ? { id: e.employee_id, name: `${emp.first_name} ${emp.last_name}`,
             line: e.line_id === SHOP_LINE_ID ? "Shop time" : e.line_id === FIX_LINE_ID ? "Fix work" : lname190[e.line_id] || "",   // Block 190: dept-time punches show their area name
+            offMin297: e.line_id === 14 ? Math.max(0, Math.round((Date.now() - new Date(e.claimed_at).getTime()) / 60000)) : null,   // Block 297: on the clock, not on a line — how long
             open: openBy159[e.employee_id] || 0,
             // HH:MM in Phoenix time (UTC-7 fixed, Q82) — rendered server-side.
             since_hhmm: new Date(new Date(e.claimed_at).getTime() - 7 * 3600000).toISOString().slice(11, 16) } : null; })
@@ -11251,7 +11277,7 @@ http.createServer(async (req, res) => {
         const fxIds272 = [...new Set(tcRawP212.filter((p2) => p2.fix_build_id).map((p2) => p2.fix_build_id))];
         const fxNames272 = {};
         if (fxIds272.length) for (const bFx of await db(`build?select=id,order_number&id=in.(${fxIds272.join(",")})`)) fxNames272[bFx.id] = bFx.order_number;
-        tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at),
+        tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at), line_id: p2.line_id,   // Block 297: line_id feeds the admin "Change line" control
           lineName: p2.line_id === FIX_LINE_ID ? "Fix work" + (fxNames272[p2.fix_build_id] ? " — " + fxNames272[p2.fix_build_id] : "")
             : p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
@@ -12876,8 +12902,34 @@ http.createServer(async (req, res) => {
       if (!note || !String(note).trim()) return json(400, { ok: false, error: "Say why — the note is required" });
       // Q115: reject malformed ids before they reach Postgres (a non-uuid id
       // used to throw a 500). The UI only ever sends real ids.
-      if ((action === "move" || action === "void") && !isUuid(punch_id))
+      if ((action === "move" || action === "void" || action === "reline") && !isUuid(punch_id))
         return json(400, { ok: false, error: "That punch reference isn't valid" });
+      // Block 297 (Daniel, 10/19 — Mel's 12:04 landed "Off the line", Andrew's three afternoons too):
+      // RELINE puts a clock-in on the line it should have been on. Time never moves, so pay math is
+      // untouched; only the cab/line attribution (pace, step actuals, Shop time) changes. Admin only.
+      // The switch-out that closed the stint on the old line (an out_early carrying the old line_id,
+      // written in the same second as the next in) is carried along so the record reads clean.
+      if (action === "reline") {
+        if (meP.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+        if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "Pick a valid line" });
+        const [pR] = await db(`clock_event?select=id,employee_id,kind,claimed_at,line_id&id=eq.${punch_id}&voided=is.false`);
+        if (!pR) return json(404, { ok: false, error: "Punch not found" });
+        if (pR.kind !== "clock_in") return json(400, { ok: false, error: "Only a clock-in carries the line — pick the IN punch" });
+        if (Number(line_id) === FIX_LINE_ID || pR.line_id === FIX_LINE_ID) return json(400, { ok: false, error: "Fix work punches carry a cab — use the Fix work tools" });
+        const [lR] = await db(`line?select=id,name&id=eq.${Number(line_id)}`);
+        if (!lR) return json(400, { ok: false, error: "No such line" });
+        if (Number(line_id) === pR.line_id) return json(400, { ok: false, error: "That punch is already on " + lR.name });
+        const nowIso = new Date(nowP).toISOString();
+        await db(`clock_event?id=eq.${pR.id}`, { method: "PATCH", body: JSON.stringify({ line_id: Number(line_id), corrected_by: meId, corrected_at: nowIso, correction_note: note }) });
+        const [nxR] = await db(`clock_event?select=id,kind,line_id,claimed_at&voided=is.false&employee_id=eq.${pR.employee_id}&claimed_at=gt.${encodeURIComponent(pR.claimed_at)}&order=claimed_at.asc&limit=1`);
+        let carried = null;
+        if (nxR && nxR.kind !== "clock_in" && nxR.line_id === pR.line_id && phxDate(new Date(nxR.claimed_at).getTime()) === phxDate(new Date(pR.claimed_at).getTime())) {
+          await db(`clock_event?id=eq.${nxR.id}`, { method: "PATCH", body: JSON.stringify({ line_id: Number(line_id), corrected_by: meId, corrected_at: nowIso, correction_note: note }) });
+          carried = nxR.id;
+        }
+        logEvent("punch.relined", meId, { punch_id: pR.id, employee_id: pR.employee_id, at: pR.claimed_at, from_line: pR.line_id, to_line: Number(line_id), carried_out: carried, note });
+        return json(200, { ok: true });
+      }
       if (action === "add" && !isUuid(employee_id))
         return json(400, { ok: false, error: "That person reference isn't valid" });
       if (action === "add" && !Number.isInteger(Number(line_id)))
