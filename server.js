@@ -3880,7 +3880,7 @@ async function optionList255(b, allow255 = null) {
   if (!det255 || !det255.features.length) return [];
   return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = []) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
   const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
@@ -3912,6 +3912,13 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   <h2>ORDER ${escH(b.order_number)}${b.cab_number ? ` · Cab #${escH(b.cab_number)}` : ""}</h2>
   ${isAdmin97 && (b.state === "production_complete" || b.state === "complete") ? `<p style="text-align:center;margin:0 0 10px"><a href="/order/${encodeURIComponent(b.order_number)}/recap" style="display:inline-block;background:#1b2a1e;border:1px solid #30d158;border-radius:10px;color:#9be7b0;padding:10px 18px;text-decoration:none;font-weight:700">&#128196; Cab recap &mdash; one page for the owners</a></p>` : ""}   <!-- Block 310: available once production signs the cab off -->
   ${isAdmin97 ? `<p style="text-align:center;margin:0 0 12px"><a href="/report/progress/${encodeURIComponent(b.order_number)}" style="display:inline-block;background:#1c1c1e;border:1px solid #4a90d9;border-radius:10px;color:#8ec2f0;padding:10px 18px;text-decoration:none;font-weight:700">&#128247; Customer progress report</a></p>` : ""}   <!-- Block 210: the build-report the front office sends the owner -->
+  ${isAdmin97 && moveLines318.length && ["upcoming", "on_hold"].includes(String(b.state)) ? `<div class="lane" id="move318" style="border-color:#4a90d9">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">BUILD THIS CAB ON A DIFFERENT LINE</div>
+    <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">Now: <b>${escH(lineName || ("Line " + b.line_id))}</b>${b.line_override ? ` <span style="color:#4a90d9">· moved here by an admin</span>` : ""}. The cab keeps its own ${escH(family || "family")} steps, hours and upgrades wherever it builds; only the line changes — its kit goes to that line's warehouse lane, that line's crew starts it, and the promise uses that line's people planned. Only an unstarted cab can move.</div>
+    <select id="mv318" style="font-size:1rem;padding:8px;border-radius:8px;background:#111;color:#fff;border:1px solid var(--line)">${moveLines318.map((l) => `<option value="${l.id}" ${Number(l.id) === Number(b.line_id) ? "selected" : ""}>${escH(l.name)} · ${l.people} ${l.people === 1 ? "person" : "people"} planned</option>`).join("")}</select>
+    <button class="b" style="margin-left:8px" onclick="moveLine318('${b.id}',this)">Move it</button>
+    <div class="msg err" id="mvmsg318" style="margin-top:6px"></div>
+  </div>` : ""}
   ${share296 ? shareLane296(b, share296.photoCount, share296.links, share296.myMobile) : ""}
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -4018,6 +4025,18 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   </div>` : ""}
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p>
   <script>
+  // Block 318: move an unstarted cab to another production line (admin). Two taps on purpose.
+  async function moveLine318(bid, btn){
+    const sel = document.getElementById("mv318"), m = document.getElementById("mvmsg318"); const to = Number(sel.value); const name = sel.options[sel.selectedIndex].textContent.split(" · ")[0];
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o = btn.textContent; btn.textContent = "Move to " + name + "? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o; }, 5000); return; }
+    btn.disabled = true; m.textContent = "Moving…";
+    try {
+      const r = await fetch("/api/admin/build/line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, line_id: to }) });
+      const out = await r.json();
+      if (out.ok) { m.style.color = "#30d158"; m.textContent = "Moved — it is now in " + name + "'s queue. Reloading…"; return location.reload(); }
+      m.textContent = out.error || "Couldn't move it"; btn.disabled = false; btn.dataset.armed = "";
+    } catch (e) { m.textContent = "Network hiccup — try again"; btn.disabled = false; btn.dataset.armed = ""; }
+  }
   async function unstart97(bid, btn){
     if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o97; }, 4000); return; }
     btn.disabled = true;
@@ -7544,7 +7563,7 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status&order=id.asc`);
+  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status,line_override&order=id.asc`);   // Block 318: +line_override
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   // Block 176 (Fable-5): index builds by their Coyote ROOT order number too, so
   // the stuck-cab detector below can find a cab whether it was placed under the
@@ -7629,6 +7648,12 @@ function collapseCabs151(cabParts) {
     if (e.rows > 1) dupes.push({ part: e.cp.part, rows: e.rows, qty: e.qty });   // Block 161 (owner-rep ruling): a clean qty>1 is TRUSTED data — split .1/.2 silently, no flag; only a part duplicated across ROWS (source contradicting its own qty convention, the 23305 edit pattern) is worth a human's eyes
   }
   return { cabs: out, dupes };
+}
+// Block 318: an admin's "Move to line" sticks — the sync keeps the family's line ONLY when no
+// override is on the cab (an override that names the family's own line reads the same as none).
+function syncLine318(existing, familyLine) {
+  const ov = existing && existing.line_override != null ? Number(existing.line_override) : null;
+  return Number.isInteger(ov) && ov > 0 ? ov : familyLine;
 }
 function buildSyncPlan(ctx) {
   const items = [];
@@ -7799,7 +7824,7 @@ async function syncRun(apply, actorId) {
           // Block 120: a NOT-started cab follows Coyote — Hold sets it aside
           // (state on_hold, off the line-up), Queued returns it to upcoming in
           // its line's queue and clears the note.
-          const patch = { line_id: t.line_id, part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
+          const patch = { line_id: syncLine318(b, t.line_id), part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
           sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
         }
@@ -9965,7 +9990,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready"];   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved"];   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab."));
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -11555,8 +11580,16 @@ http.createServer(async (req, res) => {
         share296 = { photoCount: phC296.length, myMobile: !!(me296[0] && String(me296[0].mobile || "").replace(/\D/g, "").length >= 10),
           links: lk296.map((l) => ({ id: l.id, url: `https://shopboard.premierstreetrod.com/p/${l.token}`, by: nm296[l.created_by] || "", made: dayShort291(phxDate(new Date(l.created_at).getTime())), good: dayShort291(phxDate(new Date(l.expires_at).getTime())), views: Number(l.views || 0) })) };
       }
+      // Block 318: the admin "Move to line" picker — every ENABLED line a cab family routes to (never the Shop-time / Warehouse buckets)
+      let moveLines318 = [];
+      if (isAdmin97r && ["upcoming", "on_hold"].includes(String(bO.state))) {
+        try { const [lnAll318, prodAll318] = await Promise.all([db(`line?select=id,name,enabled,people_planned&enabled=is.true&order=id`), db(`product?select=lines&retired=is.false`)]);
+          const routed318 = new Set(prodAll318.flatMap((p2) => p2.lines || []).map(Number));
+          moveLines318 = lnAll318.filter((l2) => routed318.has(Number(l2.id))).map((l2) => ({ id: Number(l2.id), name: l2.name, people: Number(l2.people_planned) > 0 ? Number(l2.people_planned) : 1 }));
+        } catch (e318) { moveLines318 = []; }
+      }
       const prog316o = await cabProgress316(bO, tasksO);   // Block 316: the same % done the board shows (active/rework cabs; others keep the signed-off figure)
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null));
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -14736,6 +14769,41 @@ self.addEventListener("notificationclick", (e) => {
     }
 
     // LINES manager (admin): add / rename / enable-disable a production line.
+    // Block 318 (Daniel 10/21 — "build the next Ford ON line 2"): an admin moves an UNSTARTED cab to
+    // another production line. The cab keeps its family steps/hours/upgrades; only line_id changes.
+    // line_override makes it stick against the Coyote sync; moving it back to its family's line
+    // clears the override. Audited; the warehouse + production managers get a bell-only note so
+    // the kit lands in the right lane. Started cabs are refused — the line freezes at start.
+    if (url.pathname === "/api/admin/build/line" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const build_id = String(p.build_id || ""); const toLine = Number(p.line_id);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      if (!Number.isInteger(toLine) || toLine < 1) return json(400, { ok: false, error: "Pick a line" });
+      const [b] = await db(`build?select=id,order_number,cab_number,part_number,line_id,state,line_override&id=eq.${build_id}`);
+      if (!b) return json(404, { ok: false, error: "Cab not found" });
+      if (!["upcoming", "on_hold"].includes(String(b.state))) return json(400, { ok: false, error: "Only a cab that hasn't started can move — this one is " + String(b.state).replace(/_/g, " ") });
+      const [ln] = await db(`line?select=id,name,enabled&id=eq.${toLine}`);
+      if (!ln || ln.enabled === false) return json(400, { ok: false, error: "That line isn't available" });
+      const prods318 = await db(`product?select=lines&retired=is.false`);
+      const routed318 = new Set(prods318.flatMap((p2) => p2.lines || []).map(Number));
+      if (!routed318.has(toLine)) return json(400, { ok: false, error: "That isn't a production line" });
+      const [pr318] = await db(`product?select=lines&part_number=eq.${encodeURIComponent(b.part_number)}`);
+      const famLines318 = ((pr318 && pr318.lines) || []).map(Number);
+      const homeLine318 = famLines318.length ? famLines318[0] : null;   // the family's own first line
+      if (Number(b.line_id) === toLine && b.line_override == null) return json(400, { ok: false, error: "It is already on that line" });
+      const override318 = toLine === homeLine318 ? null : toLine;   // back home = no override
+      const [fromLn] = b.line_id ? await db(`line?select=name&id=eq.${b.line_id}`) : [null];
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ line_id: toLine, queue_pos: null, line_override: override318, line_override_by: override318 ? adminId : null, line_override_at: override318 ? new Date().toISOString() : null }) });
+      logEvent("build.line_moved", adminId, { build_id, order_number: b.order_number, from: b.line_id, to: toLine, from_name: fromLn ? fromLn.name : null, to_name: ln.name, home_line: homeLine318, override: override318 });
+      try {
+        const [mgrs318, wh318] = await Promise.all([db(`employee?select=id&active=is.true&role=eq.manager&department=eq.Production`), warehouseIds()]);
+        const who318 = [...new Set([...(wh318 || []), ...mgrs318.map((m2) => m2.id)])];
+        if (who318.length) void notify("build.line_moved", who318, `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} moved to ${ln.name}`,
+          `${fromLn ? fromLn.name : "Its line"} → ${ln.name}. Its kit goes to ${ln.name}'s lane and ${ln.name}'s crew starts it. The build steps don't change.`, "/order/" + encodeURIComponent(b.order_number));
+      } catch (e318) { console.error("line_moved notify failed:", e318 && e318.message); }
+      return json(200, { ok: true, line_id: toLine, override: override318 });
+    }
     if (url.pathname === "/api/admin/line" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p = await body(req);
