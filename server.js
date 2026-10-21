@@ -743,6 +743,31 @@ async function planHoursPerDay314() {
   PLAN_HPD_314.loadedAt = Date.now(); return PLAN_HPD_314.value;
 }
 const daysFor314 = (hours, people, hpd) => Math.max(1, Math.ceil(Number(hours) / (Math.max(1, Number(people) || 1) * (Number(hpd) || 8)) - 1e-9));
+// Block 316 (Daniel, 10/20 evening — Playbook 68): the board's "% done" credits OPEN steps by the
+// hours poured into them (Block 280 replay), capped at 90% of each step's allowance; the last 10%
+// of a step only comes with its done tap, so 100% means every step is signed off. 23755 read 71%
+// with two steps left (30.8 h in them counted zero); it reads 97% under this rule.
+const PROGRESS_CAP_316 = 0.9;
+function progressPct316(doneMh, totalMh, open) {
+  const total = Number(totalMh) || 0; if (!(total > 0)) return 0;
+  const credit = (open || []).reduce((sum, o) => sum + Math.min(Number(o.poured) || 0, PROGRESS_CAP_316 * (Number(o.std) || 0)), 0);
+  const pct = Math.min(100, Math.round(100 * ((Number(doneMh) || 0) + credit) / total));
+  return (open || []).length && pct >= 100 ? 99 : pct;   // an open step never rounds the cab up to "done"
+}
+const humanDate316 = (ds) => { if (!ds) return ""; const d = new Date(String(ds).slice(0, 10) + "T12:00:00Z"); return isNaN(d) ? String(ds) : `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()]} ${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+// The promise line for the tile: "Promised Tue 10/20 · due today" / "· 3 days late" / "· 9 days left"
+// / "· at inspection". Counted in SHOP days (calendar overrides win, else Mon–Fri); once the promised
+// day has passed it reads at least "1 day late" (a weekend after a Friday promise is still late).
+function dueTag316(promised, todayStr, isOpenDay, state) {
+  if (!promised) return null;
+  const p = String(promised).slice(0, 10); const head = `Promised ${humanDate316(p)}`;
+  if (state === "awaiting_inspection") return { kind: "insp", days: 0, text: `${head} · at inspection` };
+  if (todayStr === p) return { kind: "due", days: 0, text: `${head} · due today` };
+  const between = (a, b) => { let n = 0; const d = new Date(a + "T12:00:00Z"), end = new Date(b + "T12:00:00Z"); for (let i = 0; i < 400 && d < end; i++) { d.setUTCDate(d.getUTCDate() + 1); if (isOpenDay(d.toISOString().slice(0, 10))) n++; } return n; };
+  if (todayStr > p) { const n = Math.max(1, between(p, todayStr)); return { kind: "late", days: n, text: `${head} · ${n} day${n === 1 ? "" : "s"} late` }; }
+  const n = between(todayStr, p); return { kind: "left", days: n, text: `${head} · ${n} day${n === 1 ? "" : "s"} left` };
+}
+const openDayFn316 = (calOv) => (d) => (d in calOv ? calOv[d] : (() => { const dw = new Date(d + "T12:00:00Z").getUTCDay(); return dw >= 1 && dw <= 5; })());
 async function isWorkDay(phxDateStr) {
   const ov = await calendarOverrides();
   if (phxDateStr in ov) return ov[phxDateStr];
@@ -1832,7 +1857,7 @@ async function noteTriage138(buildId, noteText, orderNumber) {
 // numbered steps grouped by day, two-step check-off (Q45): tap to start,
 // tap again to complete; tap a completed task to undo (Q90 instant+undo).
 // ANY clocked-on tech can move any task (Q104) — who tapped is recorded.
-const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false, offFix: false }, prog209 = { ask: false, mandatory: false, have: false }) => {
+const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false, offFix: false }, prog209 = { ask: false, mandatory: false, have: false }, prog316 = null) => {
   const inRework = build.state === "rework";
   const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
   // Per-task documentation (file 11): count what's attached to each step.
@@ -1909,7 +1934,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
          board. ⌂ Home on the cab card lands right back on this task screen. -->
     <b>ORDER <a href="/order/${encodeURIComponent(build.order_number)}" style="color:inherit">${build.order_number}</a></b> · ${lineName}<br>
     <span style="opacity:.7">${build.part_number} · Cab ${build.cab_number || "—"} · ${build.destination || ""}</span><br>
-    <span style="opacity:.7">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete</span>
+    <span style="opacity:.7">${prog316 ? `${prog316.pct}% done · ${prog316.stepsDone} of ${prog316.stepsTotal} steps${prog316.stepsOpen ? ` · ${prog316.stepsOpen} open` : ""}` : `${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete`}</span>
   </div>
   ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 && (emp.role === "manager" || emp.role === "admin") ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor. Block 194 (owner): the order note (shipping etc.) is MANAGER/ADMIN-only on the cab screen — production builds from the checklist + flags, not customer notes. -->
   ${tasks.every((t) => t.is_background || t.state === "complete") ? `
@@ -2108,7 +2133,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         out = await sbPost("/api/clock/out",
           { reason: reason, claimed_at: new Date().toISOString(), confirm163: true },
           (m) => { err.textContent = m; });
-      } else { btn.disabled = false; btn.textContent = keep198; return; }
+      } else { err.textContent = "Still clocked in — tap " + reason + " again when you're ready."; btn.disabled = false; btn.textContent = keep198; return; }   // Block 315: Cancel never leaves a silent screen
     }
     if (out.ok) return location.href = "/home";
     err.textContent = out.error || "Something went wrong";
@@ -3320,10 +3345,10 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             \${l.cab.customer || l.cab.dest ? \`<div style="opacity:.85;font-size:1.05rem;margin-top:2px">\${l.cab.customer}\${l.cab.customer && l.cab.dest ? " · " : ""}\${l.cab.dest}</div>\` : ""}
             <div class="status s-\${l.cab.color}">\${l.cab.status}</div>
             \${l.cab.open_line ? \`<div style="opacity:.9;font-size:1.05rem;margin-top:2px">\${l.cab.open_line}</div>\` : ""}
-            <div style="opacity:.8;margin-top:4px">\${l.cab.done_mh} / \${l.cab.total_mh} hrs · \${l.cab.pct}%</div>
-            \${l.cab.steps_total ? \`<div style="opacity:.55;font-size:.95rem;margin-top:2px">\${l.cab.steps_done} of \${l.cab.steps_total} steps done\${l.cab.steps_open ? \` · \${l.cab.steps_open} going right now\` : ""}</div>\` : ""}
+            <div style="opacity:.8;margin-top:4px">\${l.cab.pct}% done</div>
+            \${l.cab.steps_total ? \`<div style="opacity:.55;font-size:.95rem;margin-top:2px">\${l.cab.steps_done} of \${l.cab.steps_total} steps done\${l.cab.steps_open ? \` · \${l.cab.steps_open} open\` : ""}</div>\` : ""}
             <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-top:8px"><div style="background:\${bar[l.cab.color]};height:10px;border-radius:6px;width:\${l.cab.pct}%"></div></div>
-            <div style="opacity:.7;margin-top:8px">\${l.cab.promised ? "Promised " + l.cab.promised + " · " : ""}\${l.cab.remaining_mh} hrs of work left</div>\`
+            \${l.cab.due ? \`<div style="margin-top:8px;\${l.cab.due.kind === "late" ? "color:#ff453a;font-weight:700" : "opacity:.7"}">\${l.cab.due.text}</div>\` : (l.cab.promised ? \`<div style="opacity:.7;margin-top:8px">Promised \${l.cab.promised}</div>\` : "")}\`
           : \`<div>\${l.closed ? "Line closed" : l.down ? "Down for today" : "Idle line"}</div>\`}
           <div style="opacity:.6;margin-top:8px">\${l.ondeck
             ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\${l.ondeck.prep === "done" ? " · ✓ panels ready" : l.ondeck.prep === "in_progress" ? " · panels in progress" : ""}\`
@@ -3789,7 +3814,7 @@ async function optionList255(b, allow255 = null) {
   if (!det255 || !det255.features.length) return [];
   return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
 }
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
   const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
@@ -3907,8 +3932,9 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${above}${noteRow}
   </div>`; })()}
   ${tasks.length ? `<div class="lane">
-    <div style="font-weight:700;margin-bottom:6px">${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%</div>
-    <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-bottom:12px"><div style="background:#30d158;height:10px;border-radius:6px;width:${pct}%"></div></div>
+    <div style="font-weight:700;margin-bottom:6px">${prog316 ? `${prog316.pct}% done · ${prog316.stepsDone} of ${prog316.stepsTotal} steps${prog316.stepsOpen ? ` · ${prog316.stepsOpen} open` : ""}` : `${real.filter((t) => t.state === "complete").length} of ${real.length} steps complete · ${doneMh.toFixed(1)} / ${totalMh.toFixed(1)} hrs · ${pct}%`}</div>
+    ${prog316 && isAdmin97 ? `<div style="opacity:.6;font-size:.85rem;margin:-2px 0 6px">${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} allowed hrs signed off${prog316.stepsOpen ? ` · ${prog316.pouredOpen.toFixed(1)} hrs in ${prog316.stepsOpen} open step${prog316.stepsOpen === 1 ? "" : "s"}` : ""}</div>` : ""}
+    <div style="background:#2c2c2e;border-radius:6px;height:10px;margin-bottom:12px"><div style="background:#30d158;height:10px;border-radius:6px;width:${prog316 ? prog316.pct : pct}%"></div></div>
     ${Object.keys(byDay).sort((a, b2) => Number(a) - Number(b2)).map((d) => `
       ${Number(d) === 0 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">REWORK / FIX</div>` : Object.keys(byDay).filter((k) => Number(k) > 0).length > 1 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">DAY ${escH(d)}</div>` : ""}
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)${t.day_end && t.day_end > t.day_no ? ` &middot; runs Days ${escH(t.day_no)}&ndash;${escH(t.day_end)}` : ""}</span></div>`).join("")}`).join("")}
@@ -5233,9 +5259,9 @@ async function cabProjections(board) {
   if (board && Array.isArray(board.lines)) {
     for (const l of board.lines) {
       const c = l.cab;
-      if (!c || (c.remaining_days == null && (!c.total_days || Number(c.total_days) <= 0))) continue;   // active/rework only (awaiting/fix have 0)
-      // Block 314: remaining shop days from the HOURS still to earn at this line's people planned (fallback: the old template-days count)
-      const remaining = c.remaining_days != null ? Math.max(0, Number(c.remaining_days)) : Math.max(0, Number(c.total_days) - Number(c.day || 0));
+      if (!c || c.remaining_days == null) continue;   // active/rework only (awaiting-inspection / fix tiles carry no remaining_days)
+      // Block 314: remaining shop days from the HOURS still to earn at this line's people planned (Block 316: the template-days fallback is gone)
+      const remaining = Math.max(0, Number(c.remaining_days));
       const crew = crewOf[l.id] || [];
       const dayArr = hdates.map((d) => {
         const open = isOpenDay(d);
@@ -8744,6 +8770,36 @@ function paceEarned280(taskRows, taskEvents, clockIvs, nowMs) {
   return { earned: Math.round(earned * 100) / 100, open, fast };
 }
 // One cab's task-tap events, shaped for the engine (event_log rows -> {at,type,task_id}).
+// Block 316: the SAME progress number for one cab, computed for that cab alone (the crew's line
+// screen and the order page) — the board cache can be cold after hours, and board-state is the
+// slowest path on the site. Two reads (this cab's tap events, this line's punches since the cab
+// started) + the employee list for the test-account filter; pace_v2 OFF → signed-off hours only.
+async function cabProgress316(build, tasks) {
+  const real = (tasks || []).filter((t) => !t.is_background);
+  const done = real.filter((t) => t.state === "complete").reduce((a, t) => a + (Number(t.man_hours) || 0), 0);
+  const total = real.reduce((a, t) => a + (Number(t.man_hours) || 0), 0);
+  const out = { pct: total > 0 ? Math.round(100 * done / total) : 0, pctSigned: total > 0 ? Math.round(100 * done / total) : 0, open: [], pouredOpen: 0, doneMh: done, totalMh: total,
+    stepsDone: real.filter((t) => t.state === "complete").length, stepsTotal: real.length, stepsOpen: real.filter((t) => t.state === "in_progress").length };
+  try {
+    if (!build || !["active", "rework"].includes(build.state) || !build.started_at || build.line_id == null) return out;
+    const [tg] = await db(`feature_toggle?select=enabled&key=eq.pace_v2`);
+    if (tg && tg.enabled === false) return out;
+    const now = Date.now(); const from = new Date(new Date(build.started_at).getTime() - 86400000).toISOString();
+    const [evRows, punches, emps] = await Promise.all([
+      dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&payload->>build_id=eq.${build.id}&at=gte.${from}&order=at.asc,id.asc`),
+      dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at,fix_build_id&voided=is.false&claimed_at=gte.${from}&line_id=eq.${build.line_id}&order=claimed_at.asc,id.asc`),
+      db(`employee?select=id,first_name,last_name`),
+    ]);
+    const testIds = new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id));
+    const st = new Date(build.started_at).getTime();
+    const ivs = pairLineIvs258(punches.filter((p2) => !testIds.has(p2.employee_id)), now).filter((iv) => iv.line === build.line_id)
+      .map((iv) => ({ ...iv, start: Math.max(iv.start, st), end: Math.min(iv.end, now) })).filter((iv) => iv.end > iv.start);
+    const e = paceEarned280(real, (taskEvsFromLog280(evRows, [build.id])[build.id]) || [], ivs, now);
+    out.open = e.open; out.pouredOpen = Math.round(e.open.reduce((a, o) => a + (Number(o.poured) || 0), 0) * 10) / 10;
+    out.pct = progressPct316(done, total, e.open);
+  } catch (err) { console.error("cabProgress316 failed (signed-off % shown):", err && err.message); }
+  return out;
+}
 function taskEvsFromLog280(rows, buildIds) {
   const want = new Set(buildIds); const out = {};
   for (const ev of rows) { const p = ev.payload || {}; if (!p.task_id || !want.has(p.build_id)) continue;
@@ -10031,11 +10087,11 @@ async function pacePatrol() {
       if (!c || !c.order || !(c.order in idOf)) continue;
       const cur = c.color, prev = prevOf[c.order];
       if (cur === "red" && prev !== "red") {              // crossed INTO red -> one push
-        const early = Number(c.pct) < 30;                 // red with <30% of the build done -> suspect the STANDARD
+        const early = Number(c.pct_signed != null ? c.pct_signed : c.pct) < 30;                 // red with <30% of the build done -> suspect the STANDARD (Block 316: the done-tap-only figure, unchanged by the progress meter)
         if (early && earlyRedOn) {
           await notify("pace.standards", await adminIds225(), `${l.name}: check the standard on ${c.order}`,   // Block 225: a wrong hour TARGET is an admin fix
-            `${c.order} hit red at only ${Number(c.pct) || 0}% done (day ${c.day || "?"}). That usually means the hour target is off, not the crew.`, "/board");
-          logEvent("pace.standards", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, pct: c.pct, day: c.day });
+            `${c.order} hit red at only ${Number(c.pct_signed != null ? c.pct_signed : c.pct) || 0}% done (day ${c.day || "?"}). That usually means the hour target is off, not the crew.`, "/board");
+          logEvent("pace.standards", null, { build_id: idOf[c.order], order_number: c.order, line: l.name, pct: c.pct_signed != null ? c.pct_signed : c.pct, day: c.day });
         } else if (paceWarnOn) {
           await notify("pace.warn", recips, `${l.name}: ${c.order} needs help`,
             `${c.status}${c.promised ? ` · promised ${c.promised}` : ""}.`, "/board");
@@ -10559,7 +10615,8 @@ http.createServer(async (req, res) => {
           // a loud put-my-clock-on-it banner (one tap = the same audited
           // "Work this fix" grab, close-old + open-fix).
           const offFix271 = build.state === "fix_job" && !(last.line_id === FIX_LINE_ID && last.fix_build_id === build.id);
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271 }, prog209));
+          const prog316 = await cabProgress316(build, tasks);   // Block 316: the same % done the board shows
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271 }, prog209, prog316));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -10888,15 +10945,21 @@ http.createServer(async (req, res) => {
       // after another (~130 ms each at Supabase); they now land in ONE round trip.
       // Every query string is byte-identical; only the waiting moved. The checks
       // still run in the same order with the same answers.
-      const [lastOutRows299, open163oAll299, tog209Rows299, openAhRows299] = await Promise.all([
+      const [lastOutRows299, open163oAll299, tog209Rows299, openAhRows299, meLines315Rows] = await Promise.all([
         db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
         db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
         db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
         db(`after_hours_session?select=id,started_at,approved_by,line_id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),   // Block 300: line_id names the card
+        db(`employee?select=lines&id=eq.${empId}`),   // Block 315: the person's own lines (People roster)
       ]);
+      // Block 315 (Daniel, 10/20 — Chris's End of day never landed): open steps carry overnight on
+      // your OWN line, so End of day / End of shift from a line you are assigned to gets NO pop-up.
+      // The heads-up stays for a line you jumped onto to help, and for early-outs ("Other").
+      const myLines315 = (((meLines315Rows || [])[0] || {}).lines || []).map(Number);
       const [lastOut107] = lastOutRows299;
       if (!lastOut107 || lastOut107.kind !== "clock_in")
         return json(400, { ok: false, error: "You're not on the clock" });
+      const ownLineEod315 = (reason === "End of day" || reason === "End of shift") && lastOut107.line_id != null && (myLines315.length === 0 || myLines315.includes(Number(lastOut107.line_id)));   // no roster (managers) → the line you're on is your own
       // Block 163 (owner-rep ruling): clocking OUT with steps you started
       // still open on your line — same soft heads-up as the line switch.
       // Block 198 (owner, day 4): LUNCH is exempt from the open-steps nudge —
@@ -10904,7 +10967,7 @@ http.createServer(async (req, res) => {
       // so "you still have steps open — clock out anyway?" only scared people
       // (Daniel: staff "get a pop up message that they are UNSURE of what to
       // do with"). End-of-day and every other reason keep the heads-up.
-      if (confirm163 !== true && reason !== "Lunch" && lastOut107.line_id != null) {
+      if (confirm163 !== true && reason !== "Lunch" && !ownLineEod315 && lastOut107.line_id != null) {   // Block 315: own-line End of day skips the nudge
         const open163o = open163oAll299;   // Block 299: read in the wave above
         const real163o = (open163o || []).filter((t) => !t.is_background);
         if (real163o.length) {
@@ -11426,7 +11489,8 @@ http.createServer(async (req, res) => {
         share296 = { photoCount: phC296.length, myMobile: !!(me296[0] && String(me296[0].mobile || "").replace(/\D/g, "").length >= 10),
           links: lk296.map((l) => ({ id: l.id, url: `https://shopboard.premierstreetrod.com/p/${l.token}`, by: nm296[l.created_by] || "", made: dayShort291(phxDate(new Date(l.created_at).getTime())), good: dayShort291(phxDate(new Date(l.expires_at).getTime())), views: Number(l.views || 0) })) };
       }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296));
+      const prog316o = await cabProgress316(bO, tasksO);   // Block 316: the same % done the board shows (active/rework cabs; others keep the signed-off figure)
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -11564,7 +11628,7 @@ http.createServer(async (req, res) => {
       try {
       // Block 212 (v201 SPEED): the board engine feeds the TV, the cockpit and
       // the projections — its six independent reads now land in one round trip.
-      const [lines, emps, builds, namesTogRows212, prods, tmpls, stepRows104, hrsB] = await Promise.all([
+      const [lines, emps, builds, namesTogRows212, prods, hrsB] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason,people_planned&enabled=is.true&order=id`),   // Block 314: +people_planned
         db(`employee?select=id,first_name&active=is.true`),
         db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state
@@ -11573,11 +11637,8 @@ http.createServer(async (req, res) => {
         // ("Customer names on the TV") still governs the name; missing row = ON.
         db(`feature_toggle?select=enabled&key=eq.customer_names_on_tv`),
         db(`product?select=part_number,family,template_id`),
-        db(`build_template?select=id,total_days`),
-        // Block 104c: template man-hour sums — the day counter's denominator.
-        db(`step_template?select=template_id,man_hours&retired=is.false&limit=2000`),
         shopHours(),
-      ]);
+      ]);   // Block 316: the template day budget (build_template.total_days + step sums) is no longer read — the promise and projections run on hours ÷ (h/day × people) since 314
       const [namesTog88] = namesTogRows212;
       const namesOn88 = !namesTog88 || namesTog88.enabled !== false;
       // Block 173 (break-pass F4): customer name + destination (the only PII here)
@@ -11602,12 +11663,10 @@ http.createServer(async (req, res) => {
         arIds230.length ? db(`task?select=build_id,state,is_background&build_id=in.(${arIds230.join(",")})&limit=4000`) : [],
       ]);
       const hpd314b = await planHoursPerDay314();   // Block 314 (cached 60 s)
+      const isOpen316 = openDayFn316(await calendarOverrides()); const today316 = phxDate(Date.now());   // Block 316: the promise line in shop days
       const tcnt230 = {};
       for (const t of tasksB230) { if (t.is_background) continue; const o = tcnt230[t.build_id] = tcnt230[t.build_id] || { total: 0, done: 0, open: 0 }; o.total++; if (t.state === "complete") o.done++; else if (t.state === "in_progress") o.open++; }
-      const tmplMh104 = {}; for (const st of stepRows104) tmplMh104[st.template_id] = (tmplMh104[st.template_id] || 0) + Number(st.man_hours || 0);
       const familyOf = Object.fromEntries(prods.map((p) => [p.part_number, p.family]));
-      const daysOfTmpl = Object.fromEntries(tmpls.map((t) => [t.id, t.total_days]));
-      const tmplOf = Object.fromEntries(prods.map((p) => [p.part_number, p.template_id]));
       const nameOf = Object.fromEntries(emps.map((e) => [e.id, e.first_name]));
 
       // Rebuild coverage intervals per line from the event stream.
@@ -11742,9 +11801,10 @@ http.createServer(async (req, res) => {
           const w = waitOf[l.id];
           return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], ondeck: deck, upcoming: upcoming95,
             cab: { order: w.order_number, family: familyOf[w.part_number] || "", customer: who88(w), dest: dest88(w),
-              done_mh: "—", total_mh: "—", pct: 100, promised: w.promised_finish || null,
+              done_mh: "—", total_mh: "—", pct: 100, pct_signed: 100, promised: w.promised_finish || null,
+              due: dueTag316(w.promised_finish, today316, isOpen316, "awaiting_inspection"),   // Block 316
               remaining_mh: "0.0", color: "green", status: "AWAITING INSPECTION — ready for sign-off",
-              day: 0, total_days: 0 } };
+              day: 0 } };
         }
         if (!b) return { id: l.id, name: l.name, closed: l.manually_closed, down: l.down_today ? (showDownReason133 ? { reason: l.down_reason || "" } : {}) : null, techs: onLine[l.id] || [], cab: null, ondeck: deck, upcoming: upcoming95 };
         const a = agg[b.id] || { done: 0, total: 0 };
@@ -11780,13 +11840,6 @@ http.createServer(async (req, res) => {
         const openLine280 = !e280 ? "" : e280.open.length
           ? e280.open.map((o) => `Step ${o.no} · ${o.poured} of ${o.std} h${o.over ? ` (+${o.over} over)` : ""}`).join(" · ")
           : ((onLine[l.id] || []).length ? "Clocked in — no step open" : "");
-        const baseDays104 = daysOfTmpl[tmplOf[b.part_number]] || 0;
-        // Block 104c (owner-rep audit): options extend the day count the same
-        // way they extend the promise — total frozen hours over the family's
-        // day budget. An option-heavy cab reads DAY 3 of 10, not "of 7".
-        const tmb104 = tmplMh104[tmplOf[b.part_number]] || 0;
-        const totalDays = (a.total > 0 && tmb104 > 0 && baseDays104 > 0)
-          ? Math.max(baseDays104, Math.ceil(a.total / (tmb104 / baseDays104) - 1e-9)) : baseDays104;
         const day = Math.max(1, Math.ceil(wallHrs / 8 || 1));   // Block 282: elapsed wall-days on the line — no predicted target (crew size varies)
         // REWORK OVERRIDE (files 11/18): distinct badge + the cab's OWN
         // amber->red countdown against the manager's time frame — the normal
@@ -11821,16 +11874,20 @@ http.createServer(async (req, res) => {
           cab: { order: b.order_number, family: familyOf[b.part_number] || "", customer: who88(b), dest: dest88(b),
             done_mh: fixJob ? "—" : a.done.toFixed(1), total_mh: fixJob ? "—" : a.total.toFixed(1),
             earned_mh: fixJob ? "—" : Number(earned280).toFixed(1), open_line: fixJob || b.state === "rework" ? "" : openLine280,   // Block 280
-            pct: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
+            // Block 316: % done credits open steps (poured hours, capped at 90% of the allowance); pct_signed = the old done-tap-only figure (kept for the <30% standards alert)
+            pct: fixJob ? 100 : progressPct316(a.done, a.total, e280 ? e280.open : []),
+            pct_signed: fixJob ? 100 : (a.total ? Math.round(100 * a.done / a.total) : 0),
+            due: fixJob ? null : dueTag316(b.promised_finish, today316, isOpen316, b.state),
             // Promised date is FIXED at start (Q103-6); remaining standard
             // man-hours is the honest v1 "how much is left" figure.
             promised: b.promised_finish || null,
             remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
             steps_total: (tcnt230[b.id] || {}).total || 0, steps_done: (tcnt230[b.id] || {}).done || 0, steps_open: (tcnt230[b.id] || {}).open || 0,
-            color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day, total_days: fixJob ? 0 : totalDays,
+            color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day,
             // Block 314: shop days still needed = hours not yet earned ÷ (plan h/day × people planned on THIS line) — the same rule as the promise
+            // Block 316: while ANY step is still open the cab is not finished — at least one shop day remains (an over-allowance open step used to read 0)
             people_planned: Number(l.people_planned) > 0 ? Number(l.people_planned) : 1,
-            remaining_days: fixJob || a.total - Number(earned280 || 0) <= 0 ? 0 : daysFor314(a.total - Number(earned280 || 0), l.people_planned, hpd314b) } };
+            remaining_days: fixJob ? 0 : (a.total - Number(earned280 || 0) <= 0 ? (((tcnt230[b.id] || {}).open || 0) > 0 ? 1 : 0) : daysFor314(a.total - Number(earned280 || 0), l.people_planned, hpd314b)) } };
       }) };
       const body298 = JSON.stringify(payload298);
       clearTimeout(pendTimer298); boardCache298[bsKey298] = { at: Date.now(), body: body298, pending: null }; resolve298(body298);
