@@ -1190,10 +1190,82 @@ const netJs = `
       }
     }
   }
+  // Block 317 (Fire HD 10, Daniel 10/21): every crew photo goes through ONE prep step that
+  // READS THE BYTES ON THE DEVICE FIRST. The Fire's browser can hand the page a File that
+  // looks fine (a name, a type) but has nothing in it — that empty file used to be shipped and
+  // refused as "HEIC". Now: an empty/unreadable file never leaves the tablet, the person gets
+  // plain words, and the server gets a photo.diag row (name, type, size, first bytes, device)
+  // so the next report is one query. A readable photo is redrawn as a 2000 px JPEG as before;
+  // if the browser can't redraw it but the bytes ARE a JPEG/PNG/WebP, the bytes go up as-is.
+  function hex317(u8) { var h = ""; for (var i = 0; i < Math.min(16, u8.length); i++) { h += (u8[i] < 16 ? "0" : "") + u8[i].toString(16); } return h; }
+  function kind317(u8) {
+    if (u8.length >= 3 && u8[0] === 255 && u8[1] === 216 && u8[2] === 255) return "image/jpeg";
+    if (u8.length >= 8 && u8[0] === 137 && u8[1] === 80 && u8[2] === 78 && u8[3] === 71) return "image/png";
+    if (u8.length >= 12 && String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) === "RIFF" && String.fromCharCode(u8[8], u8[9], u8[10], u8[11]) === "WEBP") return "image/webp";
+    if (u8.length >= 12 && String.fromCharCode(u8[4], u8[5], u8[6], u8[7]) === "ftyp") return "image/heic";
+    return "";
+  }
+  function diag317(buildId, src, f, readBytes, head, outcome) {
+    try { fetch("/api/photo/diag", { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+      body: JSON.stringify({ build_id: buildId || null, src: src || "", name: String((f && f.name) || "").slice(0, 120), type: String((f && f.type) || "").slice(0, 60),
+        size: f && typeof f.size === "number" ? f.size : null, last_modified: f && f.lastModified ? f.lastModified : null, read_bytes: readBytes, head: head || "", outcome: outcome }) }); } catch (e) {}
+  }
+  // Returns a Blob ready to upload (blob.meta317 rides along for the server log), or throws an Error with words for the person.
+  async function photoPrep317(f, buildId, src) {
+    var buf = null;
+    try { buf = await f.arrayBuffer(); } catch (e) { buf = null; }
+    var u8 = buf ? new Uint8Array(buf) : new Uint8Array(0);
+    var head = hex317(u8), kind = kind317(u8);
+    if (!u8.length) {
+      diag317(buildId, src, f, buf ? 0 : -1, "", buf ? "empty_file" : "unreadable");
+      throw new Error("The tablet handed over an empty photo, so nothing was sent. Tap 📷 Take photo and snap it again (or wait a few seconds and pick it again).");
+    }
+    var orig = new Blob([u8], { type: kind || f.type || "application/octet-stream" });
+    try {
+      var bmp = await createImageBitmap(orig, { imageOrientation: "from-image" });
+      var sc = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+      var c = document.createElement("canvas"); c.width = Math.max(1, Math.round(bmp.width * sc)); c.height = Math.max(1, Math.round(bmp.height * sc));
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      var jp = await new Promise(function (res) { c.toBlob(res, "image/jpeg", 0.85); });
+      if (jp && jp.size > 0) { jp.meta317 = { src: src, name: String(f.name || "").slice(0, 120), type: f.type || "", size: f.size, read: u8.length, head: head, path: "redrawn" }; return jp; }
+    } catch (e) { /* the browser can't draw it — fall through */ }
+    if (kind === "image/jpeg" || kind === "image/png" || kind === "image/webp") { orig.meta317 = { src: src, name: String(f.name || "").slice(0, 120), type: f.type || "", size: f.size, read: u8.length, head: head, path: "as_is" }; return orig; }
+    diag317(buildId, src, f, u8.length, head, kind === "image/heic" ? "heic_undecodable" : "not_a_picture");
+    throw new Error(kind === "image/heic"
+      ? "That photo is in a format the shop screens can't show (HEIC). Tap 📷 Take photo and snap it again."
+      : "That file isn't a photo the board can use. Tap 📷 Take photo and snap it again.");
+  }
+  // Block 317: a "📷 Take photo" button beside every photo picker — straight to the camera,
+  // never through the gallery hand-off (where the Fire's empty files came from). Photos taken
+  // this way join the picker's own list, so every Save / Send button works exactly as before.
+  (function () {
+    function addCam(inp) {
+      if (inp.dataset.cam317 || inp.hasAttribute("capture") || !/image/.test(inp.getAttribute("accept") || "")) return;
+      inp.dataset.cam317 = "1";
+      var b = document.createElement("button"); b.type = "button"; b.className = "b"; b.textContent = "📷 Take photo";
+      b.style.cssText = "margin:6px 8px 0 0;padding:10px 14px;font-size:1rem;border-radius:10px;background:#1c1c1e;border:1px solid #3a3a3c;color:#eaeaea";
+      var cam = document.createElement("input"); cam.type = "file"; cam.accept = "image/*"; cam.setAttribute("capture", "environment"); cam.style.display = "none";
+      var note = document.createElement("span"); note.style.cssText = "font-size:.85rem;opacity:.7;margin-left:6px";
+      b.onclick = function () { cam.value = ""; cam.click(); };
+      cam.onchange = function () {
+        try { var dt = new DataTransfer(); for (var i = 0; i < inp.files.length; i++) dt.items.add(inp.files[i]); for (var j = 0; j < cam.files.length; j++) dt.items.add(cam.files[j]); inp.files = dt.files; }
+        catch (e) { note.textContent = "Couldn't add that photo — use Choose files"; return; }
+        note.textContent = inp.files.length + " photo" + (inp.files.length === 1 ? "" : "s") + " ready";
+        try { inp.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {}
+      };
+      inp.parentNode.insertBefore(cam, inp.nextSibling); inp.parentNode.insertBefore(note, inp.nextSibling); inp.parentNode.insertBefore(b, inp.nextSibling);
+      inp.parentNode.insertBefore(document.createElement("br"), b);
+    }
+    function scan() { var all = document.querySelectorAll("input[type=file]"); for (var i = 0; i < all.length; i++) addCam(all[i]); }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scan); else scan();
+  })();
   async function sbUpload(url, blob, ctype, onStatus) {
     for (let i = 0; i < 3; i++) {
       try {
-        const r = await fetch(url, { method: "POST", headers: { "Content-Type": ctype }, body: blob });
+        const hdr317 = { "Content-Type": ctype };   // Block 317: what the device handed over rides along for the server log
+        if (blob && blob.meta317) { try { hdr317["X-Photo-Meta"] = encodeURIComponent(JSON.stringify(blob.meta317)).slice(0, 900); } catch (e) {} }
+        if (!blob || !blob.size) return { ok: false, error: "The photo came through empty — nothing was sent. Tap 📷 Take photo and try again." };
+        const r = await fetch(url, { method: "POST", headers: hdr317, body: blob });
         if (r.status >= 500) throw new Error("server " + r.status);
         const o = await r.json();
         // Block 246 (Daniel, Fri 8/28): a tiny preview copy rides up after every
@@ -2018,6 +2090,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
           <input type="file" id="ap-${t.id}" accept="image/*" multiple style="color:#8e8e93;margin-top:6px">
           <button class="back" style="color:#fff;background:#3a3a3c;border-radius:8px;margin-top:6px"
             onclick="saveAtt('${t.id}','${build.id}',this)">Save</button>
+          <div class="msg err" id="aterr-${t.id}" style="margin-top:6px"></div>
           <div style="margin-top:6px"><button class="back" type="button" style="color:#fff;background:#3a3a3c;border-radius:8px"
             onclick="phoneHandoff('${build.id}','${t.id}',this,'hoff-${t.id}')">📱 From a phone</button></div>
           <div id="hoff-${t.id}" style="margin-top:8px"></div>
@@ -2101,7 +2174,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     }
     btn.disabled = true; btn.textContent = "Saving…"; m.textContent = "";
     for (const f of files) {
-      const blob = await toJpeg(f);
+      let blob; try { blob = await toJpeg(f, "progress"); } catch (e317) { m.textContent = e317.message; btn.disabled = false; btn.textContent = "Save & clock out"; return; }   // Block 317
       const up = await sbUpload("/api/photo/upload?build_id=${build.id}&kind=progress", blob.blob || blob, (blob.type || "image/jpeg"), (t) => { m.textContent = t; });
       if (!up.ok) { m.textContent = up.error || "Photo didn't make it — try again"; btn.disabled = false; btn.textContent = "Save & clock out"; return; }
     }
@@ -2199,26 +2272,21 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   // less storage), fix rotation from the photo's own orientation data.
   // If the browser can't decode it, the original goes up and the server
   // gives a plain-English answer.
-  async function toJpeg(file) {
-    try {
-      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-      const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
-      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
-      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
-      return blob || file;
-    } catch (e) { return file; }
-  }
+  // Block 317: the shared prep (netJs photoPrep317) reads the bytes on the device first — an
+  // empty or unreadable file never leaves the tablet, and the error says what to do.
+  async function toJpeg(file, src) { return await photoPrep317(file, "${build.id}", src || "cab"); }
   // Per-task documentation (file 11): note and/or photos on one step.
   function toggleAtt(id) { const d = document.getElementById("att-" + id); d.hidden = !d.hidden; }
   async function saveAtt(taskId, buildId, btn) {
     btn.disabled = true; btn.textContent = "Saving…";
+    // Block 317: the message lands BESIDE this step's Save button — the page-top line is out of
+    // sight when you're scrolled to the step (Daniel on the Fire: "hit SAVE and nothing happened").
+    const errEl = document.getElementById("aterr-" + taskId) || document.getElementById("err");
+    errEl.textContent = "";
     try {
       const files = document.getElementById("ap-" + taskId).files;
-      const errEl = document.getElementById("err");
       for (let i = 0; i < files.length; i++) {
-        const f = await toJpeg(files[i]);
+        const f = await toJpeg(files[i], "step");
         const uo = await sbUpload("/api/photo/upload?build_id=" + buildId + "&task_id=" + taskId,
           f, f.type || "image/jpeg", (m) => { errEl.textContent = m; });
         if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
@@ -2234,7 +2302,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       if (!note && !files.length) throw new Error("Nothing to save — write a note or pick a photo");
       return location.reload();
     } catch (e) {
-      document.getElementById("err").textContent = e.message;
+      errEl.textContent = e.message;
       btn.disabled = false; btn.textContent = "Save";
     }
   }
@@ -2280,7 +2348,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
         if (lc && lc.ok) { have = lc.count; btn.dataset.have = lc.count; } } catch (e) {}
     }
     if (have + files.length < need) {
-      document.getElementById("err").textContent = "This cab needs at least " + need + " completion photo" + (need === 1 ? "" : "s") + " before finishing (" + (have + files.length) + " so far).";
+      (document.getElementById("upmsg") || document.getElementById("err")).textContent = "This cab needs at least " + need + " completion photo" + (need === 1 ? "" : "s") + " before finishing (" + (have + files.length) + " so far).";   // Block 317: beside the button
       return;
     }
     btn.disabled = true; btn.textContent = "Sending…";
@@ -2288,7 +2356,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       const upEl = document.getElementById("upmsg");
       for (let i = 0; i < files.length; i++) {
         upEl.textContent = "Uploading photo " + (i + 1) + " of " + files.length + "…";
-        const f = await toJpeg(files[i]);
+        const f = await toJpeg(files[i], "finish");
         const uo = await sbUpload("/api/photo/upload?build_id=" + id,
           f, f.type || "image/jpeg", (m) => { upEl.textContent = m; });
         if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
@@ -2301,7 +2369,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       if (out.ok) return location.reload();
       throw new Error(out.error || "Something went wrong");
     } catch (e) {
-      document.getElementById("err").textContent = e.message;
+      (document.getElementById("upmsg") || document.getElementById("err")).textContent = e.message;   // Block 317: beside the button, not at the page top
       btn.disabled = false; btn.textContent = "Finished — send for inspection";
     }
   }
@@ -2537,12 +2605,10 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
   // Block 302: a prep photo from the phone — converted to JPEG on the phone (HEIC-safe), uploaded as kind=prep,
   // lands in the customer report / gallery / ZIP labelled "Panel prep". No reload; the strip just says it landed.
-  async function prepJpeg302(file){ try { const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); const sc = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
-      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
-      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85)); return blob || file; } catch (e) { return file; } }
+  async function prepJpeg302(file, buildId){ return await photoPrep317(file, buildId, "prep"); }   // Block 317: the shared prep (reads bytes first; empty files never leave the device)
   async function prepPhoto302(buildId, input){ const m = document.getElementById("ppm-" + buildId); const files = input.files || []; if (!files.length) return; let n = 0;
     for (let i = 0; i < files.length; i++) { m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "\u2026";
-      try { const blob = await prepJpeg302(files[i]);
+      try { let blob; try { blob = await prepJpeg302(files[i], buildId); } catch (e317) { m.textContent = e317.message; input.value = ""; return; }
         const o = await sbUpload("/api/photo/upload?build_id=" + buildId + "&kind=prep", blob, blob.type || "image/jpeg", function(t){ m.textContent = t; });   // netJs: retries + the thumbnail
         if (o && o.ok) n++; else { m.textContent = (o && o.error) || "Photo didn't make it \u2014 try again"; input.value = ""; return; } }
       catch (e) { m.textContent = "Network hiccup \u2014 try again"; input.value = ""; return; } }
@@ -15181,6 +15247,20 @@ self.addEventListener("notificationclick", (e) => {
       return json(outT.status, outT.body);
     }
 
+    // Block 317 (Fire HD 10): the device refused a photo BEFORE sending it (empty / unreadable /
+    // undrawable file) — record exactly what the browser handed the page. Signed-in only; no clock
+    // gate (it's a log line, not a photo); every field capped.
+    if (url.pathname === "/api/photo/diag" && req.method === "POST") {
+      const empD = await liveSession(req);
+      if (!empD) return json(401, { ok: false, error: "Signed out" });
+      let bd = {}; try { bd = await body(req); } catch (e) { bd = {}; }
+      const cap = (v, n) => String(v == null ? "" : v).slice(0, n);
+      const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+      logEvent("photo.diag", empD, { build_id: isUuid(bd.build_id) ? bd.build_id : null, src: cap(bd.src, 20), name: cap(bd.name, 120), type: cap(bd.type, 60),
+        size: num(bd.size), last_modified: num(bd.last_modified), read_bytes: num(bd.read_bytes), head: cap(bd.head, 40), outcome: cap(bd.outcome, 40),
+        device: String(req.headers["user-agent"] || "").slice(0, 160) });
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/photo/upload" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -15202,14 +15282,17 @@ self.addEventListener("notificationclick", (e) => {
         req.on("data", (c) => { size += c.length; if (size > 8000000) { over = true; req.destroy(); } else chunks.push(c); });
         req.on("end", resolve); req.on("close", resolve);
       });
-      const reject306 = (status, reason, error) => { logEvent("photo.rejected", empId, { build_id, reason, label: ctype.slice(0, 60), bytes: size, device: String(req.headers["user-agent"] || "").slice(0, 160) }); return json(status, { ok: false, error }); };
+      // Block 317: what the device handed over (name / type / size / bytes read / first bytes / redrawn or as-is) rides in X-Photo-Meta
+      let meta317 = null; try { const mh = req.headers["x-photo-meta"]; if (mh) { const mo = JSON.parse(decodeURIComponent(String(mh)).slice(0, 900)); if (mo && typeof mo === "object") meta317 = { src: String(mo.src || "").slice(0, 20), name: String(mo.name || "").slice(0, 120), type: String(mo.type || "").slice(0, 60), size: typeof mo.size === "number" ? mo.size : null, read: typeof mo.read === "number" ? mo.read : null, head: String(mo.head || "").slice(0, 40), path: String(mo.path || "").slice(0, 20) }; } } catch (e) { meta317 = null; }
+      const dev317 = String(req.headers["user-agent"] || "").slice(0, 160);
+      const reject306 = (status, reason, error) => { logEvent("photo.rejected", empId, { build_id, reason, label: ctype.slice(0, 60), bytes: size, device: dev317, client: meta317 }); return json(status, { ok: false, error }); };
       if (over) return reject306(413, "too_large", "Photo too large (8 MB max)");
       const buf = Buffer.concat(chunks);
       const sniffed306 = sniffImage306(buf);
       if (sniffed306 === "image/heic")
-        return reject306(415, "heic", "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it");
+        return reject306(415, "heic", "That photo format (HEIC) can't be shown on the shop screens — tap 📷 Take photo and snap it again");
       if (!sniffed306 && !ctype.startsWith("image/")) return reject306(400, "not_an_image", "That file isn't a photo the board can use — take it with the camera button and try again");
-      if (!sniffed306 && /hei[cf]/.test(ctype)) return reject306(415, "heic_label", "That photo format (HEIC) can't be shown on the shop screens — retake it with the camera, or pick it again so the phone converts it");
+      if (!sniffed306 && /hei[cf]/.test(ctype)) return reject306(415, "heic_label", "That photo came through empty (the tablet's gallery hands over HEIC the board can't read) — tap 📷 Take photo and snap it again");
       const storeType306 = sniffed306 || ctype;   // what it IS beats what it was called
       if (sniffed306 && !ctype.startsWith("image/")) logEvent("photo.relabeled", empId, { build_id, label: ctype.slice(0, 60), is: sniffed306, device: String(req.headers["user-agent"] || "").slice(0, 160) });
       // task_id present = a PER-TASK photo (file 11); absent = a finish-gate photo.
@@ -15226,7 +15309,7 @@ self.addEventListener("notificationclick", (e) => {
       const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : url.searchParams.get("kind") === "prep" && !task_id ? "prep" : null;   // Block 302: prep = a panel-prep photo (warehouse page)
       const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
         build_id, task_id, uploaded_by: empId, storage_path: path, kind: kindQ209 || (task_id ? "task" : "finish") }) });
-      logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined });
+      logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined, device: dev317, client: meta317 || undefined });   // Block 317: device + what the browser handed over
       return json(200, { ok: true, id: row ? row.id : null });
     }
 
