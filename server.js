@@ -4291,6 +4291,19 @@ const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const 
 // button is for catching it sooner. Audited (who forced it is logged).
 // Block 293: pulled out as a helper so the Accounting console can place it
 // LAST (Daniel: "she doesn't care who's on the clock... move it below").
+// Block 319: the one line that says what a corrector day is worth — PAID (the worksheet's number)
+// first, the exact clock time second. `folded` = the one-line <details> summary.
+const paidLine319 = (d, folded) => {
+  const fmt319 = (n) => Number(n).toFixed(2).replace(/\.?0+$/, "");
+  const offWord = d.off216 ? (/sick/i.test(d.off216.reason) ? "&#129298; sick" : /vacation/i.test(d.off216.reason) ? "&#127796; vacation" : "time off") : "";
+  if (d.open) return folded ? `on the clock now${d.paid != null && d.paid > 0 ? ` &middot; ${fmt319(d.paid)} paid so far` : ""}` : `on the clock now${d.paid != null && d.paid > 0 ? `<br><span style="font-weight:400;opacity:.75">${fmt319(d.paid)} paid so far &middot; on clock ${d.hours}</span>` : ""}`;
+  if (!d.stints.length && !d.hours) return offWord || "no hours";
+  if (d.salaried) return `${d.hours} hrs on clock <span style="font-weight:400;opacity:.65">(salaried &mdash; see Salaried time)</span>`;
+  if (d.paid == null) return `${d.hours} hrs on clock`;   // engine unavailable — never invent a paid number
+  const ah = d.ahx > 0 ? ` <span style="color:#ff9f0a;font-weight:400">&middot; ${fmt319(d.ahx)} after-hours pending sign-off, not paid yet</span>` : "";
+  if (folded) return `<b>${fmt319(d.paid)} paid</b> &middot; on clock ${d.hours}${offWord ? ` &middot; ${offWord}` : ""}${ah}`;
+  return `<span style="font-size:1.1rem">${fmt319(d.paid)} paid</span><br><span style="font-weight:400;opacity:.7;font-size:.9rem">on clock ${d.hours}${offWord ? ` &middot; ${offWord}` : ""}</span>${ah}`;
+};
 const tcc12_293 = (hhmm) => { if (!hhmm) return ""; const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`; };   // Block 293: folded-day summaries read 7:00 AM–11:00 AM
 const ocLane293 = (onClock) => onClock.length ? `
   <div class="lane" id="oc"><h3>On the clock</h3>
@@ -4608,6 +4621,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       </select>
     </p>
     ${tcard191.selEmp ? `
+    <div style="opacity:.6;font-size:.88rem;margin:-4px 0 10px"><b>Paid</b> = the Pay Worksheet's math for that day (quarter-hour rounding, the lunch rules, after-hours only once signed off). <b>On clock</b> = the exact time between punches. Fix a punch and the Paid number here is what the worksheet will print.</div>
     <div style="margin-bottom:12px"><span style="opacity:.65">Reason on the record for changes:</span><br>
       <input id="tcc-note" value="punch clock correction" maxlength="200" style="width:100%;max-width:420px;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:1rem"></div>
     <div style="opacity:.6;font-size:.88rem;margin:-4px 0 12px"><b>Save</b> fixes a time. <b>Remove this IN/OUT</b> takes that whole IN&rarr;OUT pair off the day (kept in the record, never deleted). <b>Add hours</b> puts a missing one back.</div>
@@ -4627,11 +4641,11 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${tcard191.days.map((d, i293) => { const fold293 = i293 >= 5 && d.ds !== tcard191.selDate && !d.open;   /* Block 293: last 5 days open; older days fold unless targeted from the oddities lane */
       const summ293 = d.stints.map((s) => `${tcc12_293(s.in.hhmm)}–${s.out ? tcc12_293(s.out.hhmm) : "open"}`).join(", ");
       return `
-    ${fold293 ? `<details class="tcd293"><summary><b>${d.dow} ${d.ds.slice(5).replace("-", "/")}</b><span style="opacity:.8">${d.hours ? `${d.hours} hrs` : d.off216 ? (/sick/i.test(d.off216.reason) ? "&#129298; sick" : /vacation/i.test(d.off216.reason) ? "&#127796; vacation" : "time off") : "no hours"}${summ293 ? ` &middot; ${summ293}` : ""}</span><span style="opacity:.5;font-size:.85rem">tap to open</span></summary>` : ""}
+    ${fold293 ? `<details class="tcd293"><summary><b>${d.dow} ${d.ds.slice(5).replace("-", "/")}</b><span style="opacity:.8">${paidLine319(d, true)}${summ293 ? ` &middot; ${summ293}` : ""}</span><span style="opacity:.5;font-size:.85rem">tap to open</span></summary>` : ""}
     <div style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px${d.stints.length || d.orphans.length ? "" : ";opacity:.7"}">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap">
         <b style="font-size:1.1rem">${d.dow} ${d.ds.slice(5).replace("-", "/")}</b>
-        <span style="opacity:.75;font-weight:700">${d.open ? "on the clock now" : d.hours ? `${d.hours} hrs` : "no hours"}</span>
+        <span style="opacity:.9;font-weight:700;text-align:right">${paidLine319(d, false)}</span>
       </div>
       <div id="tccmsg-${d.ds}" style="color:#ff6b5e;font-size:.9rem;min-height:0"></div>
       ${d.off216 ? `
@@ -12265,6 +12279,21 @@ http.createServer(async (req, res) => {
       let tcard191 = null;
       if (acct189) {
         let days191 = [];
+        // Block 319 (Daniel 10/22 — Kailey "still seeing differences between the report shop board
+        // generates and the manual correct punches area": this corrector showed EXACT clock minutes
+        // while the Pay Worksheet shows the pay engine's rounded hours — two numbers for one day, and
+        // every quarter-hour gap looked like an oddity). ONE source of truth: run the worksheet's own
+        // engine (payrollData — roundPunch235 + payRules248 + workIntervals + the after-hours hold)
+        // over this corrector's window and read the selected person's day cells from it. Nothing
+        // is re-implemented here, so the console's Paid number IS the worksheet's cell.
+        let pay319 = null, payRow319 = null, payType319 = "hourly";
+        if (tcEmpSel) {
+          try {
+            pay319 = await payrollData(tcFloor238, phxDayStart(tcT238) + 86400000);
+            payRow319 = (pay319.rows || []).find((r) => r.id === tcEmpSel) || null;
+            payType319 = ((tcEmps || []).find((e) => e.id === tcEmpSel) || {}).pay_type || "hourly";
+          } catch (e319) { console.error("console paid hours (319) failed — exact only:", e319 && e319.message); pay319 = null; payRow319 = null; }
+        }
         if (tcEmpSel) {
           // evs191 rode the Block-212 wave-1 fetch above.
           const byDay191 = {};
@@ -12281,9 +12310,10 @@ http.createServer(async (req, res) => {
               else orphans.push(t);
             }
             if (openIn191) stints.push({ in: openIn191, out: null });
-            // Hours come from the RAW stints (matches pay math exactly —
-            // the 1-second switch gaps stay excluded), BEFORE the display
-            // merge below.
+            // `hours` = the EXACT minutes between punches (what Block 287's
+            // Timecards page calls "On clock") — the 1-second switch gaps stay
+            // excluded. It is NOT the pay number: pay rounds per punch and
+            // applies the Block 248/287 rules; see `paid` (Block 319) below.
             let mins191 = 0, open191 = false;
             for (const s of stints) {
               if (!s.out) { open191 = true; continue; }
@@ -12312,7 +12342,12 @@ http.createServer(async (req, res) => {
             // Block 216: any approved time-off row covering this day rides along
             // (sick days show on the card; the office can cancel a mis-tap).
             const to216 = toSel216.find((tRow) => tRow.start_date <= ds && tRow.end_date >= ds) || null;
+            // Block 319: `hours` = EXACT clock minutes ("on clock"); `paid` = the Pay Worksheet's cell for this
+            // person/day (null when the engine has no row for them — salaried/owner, or the engine failed).
+            const cell319 = payRow319 && payRow319.byDay ? payRow319.byDay[ds] : null;
             days191.push({ ds, dow, stints: merged199, orphans, hours: Math.round(mins191 / 6) / 10, open: open191,
+              paid: payRow319 ? (cell319 ? Number(cell319.worked) || 0 : 0) : null, ahx: cell319 ? Number(cell319.ahx) || 0 : 0,
+              salaried: !payRow319 && (payType319 === "salary" || payType319 === "na"),
               off216: to216 ? { id: to216.id, reason: to216.reason || "time off", offHrs: to216.hours != null ? Number(to216.hours) : 8 } : null });
           }
         }
