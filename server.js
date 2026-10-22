@@ -3973,7 +3973,33 @@ async function optionList255(b, allow255 = null) {
   const [ci255] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(root)}&order=received_at.desc&limit=1`);
   const det255 = ci255 && ci255.payload ? parseCoyoteDetail(ci255.payload, b.part_number, allow255) : null;
   if (!det255 || !det255.features.length) return [];
-  return det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
+  const lines255 = det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
+  // Block 322 (Daniel 10/21 18:16: "for body, they get all option boxes to check MINUS sheet metal
+  // individual panels shipped unassembled"): the kit panels leave the inspection list here, at the
+  // one source every gate reads (console panel, send-back saves, self-pass confirm, sign-off check).
+  const split322 = await kitSplit322(b, lines255);
+  const out322 = split322.keep; out322.kit322 = split322.kit;
+  return out322;
+}
+// Block 322: which order lines are the loose sheet-metal-kit panels (front clip / bed — the
+// warehouse checks them at crating) and which are cab/tub work (inspection ticks them). Decided by
+// the DROPDOWN, not the value: a label is a kit label when every live library row under it is
+// kit_only (so "Hood Hinges: Stock" and "Rear Pan: None" are crate checks too, and a new hinge
+// finish the site adds next month is a kit item on day one). A single row flagged kit_only under
+// a mixed label hides only that value — a stray flag can never hide a cab dropdown. The library
+// itself was rebuilt from the 10/22 crawl (migration 0072, Playbooks/69_Item3_Kit_Options_Audit.md).
+const normOpt322 = (s) => String(s || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
+async function kitSplit322(b, lines) {
+  if (!lines || !lines.length) return { keep: lines || [], kit: [] };
+  let fam = "";
+  try { const [pr] = await db(`product?select=family&part_number=eq.${encodeURIComponent(String(b.part_number || ""))}`); fam = pr && pr.family ? pr.family : ""; } catch (e) { fam = ""; }
+  if (!fam) return { keep: lines, kit: [] };
+  const rows = await db(`option_item?select=match_text,kit_only&family=eq.${encodeURIComponent(fam)}&retired=is.false`);
+  const byLabel = {}; const kitText = new Set();
+  for (const r of rows) { const n = normOpt322(r.match_text); const lab = n.includes(":") ? n.split(":")[0] : null; if (lab) { byLabel[lab] = byLabel[lab] || { kit: 0, cab: 0 }; byLabel[lab][r.kit_only ? "kit" : "cab"]++; } if (r.kit_only) kitText.add(n); }
+  const keep = [], kit = [];
+  for (const l of lines) { const n = normOpt322(l); const lab = n.includes(":") ? n.split(":")[0] : null; const st = lab ? byLabel[lab] : null; (kitText.has(n) || (st && st.kit > 0 && st.cab === 0)) ? kit.push(l) : keep.push(l); }
+  return { keep, kit };
 }
 const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = []) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
@@ -4354,8 +4380,11 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
     <div style="font-weight:800;font-size:.82rem;letter-spacing:.04em;color:#ff8f98">CUSTOMER SELECTIONS — confirm each is ON THIS CAB and correct before sign-off</div>
     ${(L && L.length) ? L.map((o) => `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="oc255" data-b="${id}" data-o="${escH(o).replace(/"/g, "&quot;")}"> ${escH(o)}</label>`).join("")
       : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
+    ${kitLine322(L)}
     <div style="opacity:.55;font-size:.8rem;margin-top:4px">Found one NOT done? Leave it unchecked and use Send back — your checked boxes are SAVED, and the rework note fills in for you.</div>
   </div>`;
+// Block 322: the quiet line under an inspection checklist — how many sheet-metal-kit panels left the list.
+const kitLine322 = (L) => (L && L.kit322 && L.kit322.length) ? `<div style="opacity:.6;font-size:.85rem;margin-top:6px;padding-top:6px;border-top:1px dashed #3a3a3c">&#128230; ${L.kit322.length} sheet-metal-kit item${L.kit322.length === 1 ? "" : "s"} not shown &mdash; loose panels the warehouse checks at crating, not cab work: <span style="opacity:.8">${L.kit322.map((o) => escH(o)).join(" &middot; ")}</span></div>` : "";
 // Block 308 (Daniel + Isaac, 10/20: "the whole block is just noise to him"): the INSPECTOR'S card —
 // one cab, one path: tick each customer selection (a running "3 of 5"), then ONE big button that is
 // grey until every box is ticked, so there is never an error to read. No completion photos (he is
@@ -4380,6 +4409,7 @@ const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const 
         <div style="opacity:.7;font-size:.9rem;margin-bottom:6px">${n ? "Tick each one you can see on the cab, done right." : "This order has no customer options."}</div>
         ${n ? L.map((o) => `<label style="display:block;padding:9px 6px;font-size:1.05rem;border-top:1px solid #3a2a2c;cursor:pointer"><input type="checkbox" class="oc255" data-b="${w.id}" data-o="${escH(o).replace(/"/g, "&quot;")}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> ${escH(o)}</label>`).join("")
           : `<label style="display:block;padding:9px 6px;font-size:1.05rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${w.id}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> Checked against the order &mdash; nothing to confirm</label>`}
+        ${kitLine322(L)}
       </div>
       <div style="font-weight:800;color:#ffd60a;margin:12px 0 4px">STEP 2 &mdash; Sign off</div>
       <button id="sob-${w.id}" class="btn" disabled style="width:100%;font-size:1.15rem;padding:16px;margin-top:0;background:#1d5a2d;border-color:#30d158;opacity:.45" onclick="act('complete','${w.id}',this)">Tick ${n ? `the ${n} selection${n > 1 ? "s" : ""}` : "the box"} first</button>
@@ -5794,6 +5824,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
   </tr>`; }).join(""))((x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])))}</table>
   ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
+  ${((labs) => labs.length ? `<p style="opacity:.55;font-size:.8rem;margin:4px 0 0">&#128230; Kit-only dropdowns (never on the inspection checklist, every value incl. Stock/None — the warehouse checks them at crating): <b>${labs.map(escH).join(" &middot; ")}</b></p>` : "")((() => { const by = {}; for (const o of optItems) { if (o.retired) continue; const n = String(o.match_text || "").trim(); if (!n.includes(":")) continue; const lab = n.split(":")[0].trim(); by[lab] = by[lab] || { kit: 0, cab: 0 }; by[lab][o.kit_only ? "kit" : "cab"]++; } return Object.keys(by).filter((l) => by[l].kit > 0 && by[l].cab === 0).sort(); })())}   <!-- Block 322 -->
   <p style="margin-top:10px">Add an option:
     <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
     Hrs <input class="num" id="op-new-hrs" value="1">
@@ -9844,8 +9875,13 @@ async function freezeAndStart(b, empId, startedAt) {
         const byText94 = {}; for (const o of lib94) byText94[norm94(o.match_text)] = o;
         const byId261 = {}; for (const o of lib94) byId261[o.id] = o;
         const sig94 = []; let sort94 = 9000;
+        // Block 322 (Daniel 10/22 14:07: "only production upgrade steps show in the admin console"): a
+        // line under a sheet-metal-kit dropdown is a loose panel — it rides the signature, but it is
+        // never a task and never a "needs hours" flag, whether or not its exact value is in the library.
+        const kitSet322 = new Set((await kitSplit322(b, det94.features.map((f) => (f.label ? f.label + ": " : "") + f.value))).kit.map(norm94));
         for (const f of det94.features) {
           const full = (f.label ? f.label + ": " : "") + f.value;
+          if (kitSet322.has(norm94(full))) { sig94.push(full); continue; }
           let hit = byText94[norm94(full)] || byText94[norm94(f.value)];
           // Block 261 (Daniel: "combine the duplicates so ONLY one shows up,
           // but the wording variations still populate through"): an ALIAS row
