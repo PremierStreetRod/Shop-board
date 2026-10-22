@@ -223,6 +223,28 @@ async function liveSession(req) {
   const [me] = await db(`employee?select=active&id=eq.${sid}`);
   return me && me.active === true ? sid : null;
 }
+// Block 320: the "whose page is this?" guard — the first thing in <head> of every
+// page rendered for a signed-in person (send() injects it). The browser may hand a
+// page back from its back/forward memory without asking the server (the frozen copy
+// Daniel saw: "press the back button and it will return to the last user's last
+// screen"). On that restore the page is hidden BEFORE it paints and /api/whoami is
+// asked: nobody signed in → /login; a different person now → their own /home; the
+// same person → shown again. A normal load makes NO extra request (the server just
+// rendered the page for whoever holds the cookie). On a marked shared tablet the
+// same question is asked when the screen comes back (wake from sleep / app switch)
+// — no hiding then, the page was already theirs. Employee ids are UUIDs; the only
+// characters that reach the script are [0-9a-f-].
+function guard320(empId) {
+  const id = String(empId).replace(/[^0-9a-f-]/gi, "");
+  return `<script>(function(){var me="${id}";var h=document.documentElement;` +
+    `function ask(hide){if(hide)h.style.visibility="hidden";` +
+    `fetch("/api/whoami",{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.ok?r.json():{};}).then(function(d){` +
+    `if(!d||!d.id)location.replace("/login");else if(d.id!==me)location.replace("/home");else h.style.visibility="";}).catch(function(){h.style.visibility="";});}` +
+    `window.addEventListener("pageshow",function(e){if(e.persisted)ask(true);});` +
+    `try{var n=performance.getEntriesByType("navigation")[0];if(n&&n.type==="back_forward")ask(true);}catch(e){}` +
+    `document.addEventListener("visibilitychange",function(){if(!document.hidden&&/(^|; )sb_shared_ui=1/.test(document.cookie||""))ask(false);});` +
+    `})();</script>`;
+}
 
 // PIN lockout (SPEC-DEFAULT C17: per-PERSON, never the kiosk device —
 // 5 wrong tries locks that person for 5 minutes). Kept in memory: a
@@ -1366,6 +1388,15 @@ const style = `<style>
       el.classList.add("tapfx208");
       setTimeout(function(){ el.classList.remove("tapfx208"); }, 450);
     }, true);
+  // Block 320: every "Sign out" link signs out WITHOUT leaving the page behind
+  // in the Back list — the sign-out replaces the current history entry instead
+  // of adding one (same as the walk-away timer below already does). One handler
+  // here covers every Sign out link on every page, present and future.
+  document.addEventListener("click", function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href="/logout"]') : null;
+    if (!a) return;
+    e.preventDefault(); location.replace("/logout");
+  }, true);
   // Block 214 (Daniel): SHARED-TABLET WALK-AWAY LOGOUT. A marked tablet
   // (Tools -> Tablet setup) signs out after 2 QUIET minutes — the timer only
   // counts while the screen is visible and untouched, so working a checklist
@@ -10362,6 +10393,21 @@ http.createServer(async (req, res) => {
         "sb_shared_ui=1; Path=/; Max-Age=31536000; SameSite=Lax",   // the client watchdog's (non-secret) hint — self-heals tablets marked before Block 214
       ]);
     }
+    // Block 320 (Daniel 10/21: "if a person logged in signs out, someone simply has
+    // to press the back button and it will return to the last users last screen"):
+    // NO page and NO /api answer may be kept by the browser. Every HTML page and
+    // every /api response says no-store, so Back has to ask the server again — and
+    // the server, seeing no cookie, sends /login. Photos, icons, the ZIP and the
+    // live stream set their own cache headers on their own writeHead paths.
+    const html320 = String(type).startsWith("text/html");
+    if (html320 || url.pathname.startsWith("/api/")) { res.setHeader("Cache-Control", "no-store, private"); res.setHeader("Pragma", "no-cache"); }
+    // …and every page rendered FOR a signed-in person carries a "whose page is this?"
+    // guard in its <head>: if the browser ever re-shows the page from its
+    // back/forward memory (the frozen copy no-store can't always stop), the guard
+    // hides it before a frame is painted and asks /api/whoami — signed out → /login,
+    // somebody else now → their /home, same person → shown again. Injected here so
+    // a future page can't forget it.
+    if (html320 && typeof data === "string") { const sid320 = readSession(req.headers.cookie); if (sid320) data = data.replace("<head>", "<head>" + guard320(sid320)); }
     // Block 212 (v201 SPEED): gzip text responses when the browser accepts it
     // (every browser does) — a 150 KB page becomes ~20 KB on shop Wi-Fi.
     // Only text types come through send(); binaries (photos/icons) use their
@@ -11363,6 +11409,14 @@ http.createServer(async (req, res) => {
 
     // TV BOARD (file 19 skeleton) — view-only; no login (it's a TV on shop Wi-Fi).
     // Q120: the unread count for the notifications bell (any signed-in user).
+    // Block 320: the guard's question — "who holds the cookie on this device right
+    // now?" Signed, unexpired, still active → the id; otherwise 401. A GET, so the
+    // shared-tablet sliding window in send() does NOT renew on it (a check must
+    // never keep a walked-away session alive).
+    if (url.pathname === "/api/whoami") {
+      const empW = await liveSession(req);
+      return empW ? json(200, { ok: true, id: empW }) : json(401, { ok: false });
+    }
     if (url.pathname === "/api/inbox/unread") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false });
@@ -15696,6 +15750,12 @@ self.addEventListener("notificationclick", (e) => {
       const empId = await liveSession(req);
       if (empId) logEvent("employee.logout", empId, {});
       res.setHeader("Set-Cookie", "sb_session=; Path=/; Max-Age=0");
+      // Block 320: signing out also throws away everything the browser cached for
+      // the site on this device. ONLY "cache" — never "cookies" (that would wipe the
+      // sb_shared / sb_shared_ui tablet marks) and never "storage" (that would
+      // unregister the service worker and kill push on a phone).
+      res.setHeader("Clear-Site-Data", "\"cache\"");
+      res.setHeader("Cache-Control", "no-store, private");
       res.writeHead(302, { Location: "/login" });
       return res.end();
     }
