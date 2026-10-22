@@ -1662,6 +1662,17 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   <div id="hi" style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${state.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${state.clockedIn ? `&#9679; ON THE CLOCK — ${state.lineName}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${(fixLane.back321 || []).map((f) => `
+  <!-- Block 321 (Daniel 10/21: "a yellow warning box appears at the top of the production staff's home pages…
+       from there they with one tap can start the fix"): a cab on one of your lines came back from Body, or
+       the fix you were on before lunch / last night is still open. ONE tap puts your clock on it — it
+       clocks you in first if you aren't yet (shop hours). -->
+  <div style="background:#3a2f00;border:2px solid #ffd60a;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left;color:#fff">
+    <div style="font-weight:800;color:#ffd60a;font-size:1.1rem">&#10226; ${f.mine ? "YOUR FIX IS STILL OPEN" : f.kind === "rework" ? "BACK FROM BODY FOR A FIX" : "BACK FOR A FIX"} &mdash; ORDER ${escH(f.order)}${f.cab ? ` &middot; Cab #${escH(f.cab)}` : ""}${f.line ? ` &middot; ${escH(f.line)}` : ""}</div>
+    <div style="margin-top:4px">${escH(f.reason || "")}${f.note ? ` &middot; <span style="opacity:.85">${escH(f.note)}</span>` : ""}</div>
+    <div style="margin-top:4px;font-size:.9rem;opacity:.9">${f.ago ? `Sent back ${f.ago}` : ""}${f.on && f.on.length ? ` &middot; <b style="color:#30d158">${f.on.map(escH).join(" + ")} on it</b> &middot; ${(Math.round(f.hours * 10) / 10).toFixed(1)} crew-hrs so far` : ` &middot; nobody on the fix yet`}</div>
+    <button class="name" data-fixclaim="${f.build_id}" style="margin-top:10px;background:#1d5a2d;border-color:#30d158;font-size:1.15rem">&#9654; ${f.mine ? "Back on the fix" : f.on && f.on.length ? "Join the fix" : "Start the fix"}${state.clockedIn ? "" : " \u2014 clocks me in on it"}</button>
+  </div>`).join("")}
   ${state.clockedIn && fixLane.open && fixLane.open.length ? `<div style="background:var(--card);border:1px solid #4a90d9;border-radius:14px;padding:14px 16px;margin:10px 0 0;text-align:left">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
     ${fixLane.open.map((f) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0">
@@ -1963,6 +1974,37 @@ async function noteTriage138(buildId, noteText, orderNumber) {
 const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLines = [], people = {}, photoMin = 1, photoHave = 0, fixLane = { open: [], onFix: false, offFix: false }, prog209 = { ask: false, mandatory: false, have: false }, prog316 = null) => {
   const inRework = build.state === "rework";
   const inFix = build.state === "fix_job";   // Q85: a returned/kicked-back cab
+  // Block 321 (Daniel 10/21): ONE FIX FLOW. A cab back from Body (rework) or back as a fix job
+  // shows ONE yellow box at the top: why it came back, who is on the fix and the hours so far,
+  // "Start the fix" / "Join the fix" (one tap: your clock moves onto the Fix-work bucket stamped
+  // with this cab), and ONE "✓ Fix done" (tap twice) that closes the fix step itself, sends the
+  // cab on (rework → straight to Body; fix job → the Body managers inspection) and puts everyone
+  // on the fix back on their line. No R1 start / R1 done / scroll-to-the-bottom any more. The
+  // old banners and the first-finish form stay in the code for the non-fix screens only.
+  const fixFlow321 = (inRework || inFix) && fixLane.st321;
+  const st321 = fixLane.st321 || { on: [], hours: 0 };
+  const meOn321 = st321.on.some((p) => p.id === emp.id);
+  const h1_321 = (h) => (Math.round(h * 10) / 10).toFixed(1);
+  const doneWords321 = inRework ? "\u2713 Fix done \u2014 send to Body" : "\u2713 Fix done \u2014 send for inspection";
+  const fixBox321 = !fixFlow321 ? "" : `
+  <div id="fixbox321" class="note" style="background:#3a2f00;border:2px solid #ffd60a;color:#fff;padding:14px">
+    <div style="font-weight:800;color:#ffd60a;font-size:1.15rem">&#10226; ${inRework ? "BACK FROM BODY FOR A FIX" : `BACK FOR A FIX \u2014 ${build.fix_kind === "kickback" ? "kickback" : "customer return"}`} \u2014 ${escH(inRework ? (build.rework_reason || "see note") : (build.fix_reason || "see note"))}</div>
+    ${(inRework ? build.rework_note : build.fix_note) ? `<div style="margin-top:4px;opacity:.9">${escH(fixLane.sentBy321 ? fixLane.sentBy321 + "'s note" : "Note")}: ${escH(inRework ? build.rework_note : build.fix_note)}</div>` : ""}
+    <div style="margin-top:6px;font-size:.95rem">${fixLane.sentAt321 ? `Sent back${fixLane.sentBy321 ? ` by ${escH(fixLane.sentBy321)}` : ""} ${agoWords321(fixLane.sentAt321)}` : ""}${st321.on.length
+      ? ` \u00b7 <b style="color:#30d158">${st321.on.map((p) => escH(p.name)).join(" + ")} on it</b> \u00b7 ${h1_321(st321.hours)} crew-hrs so far`
+      : ` \u00b7 <b style="color:#ff9f0a">nobody on the fix yet</b>${st321.hours ? ` \u00b7 ${h1_321(st321.hours)} crew-hrs on it earlier` : ""}`}</div>
+    ${meOn321 ? `
+    <div style="margin-top:10px;color:#30d158;font-weight:700">You're on this fix \u2014 your hours are landing on it.</div>
+    <div style="margin-top:10px;opacity:.85">&#128247; Photo of the fix (optional): <input type="file" id="fxphoto321" accept="image/*" multiple style="color:#8e8e93"></div>
+    <div class="msg" id="fxmsg321" style="min-height:0"></div>
+    <button class="name" id="fxdone321" style="background:#1d3a24;border-color:#30d158;margin-top:10px;font-size:1.25rem" onclick="fixDoneTap321('${build.id}',this)">${doneWords321}</button>
+    <div style="opacity:.6;font-size:.85rem;margin-top:4px;text-align:center">${inRework ? "Straight to Body \u2014 no second inspection. Everyone on the fix goes back to the line." : "Lands with the Body Shop managers for inspection. Everyone on the fix goes back to their line."}</div>
+    <p style="text-align:center;margin:10px 0 0"><a href="#" onclick="fixRelease(this);return false" style="color:#8e8e93;font-size:.9rem">Step off this fix (not done \u2014 back to my line)</a></p>`
+    : `
+    <button class="name" style="background:#1d5a2d;border-color:#30d158;margin-top:12px;font-size:1.25rem" onclick="fixClaim('${build.id}',this)">&#9654; ${st321.on.length ? "Join the fix" : "Start the fix"} \u2014 my clock goes on it</button>
+    <div style="opacity:.6;font-size:.85rem;margin-top:4px;text-align:center">${st321.on.length ? "Two people can be on one fix \u2014 both sets of hours count." : "One tap. Your hours land on this fix from now until \u2713 Fix done."}</div>
+    ${emp.role === "manager" || emp.role === "admin" ? `<p style="text-align:center;margin:10px 0 0"><button onclick="fixDoneTap321('${build.id}',this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 16px;font-size:.9rem;cursor:pointer">${doneWords321} (manager backup)</button></p>` : ""}`}
+  </div>`;
   // Per-task documentation (file 11): count what's attached to each step.
   const notesOf = {}; for (const n of notes) (notesOf[n.task_id] = notesOf[n.task_id] || []).push(n);
   const photosOf = {}; for (const p of tphotos) (photosOf[p.task_id] = photosOf[p.task_id] || []).push(p);
@@ -2040,13 +2082,14 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <span style="opacity:.7">${prog316 ? `${prog316.pct}% done · ${prog316.stepsDone} of ${prog316.stepsTotal} steps${prog316.stepsOpen ? ` · ${prog316.stepsOpen} open` : ""}` : `${doneMh.toFixed(1)} of ${totalMh.toFixed(1)} standard hours complete`}</span>
   </div>
   ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 && (emp.role === "manager" || emp.role === "admin") ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor. Block 194 (owner): the order note (shipping etc.) is MANAGER/ADMIN-only on the cab screen — production builds from the checklist + flags, not customer notes. -->
-  ${tasks.every((t) => t.is_background || t.state === "complete") ? `
+  ${fixFlow321 ? fixBox321 : ""}
+  ${!fixFlow321 && tasks.every((t) => t.is_background || t.state === "complete") ? `
   <!-- Block 194 (Blazer lesson): when the cab is DONE, say so at the TOP —
        the finish box used to live only below the whole checklist. -->
   <div class="cabbar" style="border-color:#30d158;cursor:pointer" onclick="const f194=document.getElementById('finish11');if(f194)f194.scrollIntoView({behavior:'smooth',block:'center'})">
     <b style="color:#30d158">&#10003; Every step is checked!</b> ${photoHave >= photoMin ? (inRework ? "Tap here to finish — send it to Body." : "Tap here to finish — send it for inspection.") : `Add ${photoMin - photoHave > 1 ? (photoMin - photoHave) + " completion photos" : "a completion photo"} and ${inRework ? "send it to Body" : "send it for inspection"} — tap here.`}
   </div>` : ""}
-  ${inRework ? `
+  ${inRework && !fixFlow321 ? `
   <!-- REWORK BANNER (files 11/18 · Block 207): the manager sent this cab
        back with a reason + a time frame. The fix tasks sit in the REWORK
        group below (day_no 0 sorts first). Finish them all and the finish
@@ -2057,7 +2100,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ⟲ SENT BACK FOR REWORK — ${build.rework_reason || "see note"}
     ${build.rework_note ? `<br><span style="opacity:.8">Manager's note: ${build.rework_note}</span>` : ""}
   </div>` : ""}
-  ${inFix ? `
+  ${inFix && !fixFlow321 ? `
   <!-- Q85 FIX-JOB BANNER: this cab was ALREADY signed off and came BACK — a
        Body Shop kickback or a customer return. The fix step sits in the FIX
        group below (day_no 0). Finish it and the finish gate returns — resubmit
@@ -2067,7 +2110,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     ⟲ BACK FOR ONE MORE PASS — ${build.fix_reason || "see note"}
     ${build.fix_note ? `<br><span style="opacity:.8">Manager's note: ${build.fix_note}</span>` : ""}
   </div>` : ""}
-  ${inFix && fixLane.offFix ? `
+  ${inFix && fixLane.offFix && !fixFlow321 ? `
   <!-- Block 271 (Mike's lunch return): the SELF-HEAL banner. You're LOOKING at
        a fix but your open punch isn't on it — steps tap fine, yet every hour
        lands off the fix and the board names nobody. One tap runs the same
@@ -2078,7 +2121,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <span style="opacity:.85">You can work the steps, but your clock is parked somewhere else right now &mdash; the board shows nobody on this fix and your hours miss it.</span><br>
     <button onclick="fixClaim('${build.id}',this)" style="margin-top:10px;background:#7a1f1f;color:#fff;border:1px solid #ff453a;border-radius:10px;padding:12px 22px;font-size:1rem;font-weight:700;cursor:pointer">Put my clock on this fix &mdash; one tap</button>
   </div>` : ""}
-  ${inFix && fixLane.onFix && !fixLane.offFix ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
+  ${inFix && fixLane.onFix && !fixLane.offFix && !fixFlow321 ? `<p style="text-align:center;margin:-2px 0 12px"><button onclick="fixRelease(this)" style="background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 20px;font-size:.95rem;cursor:pointer">Done with this fix — back to my line</button></p>` : ""}
   ${fixLane.open && fixLane.open.length ? `<div class="cabbar" style="border-color:#4a90d9">
     <div style="font-weight:700;color:#4a90d9;margin-bottom:6px">Open fixes — grab one when you can</div>
     ${fixLane.open.map((f) => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0">
@@ -2127,7 +2170,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
           <div id="hoff-${t.id}" style="margin-top:8px"></div>
         </div>
       </div>`).join("")}`).join("")}
-  ${tasks.every((t) => t.is_background || t.state === "complete") ? `
+  ${!fixFlow321 && tasks.every((t) => t.is_background || t.state === "complete") ? `
   <!-- FINISH GATE (file 11, builder half): every step done -> final note ->
        cab goes AWAITING INSPECTION for the manager. Photos join when
        storage plumbing lands (noted in BUILD_LOG). -->
@@ -2411,6 +2454,27 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     const out = await sbPost("/api/fix/claim", { build_id: id, claimed_at: new Date().toISOString() }, (m) => { document.getElementById("err").textContent = m; });
     if (out.ok) return location.reload();
     if (btn) { btn.disabled = false; btn.textContent = btn.dataset.was271 || "Work this fix"; }
+  }
+  // Block 321: "✓ Fix done" — tap twice (4 s to change your mind); uploads an optional photo of
+  // the fix, then the same /api/build/finish the old bottom button used. The server closes the fix
+  // step and takes everyone off Fix work.
+  async function fixDoneTap321(id, btn){
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const was = btn.textContent; btn.textContent = "Sure? Tap again to send it on"; setTimeout(() => { if (btn.dataset.armed) { btn.dataset.armed = ""; btn.textContent = was; } }, 4000); return; }
+    btn.dataset.armed = ""; btn.disabled = true; btn.textContent = "Sending\u2026";
+    const msg = document.getElementById("fxmsg321") || document.getElementById("err");
+    try {
+      const inp = document.getElementById("fxphoto321"); const files = inp ? inp.files : [];
+      for (let i = 0; i < files.length; i++) {
+        msg.textContent = "Uploading photo " + (i + 1) + " of " + files.length + "\u2026";
+        const f = await toJpeg(files[i], "finish");
+        const uo = await sbUpload("/api/photo/upload?build_id=" + id, f, f.type || "image/jpeg", (m) => { msg.textContent = m; });
+        if (!uo.ok) throw new Error(uo.error || "Photo upload failed");
+      }
+      msg.textContent = "";
+      const out = await sbPost("/api/build/finish", { build_id: id, claimed_at: new Date().toISOString() }, (m) => { msg.textContent = m; });
+      if (out.ok) return location.reload();
+      throw new Error(out.error || "Something went wrong");
+    } catch (e) { msg.textContent = e.message; btn.disabled = false; btn.textContent = "${doneWords321}"; }
   }
   async function fixRelease(btn){
     if (btn) { btn.disabled = true; btn.textContent = "…"; }
@@ -4297,6 +4361,14 @@ const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10p
 // grey until every box is ticked, so there is never an error to read. No completion photos (he is
 // standing at the cab), no "I've got this one" (hidden; a line shows only if someone ELSE claimed it),
 // send-back folded behind a small link. Same audited endpoints underneath (act / sendBack).
+// Block 321 (Daniel 10/21: "inspection should only be body managers, lets fix that"): a Production
+// manager sees a cab WAITING for inspection as a fact, with no sign-off / send-back / claim controls.
+// (Reverses the Block 295 ruling that kept Michael's inspection panel.) Admins keep the controls as backup.
+const roInsp321 = (w, r) => `
+    <div id="insp-${w.id}" style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
+      <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · WAITING FOR INSPECTION
+      <div style="opacity:.7;font-size:.9rem;margin-top:4px">${w.inspection_claimed_by ? `&#128269; ${w.claim_name184} is inspecting it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}.` : "A Body Shop manager inspects it (admins as backup)."} The line stays occupied until it's signed off.</div>
+    </div>`;
 const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const n = L.length;
   return `<div id="insp-${w.id}" style="border:2px solid #ffd60a;border-radius:14px;padding:14px;margin-bottom:12px;background:#1a1700">
       <div style="font-size:1.35rem;font-weight:800">ORDER ${w.order_number}${w.cab_number ? ` &middot; Cab #${w.cab_number}` : ""}</div>
@@ -4395,7 +4467,7 @@ const ahLane300 = (afterHours, isAdmin, insp188, acct189) => `  ${!insp188 && !a
     <div style="opacity:.5;font-size:.85rem">${isAdmin ? "Approve puts the hours on the timecard; Deny needs one typed line and the person is told. One tap each." : "Confirming says the named approval was real. An ADMIN approves — that releases the hours onto the timecard; until then they're HELD and flagged."}</div>
   </div>` : ""}
 `;
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = []) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = [], canInsp321 = isAdmin) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -4481,8 +4553,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        awaiting inspection now ALSO surfaces here, one glance from the top,
        with the SAME controls (input ids carry a T prefix so the two copies
        never collide; sendBack takes the prefix). The per-line copy stays. -->
-  <div class="lane" style="border-color:#ffd60a" id="insp153"><h3>${insp188 ? "Inspection" : "Needs inspection — sign off or send back"}</h3>
-    ${rows.flatMap((r) => (r.awaiting || []).map((w) => insp188 ? inspCard308(w, r, reworkReasons) : `
+  <div class="lane" style="border-color:#ffd60a" id="insp153"><h3>${insp188 ? "Inspection" : canInsp321 ? "Needs inspection — sign off or send back" : "Waiting for inspection"}</h3>
+    ${rows.flatMap((r) => (r.awaiting || []).map((w) => insp188 ? inspCard308(w, r, reworkReasons) : !canInsp321 ? roInsp321(w, r) : `
     <div id="insp-${w.id}" style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
       <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · AWAITING INSPECTION
       ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
@@ -4551,7 +4623,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
                <div style="margin-top:6px"><input id="dr-${r.line.id}" placeholder="Why down? (rides with the order)" maxlength="120" style="padding:5px;width:58%;min-width:210px;background:#111;color:#fff;border:1px solid var(--line);border-radius:6px">
                <button class="btn gray" style="padding:4px 10px;margin-left:6px" onclick="armM(this,()=>lineDown(${r.line.id},true,document.getElementById('dr-${r.line.id}').value))">Put line down</button>
                <div style="opacity:.55;margin-top:4px">Nobody expected on this line today (staff out, equipment down). The TV shows the reason instead of an idle line; it comes back up the moment someone clocks in.</div></div></details>`)}
-      ${(r.awaiting || []).map((w) => `
+      ${(r.awaiting || []).map((w) => !canInsp321 ? roInsp321(w, r) : `
         <div style="border:1px solid #ffd60a;border-radius:10px;padding:10px;margin-bottom:8px">
           <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · AWAITING INSPECTION
           ${w.final_note ? `<div style="opacity:.75;font-size:.9rem;margin-top:4px">Final note: ${w.final_note}</div>` : ""}
@@ -4578,9 +4650,19 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           </div>
         </div>`).join("")}
       ${(r.rework || []).map((w) => `
-        <div style="border:1px dashed #ff9f0a;border-radius:10px;padding:10px;margin-bottom:8px">
-          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · IN REWORK — ${w.rework_reason || ""}
-          <div style="opacity:.6;font-size:.9rem">Comes back for re-inspection when the fixes are checked off.</div>
+        <!-- Block 321 (Daniel 10/21): the rework card is the LINE'S CURRENT CAB — it is still physically on
+             the line until the fix is done, so no next cab starts here. Says who is on the fix, the Fix-work
+             hours so far, how long since Body sent it back, and carries the same one-tap "Fix done" the crew
+             has (Production managers + admins) as the fallback. The old "re-inspection" words were wrong since
+             Block 207 — a rework goes STRAIGHT to Body when the fix is done. -->
+        <div id="rw321-${w.id}" style="border:2px solid #ff9f0a;border-radius:10px;padding:10px;margin-bottom:8px;background:#2a1600">
+          <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · <span style="color:#ff9f0a">BACK FROM BODY FOR A FIX</span> — ${escH(w.rework_reason || "")}${w.rework_note ? ` <span style="opacity:.8">· ${escH(w.rework_note)}</span>` : ""}
+          <div style="font-size:.9rem;margin-top:4px">${w.rework_assigned_at ? `Sent back ${agoWords321(w.rework_assigned_at)}` : ""}${(w.fix321 && w.fix321.on.length)
+            ? ` — <b style="color:#30d158">${w.fix321.on.map((p) => escH(p.name)).join(" + ")} on it</b> · ${(Math.round(w.fix321.hours * 10) / 10).toFixed(1)} crew-hrs on the fix so far`
+            : ` — <b style="color:#ff453a">nobody on the fix yet</b>${w.fix321 && w.fix321.hours ? ` · ${(Math.round(w.fix321.hours * 10) / 10).toFixed(1)} crew-hrs on it earlier` : ""}`}</div>
+          <div style="opacity:.6;font-size:.85rem;margin-top:3px">The cab stays on this line until the fix is done; then it goes straight to Body (no second inspection). The crew taps ✓ Fix done on their screen — this button is the backup.</div>
+          <div style="margin-top:8px"><a href="/order/${encodeURIComponent(w.order_number)}" style="color:#5ac8fa;margin-right:12px">Open cab</a>
+            ${insp188 ? "" : `<button class="btn" style="background:#1d5a2d;border:1px solid #30d158;margin-top:0" onclick="armM(this,()=>fixDone321('${w.id}',this))">&#10003; Fix done — send to Body</button>`}</div>
         </div>`).join("")}
       ${r.active ? `
         <div><b>ORDER ${r.active.order_number}</b>${r.active.cab_number ? ` · Cab #${r.active.cab_number}` : ""} · ${r.active.part_number} · active${r.active.ready194 && !r.active.ready194.allDone ? ` · <span style="opacity:.7">${r.active.ready194.done}/${r.active.ready194.total} steps</span>` : ""}${proj[r.active.order_number] ? ` · ${projPhrase(proj[r.active.order_number])}` : ""}</div>
@@ -4597,6 +4679,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
         ${insp188 ? "" : `${oc255(r.active.id, r.active.opts255)}${!isAdmin ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`}`
+      : (r.rework || []).length ? `<div style="opacity:.6">The fix above is this line's current cab &mdash; Start next comes back when it's done.</div>`   /* Block 321: a rework cab occupies its line */
       : `<div style="opacity:.6">No active cab</div>
         ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
       ${r.queue.length ? `<div style="margin-top:10px;opacity:.6">Waiting (warehouse runs this order):</div>
@@ -4878,6 +4961,20 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       err.textContent = out.error || "Something went wrong";
     } catch (e) { err.textContent = "Network hiccup — try again"; }
     btn.disabled = false; btn.textContent = "Send to inspection";
+  }
+  // Block 321: the console backup "✓ Fix done — send to Body" on a rework card — the same
+  // /api/build/finish the crew's one tap uses (closes the fix step, everyone off Fix work).
+  async function fixDone321(id, btn) {
+    btn.disabled = true; btn.textContent = "Sending to Body…";
+    const err = document.getElementById("err");
+    try {
+      const r = await fetch("/api/build/finish", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_id: id, photo_pass: true, claimed_at: new Date().toISOString() }) });
+      const out = await r.json();
+      if (out.ok) return location.reload();
+      err.textContent = out.error || "Something went wrong";
+    } catch (e) { err.textContent = "Network hiccup — try again"; }
+    btn.disabled = false; btn.textContent = "\u2713 Fix done — send to Body";
   }
   // Block 191: the accounting timecard editor — a friendlier face on the
   // audited /api/punch/correct endpoint. Times type as Phoenix wall-clock;
@@ -6135,6 +6232,56 @@ function fixHoursByBuild(evs) {
   const out = {}; for (const k in sums) out[k] = sums[k] / 3600000;
   return out;
 }
+// ===== Block 321 (Daniel 10/21: "one tap to start the fix… two people… when its done its ONE
+// tap… the hour and a half he was on that fix wasn't properly calculated"): ONE FIX FLOW for a
+// Body send-back (state rework) AND a fix job (kickback / customer return). The fix is a
+// clock stint on the Fix-work bucket (line 15) stamped with the cab — hours are punches,
+// never taps on a step. These helpers are the one place the flow's facts come from.
+// Who is on a fix right now + the cab Fix-work hours so far (everyone, summed).
+async function fixStatus321(buildId) {
+  const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&fix_build_id=eq.${buildId}&kind=eq.clock_in&limit=2000`);
+  if (!seed.length) return { on: [], hours: 0 };
+  const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const [evs, people] = await Promise.all([
+    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${new Date(Date.now() - 120 * 86400000).toISOString()}&order=claimed_at.asc,id.asc`),
+    db(`employee?select=id,first_name,last_name&id=in.(${emps.join(",")})`),
+  ]);
+  const last = {}; for (const e of evs) last[e.employee_id] = e;
+  const nm = Object.fromEntries(people.map((p) => [p.id, `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim()]));
+  const on = emps.filter((id) => last[id] && last[id].kind === "clock_in" && last[id].line_id === FIX_LINE_ID && last[id].fix_build_id === buildId)
+    .map((id) => ({ id, name: nm[id] || "someone", since: last[id].claimed_at }));
+  return { on, hours: fixHoursByBuild(evs)[buildId] || 0 };
+}
+// The line a person was on BEFORE their fix stint (Daniel: "send them back to the last line they
+// were on"): the latest clock-in that is not the Fix-work bucket. Falls back to the cab own line
+// when they clocked straight into the fix.
+async function lineBeforeFix321(empId, fallbackLine) {
+  const rows = await db(`clock_event?select=line_id,kind&voided=is.false&employee_id=eq.${empId}&kind=eq.clock_in&line_id=neq.${FIX_LINE_ID}&order=claimed_at.desc&limit=1`);
+  const l = rows[0] ? Number(rows[0].line_id) : null;
+  return l && l !== 14 ? l : (fallbackLine || 14);
+}
+// "✓ Fix done" (Daniel: "when one person taps done, both would go back to the line"): close
+// EVERY open Fix-work stint on this cab (the tapper included), put each person back on the
+// line they came from, and clear their focus. Punches 1 s apart — the deterministic-replay rule.
+async function releaseAllFromFix321(buildId, fallbackLine, whenIso, actorId) {
+  const st = await fixStatus321(buildId);
+  const when = new Date(whenIso || Date.now());
+  const moved = [];
+  for (const p of st.on) {
+    const back = await lineBeforeFix321(p.id, fallbackLine);
+    await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: p.id, line_id: FIX_LINE_ID, kind: "clock_out_early", reason: p.id === actorId ? "Fix done" : "Fix done (by " + (st.on.find((x) => x.id === actorId) || { name: "a teammate" }).name + ")", claimed_at: when.toISOString() }) });
+    await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: p.id, line_id: back, kind: "clock_in", claimed_at: new Date(when.getTime() + 1000).toISOString() }) });
+    moved.push({ id: p.id, name: p.name, line: back });
+  }
+  const ids = st.on.map((p) => p.id);
+  if (ids.length) await db(`employee?id=in.(${ids.join(",")})`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
+  return { moved, hours: st.hours };
+}
+// Plain words for "how long ago" on the box and the console card.
+const agoWords321 = (iso) => { const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60 ? (m % 60) + " m " : ""}ago` : `${Math.floor(m / 1440)} day${m >= 2880 ? "s" : ""} ago`; };
+// The gate for INSPECTION (Daniel 10/21 18:05): Body Shop managers (Isaac, Jason) + admins as backup.
+// NOT Production managers. Written as exactly that, so a manager in some other department never gets it by accident.
+const canInspect321 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Body Shop")));
 function workIntervals(events, nowMs) {
   const open = {}; const out = [];
   for (const ev of events) {
@@ -9263,6 +9410,11 @@ async function cabRecap310(b) {
   for (const e of ev("build.self_passed")) odd.push({ at: e.at, what: `Production pushed the cab through after rework (self-pass) — ${name(e.actor_id)}` });
   for (const e of ev("build.fixjob_opened")) odd.push({ at: e.at, what: `Fix job opened by ${name(e.actor_id)}${e.payload.kind ? ` (${e.payload.kind})` : ""}${e.payload.reason ? ` — ${e.payload.reason}` : ""}` });
   for (const e of ev("build.fixjob_done")) odd.push({ at: e.at, what: `Fix job finished${e.payload.hours ? ` — ${h1_310(e.payload.hours)} h` : ""}` });
+  // Block 321: the fix own hours — the Fix-work bucket punches on this cab (both kinds of fix), everyone summed.
+  let fixHours321 = 0;
+  try { const stF321 = await fixStatus321(b.id); fixHours321 = stF321.hours; } catch (eF321) { fixHours321 = 0; }
+  for (const e of ev("fix.done")) odd.push({ at: e.at, what: `✓ Fix done — ${name(e.actor_id)}${(e.payload.people || []).length ? ` (${e.payload.people.join(" + ")} on it)` : ""}${e.payload.hours ? ` · ${h1_310(e.payload.hours)} h on the Fix-work clock` : ""}` });
+  if (fixHours321 && !ev("fix.done").length) odd.push({ at: new Date().toISOString(), what: `${h1_310(fixHours321)} h on the Fix-work clock so far (fix still open)` });
   for (const d of downs || []) odd.push({ at: d.down_at, what: `Line down${d.reason ? ` — ${d.reason}` : ""}${d.up_at ? ` (${h1_310((new Date(d.up_at) - new Date(d.down_at)) / 3600000)} h)` : " (not marked back up)"}` });
   for (const e of ev("build.signoff_override")) odd.push({ at: e.at, what: `Signed off with ${e.payload.open_steps} step${e.payload.open_steps === 1 ? "" : "s"} still open (manager override)` });
   if (signEv && signEv.payload && signEv.payload.short_at_signoff) odd.push({ at: signEv.at, what: `Kit was still marked SHORT at sign-off${signEv.payload.still_missing ? ` — "${String(signEv.payload.still_missing).slice(0, 80)}"` : ""}` });
@@ -9301,7 +9453,7 @@ async function cabRecap310(b) {
     daysOnLine: startMs ? Math.max(1, Math.round((endMs - startMs) / 86400000 * 10) / 10) : null, shopDays, promisedShopDays, planPerDay, crewPerDay: shopDays ? crewTotalH / shopDays : null,
     avgHeads: shopMs ? crewTotalH / (shopMs / 3600000) : null,   // Block 313: average people clocked onto the line during shop hours (lunch out)
     planHeads: planPeople, planHpd: hpd314r, promisedUnderOldRule: !(Number(b.people_planned) > 0),   // Block 314: the people the cab was promised against
-    allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps,
+    allowed, allowedSteps, allowedOpts, allowedFix, crewHours: crewTotalH, earned, crew, steps, fixHours: fixHours321,   // Block 321: Fix-work bucket hours on this cab (not in crewHours — they're not line time)
     unattributedH: Math.max(0, crewTotalH - steps.reduce((s2, x) => s2 + (x.actual || 0), 0)),   // Block 310b: clocked on the line with no step open
     idle: { shopH: shopMs / 3600000, idleH: idleMs / 3600000, lunchH: lunchMs / 3600000, days: idleDays, open: hrs.open, close: hrs.close },
     kit, options, optionFlags, oddities: odd, noPhotoDays, photoCounts, photoTotal: vis.length, strip: strip.map((p) => p.id), notes, finalNote: b.final_note || "",
@@ -9352,6 +9504,7 @@ const recapPage310 = (R, emp196 = null) => {
   const openAtEnd = R.steps.filter((s) => s.state !== "complete");
   if (openAtEnd.length) side.push(`Signed off with ${openAtEnd.length} step${openAtEnd.length === 1 ? "" : "s"} never finished: ${openAtEnd.map((s) => s.isOpt ? "upgrade" : "step " + s.no).join(", ")}.`);
   if (R.unattributedH >= 0.5) side.push(`${h1_310(R.unattributedH)} h clocked on the line with no step open (in crew hours, on no step).`);
+  if (R.fixHours >= 0.1) side.push(`<b>${h1_310(R.fixHours)} h on the fix after it came back</b> (Fix-work clock, everyone on it summed; on top of the ${h1_310(R.crewHours)} crew hours above).`);   // Block 321
   if (R.idle.days.length) { const worst = [...R.idle.days].sort((a, b) => b.idleH - a.idleH)[0]; side.push(`Line empty ${h1_310(R.idle.idleH)} h over ${R.idle.days.length} day${R.idle.days.length === 1 ? "" : "s"}; the biggest gap ${e(worst.day)} (${h1_310(worst.idleH)} h).`); }
   for (const o of R.oddities) side.push(`${e(o.what)} <span class="mut">(${e(phxDay310(o.at))})</span>`);
   if (R.noPhotoDays.length) side.push(`No photo on ${R.noPhotoDays.length} shop day${R.noPhotoDays.length === 1 ? "" : "s"}: ${R.noPhotoDays.map(e).join(", ")}.`);
@@ -9500,17 +9653,17 @@ async function reworkBoard259() {
       const [tasksSB, evTaskSB, punchesSB] = await Promise.all([
         dbAll252(`task?select=id,build_id,name,is_background,source&build_id=in.(${sbIds259.join(",")})&order=id.asc`),
         dbAll252(`event_log?select=at,event_type,payload&event_type=in.(task.start,task.complete,task.undo,task.unstart)&order=at.asc,id.asc`),
-        dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at&voided=is.false&order=claimed_at.asc,id.asc`),
+        dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at,fix_build_id&voided=is.false&order=claimed_at.asc,id.asc`),   // Block 321: +fix_build_id — the fix's Fix-work punches
       ]);
       const testSB = new Set(emps259.filter((e) => isTestAcct215(e)).map((e) => e.id));
       const ivsSB = pairLineIvs258(punchesSB.filter((p) => !testSB.has(p.employee_id)));
+      const bucketSB321 = fixHoursByBuild(punchesSB.filter((p) => !testSB.has(p.employee_id)));   // Block 321: hours on the Fix-work bucket per cab (the one-tap flow)
       for (const sb of sendbacks259) {
         const bt = tasksSB.filter((t) => t.build_id === sb.b.id);
         const tEvs = [];
         for (const ev of evTaskSB) { const p = ev.payload || {}; if (p.build_id === sb.b.id && p.task_id) tEvs.push({ at: new Date(ev.at).getTime(), type: ev.event_type.slice(5), task_id: p.task_id }); }
-        if (!tEvs.length) continue;
-        const labor = lineLabor258(tEvs, ivsSB.filter((iv) => iv.line === sb.b.line_id), { background: new Set(bt.filter((t) => t.is_background).map((t) => t.id)) });
-        let fixH = 0, shares = {};
+        let fixH = bucketSB321[sb.b.id] || 0, shares = {};   // Block 321: the Fix-work bucket's hours on this cab, plus (older cabs) the line hours attributed to R-steps
+        const labor = tEvs.length ? lineLabor258(tEvs, ivsSB.filter((iv) => iv.line === sb.b.line_id), { background: new Set(bt.filter((t) => t.is_background).map((t) => t.id)) }) : {};
         for (const tid in labor) {
           const t = bt.find((x) => x.id === tid); if (!t) continue;
           if (t.source === "rework") fixH += labor[tid].crewH;
@@ -10671,7 +10824,7 @@ http.createServer(async (req, res) => {
         // HOME screen for every cab waiting for inspection — one tap lands on that cab's card. It exists
         // only while something is waiting, so it vanishes the moment the cab is signed off or sent back.
         let insp308 = [];
-        if (emp.role === "admin" || (emp.role === "manager" && emp.department !== "Production" && emp.department !== "Accounting")) {
+        if (canInspect321(emp)) {   // Block 321: Body Shop managers + admins — written as exactly that
           const [waitB308, lines308] = await Promise.all([db("build?select=id,order_number,cab_number,line_id&state=eq.awaiting_inspection&order=created_at.asc"), db("line?select=id,name")]);
           const lnName308 = Object.fromEntries((lines308 || []).map((l) => [l.id, l.name]));
           insp308 = (waitB308 || []).map((b) => ({ id: b.id, order: b.order_number, cab: b.cab_number || "", line: lnName308[b.line_id] || "" }));
@@ -10713,7 +10866,7 @@ http.createServer(async (req, res) => {
         const [meF126] = await db(`employee?select=focus_build_id&id=eq.${empId}`);
         if (meF126 && meF126.focus_build_id) {
           const [fB126] = await db(`build?select=id,order_number,part_number,cab_number,destination,invoice_note,note_flagged,state,rework_reason,rework_note,rework_hours,fix_kind,fix_reason,fix_note,fix_hours&id=eq.${meF126.focus_build_id}`);
-          if (fB126 && fB126.state === "fix_job") { build = fB126; onFix126 = true; }
+          if (fB126 && (fB126.state === "fix_job" || fB126.state === "rework")) { build = fB126; onFix126 = true; }   // Block 321: a rework fix is followed the same way
           else await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
         }
         if (!build) {
@@ -10767,7 +10920,14 @@ http.createServer(async (req, res) => {
           // "Work this fix" grab, close-old + open-fix).
           const offFix271 = build.state === "fix_job" && !(last.line_id === FIX_LINE_ID && last.fix_build_id === build.id);
           const prog316 = await cabProgress316(build, tasks);   // Block 316: the same % done the board shows
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271 }, prog209, prog316));
+          // Block 321: the fix box facts — who is on the fix + hours (punches), who sent it back and when.
+          let st321 = null, sentBy321 = "", sentAt321 = null;
+          if (build.state === "rework" || build.state === "fix_job") {
+            const evT = build.state === "rework" ? "build.rework_assigned" : "build.fixjob_sent_back,build.fixjob_opened";
+            const [stR, sbR] = await Promise.all([fixStatus321(build.id), db(`event_log?select=at,actor_id&event_type=in.(${evT})&payload->>build_id=eq.${build.id}&order=at.desc&limit=1`)]);
+            st321 = stR; if (sbR[0]) { sentAt321 = sbR[0].at; sentBy321 = sbR[0].actor_id ? (people[sbR[0].actor_id] || "") : ""; }
+          }
+          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271, st321, sentBy321, sentAt321 }, prog209, prog316));
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -10813,11 +10973,36 @@ http.createServer(async (req, res) => {
             ondeck: (up98[0] || {}).order_number || null };
         }
       }
+      // Block 321: the yellow fix box on the home / clock screens. (1) a REWORK cab on one of your
+      // roster lines (or the line you're clocked onto); (2) the fix of either kind you were on before
+      // lunch / last night (your last Fix-work stint, cab still open) — "Back on the fix".
+      let back321 = [];
+      try {
+        const myLines321 = new Set([...(emp.lines || []), ...(clockedIn && last && ![SHOP_LINE_ID, FIX_LINE_ID, 14].includes(last.line_id) ? [last.line_id] : [])]);
+        const [rw321, lastFix321] = await Promise.all([
+          myLines321.size ? db(`build?select=id,order_number,cab_number,line_id,rework_reason,rework_note,rework_assigned_at&state=eq.rework&line_id=in.(${[...myLines321].join(",")})&order=rework_assigned_at`) : [],
+          db(`clock_event?select=fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&line_id=eq.${FIX_LINE_ID}&kind=eq.clock_in&fix_build_id=not.is.null&order=claimed_at.desc&limit=1`),
+        ]);
+        const lnNm321 = Object.fromEntries(allLines.map((l) => [l.id, l.name]));
+        let mine321 = null;
+        if (lastFix321[0] && !(clockedIn && last && last.line_id === FIX_LINE_ID && last.fix_build_id === lastFix321[0].fix_build_id)) {
+          const [mb] = await db(`build?select=id,order_number,cab_number,line_id,state,rework_reason,rework_note,rework_assigned_at,fix_kind,fix_reason,fix_note&id=eq.${lastFix321[0].fix_build_id}`);
+          if (mb && (mb.state === "rework" || mb.state === "fix_job") && Date.now() - new Date(lastFix321[0].claimed_at).getTime() < 3 * 86400000) mine321 = mb;
+        }
+        const list321 = [...(mine321 ? [mine321] : []), ...rw321.filter((b) => !mine321 || b.id !== mine321.id)];
+        for (const b of list321) {
+          const st = await fixStatus321(b.id);
+          const isRw = b.state === "rework" || !b.state;
+          back321.push({ build_id: b.id, order: b.order_number, cab: b.cab_number || "", line: lnNm321[b.line_id] || "", kind: isRw ? "rework" : "fix_job", mine: Boolean(mine321 && b.id === mine321.id),
+            reason: isRw ? b.rework_reason : `${b.fix_kind === "kickback" ? "kickback" : "customer return"}${b.fix_reason ? " · " + b.fix_reason : ""}`, note: isRw ? b.rework_note : b.fix_note,
+            ago: isRw && b.rework_assigned_at ? agoWords321(b.rework_assigned_at) : "", on: st.on.map((p) => p.name), hours: st.hours });
+        }
+      } catch (e321) { console.error("fix box:", e321.message); back321 = []; }
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
           { now: ahNow, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh),
             lastReason: (lastAhRows214[0] && ahReasonRows.some((r) => r.label === lastAhRows214[0].reason)) ? lastAhRows214[0].reason : "" },
-          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126 }));
+          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126, back321 }));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
@@ -11360,27 +11545,37 @@ http.createServer(async (req, res) => {
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That fix reference isn't valid" });
-      const [fb] = await db(`build?select=id,state,order_number&id=eq.${build_id}`);
-      if (!fb || fb.state !== "fix_job")
-        return json(400, { ok: false, error: "That fix isn't open anymore — refresh the list" });
+      const [fb] = await db(`build?select=id,state,order_number,line_id&id=eq.${build_id}`);
+      // Block 321: a Body send-back (rework) is started the same way as a fix job — one tap.
+      if (!fb || (fb.state !== "fix_job" && fb.state !== "rework"))
+        return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
       const [lastF] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-      if (!lastF || lastF.kind !== "clock_in")
-        return json(400, { ok: false, error: "Clock in first, then grab the fix" });
+      const whenF = new Date(claimed_at || Date.now());
+      if (!lastF || lastF.kind !== "clock_in") {
+        // Block 321: not on the clock (morning, or back from lunch) — the tap clocks you in
+        // ONTO the fix, during shop hours. After hours keeps its own governed clock-in.
+        if (isAfterHours(whenF.getTime())) return json(400, { ok: false, error: "It's after hours — clock in first (the after-hours clock-in), then tap the fix" });
+        await db("clock_event", { method: "POST", body: JSON.stringify({
+          employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_in", fix_build_id: build_id, claimed_at: whenF.toISOString() }) });
+        await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: build_id }) });
+        logEvent("clock.in", empId, { line_id: FIX_LINE_ID, fix_build_id: build_id });
+        logEvent("fix.claim", empId, { build_id, order_number: fb.order_number, kind: fb.state, clocked_in: true });
+        return json(200, { ok: true, clocked_in: true });
+      }
       if (lastF.line_id === FIX_LINE_ID && lastF.fix_build_id === build_id) {
         await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: build_id }) });
         return json(200, { ok: true });
       }
-      const whenF = new Date(claimed_at || Date.now());
       // Close whatever they were on, then open the fix stint 1s later (same
       // deterministic-replay rule as a line switch).
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id: lastF.line_id, kind: "clock_out_early",
-        reason: "Switched to a fix job", claimed_at: whenF.toISOString() }) });
+        reason: fb.state === "rework" ? "Started the fix" : "Switched to a fix job", claimed_at: whenF.toISOString() }) });
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_in", fix_build_id: build_id,
         claimed_at: new Date(whenF.getTime() + 1000).toISOString() }) });
       await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: build_id }) });
-      logEvent("fix.claim", empId, { build_id, order_number: fb.order_number });
+      logEvent("fix.claim", empId, { build_id, order_number: fb.order_number, kind: fb.state, from_line: lastF.line_id });
       return json(200, { ok: true });
     }
 
@@ -11392,18 +11587,22 @@ http.createServer(async (req, res) => {
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
       const { claimed_at } = await body(req);
-      const [lastR] = await db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const [lastR] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
       const whenR = new Date(claimed_at || Date.now());
+      let backR321 = null;
       if (lastR && lastR.kind === "clock_in" && lastR.line_id === FIX_LINE_ID) {
+        // Block 321 (Daniel T2): stepping off a fix lands you back on the line you came from, not "off the line".
+        const [fbR] = lastR.fix_build_id ? await db(`build?select=line_id&id=eq.${lastR.fix_build_id}`) : [null];
+        backR321 = await lineBeforeFix321(empId, fbR ? fbR.line_id : 14);
         await db("clock_event", { method: "POST", body: JSON.stringify({
           employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_out_early",
-          reason: "Done with the fix", claimed_at: whenR.toISOString() }) });
+          reason: "Stepped off the fix", claimed_at: whenR.toISOString() }) });
         await db("clock_event", { method: "POST", body: JSON.stringify({
-          employee_id: empId, line_id: 14, kind: "clock_in",
+          employee_id: empId, line_id: backR321, kind: "clock_in",
           claimed_at: new Date(whenR.getTime() + 1000).toISOString() }) });
       }
       await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
-      logEvent("fix.release", empId, {});
+      logEvent("fix.release", empId, { build_id: lastR && lastR.fix_build_id || undefined, back_to: backR321 || undefined });
       return json(200, { ok: true });
     }
 
@@ -12021,8 +12220,14 @@ http.createServer(async (req, res) => {
           const rwHrs = rwClipped.reduce((sum, iv) => sum + (iv.e - iv.s), 0) / 3600000;
           // Block 281 (Daniel 9/27): no time frame, no verdict — the tile just
           // reports the actual crew-hours the fix has taken so far (neutral color).
+          // Block 321 (Daniel T6: "back for a fix — <names> on it"): the fix is worked from the
+          // Fix-work bucket now, so the hours are that bucket punches on this cab — line hours
+          // since the send-back are NOT the fix (someone may be on the line for other reasons);
+          // the names are who is on the fix right now.
           rcolor = "none";
-          rstatus = `Sent back for fixes — ${b.rework_reason || "see note"} · ${rwHrs.toFixed(1)} crew-hrs on it so far`;
+          const rwFix321 = fixHrs281[b.id] || 0;
+          const rwOn321 = fixOn267[b.id] || [];
+          rstatus = `Back for a fix — ${b.rework_reason || "see note"} · ${rwOn321.length ? rwOn321.join(" + ") + " on it" : "nobody on it yet"} · ${rwFix321.toFixed(1)} crew-hrs so far`;
         }
         // Q85 FIX JOB OVERRIDE: a returned/kicked-back cab. Distinct badge + its
         // OWN deadline countdown = ELAPSED wall-time since the fix opened vs the
@@ -12111,7 +12316,7 @@ http.createServer(async (req, res) => {
         // on-the-clock list and the punch corrector — an accounting or Body
         // Shop punch should read "Accounting time", not a blank or "line 16".
         db(`line?select=id,name&order=id`),
-        db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at,coyote_root&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`),   // Block 255: root feeds the option checklist
+        db(`build?select=id,order_number,part_number,cab_number,line_id,state,final_note,rework_reason,rework_hours,rework_note,rework_assigned_at,started_at,created_at,kit_status,queue_pos,inspection_claimed_by,inspection_claimed_at,coyote_root&state=in.(active,upcoming,awaiting_inspection,rework)&order=created_at`),   // Block 255: root feeds the option checklist
         db(`pick_list_item?select=label&list_key=eq.rework_reason&retired=is.false&order=sort_order`),
         db("clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&order=claimed_at.desc&limit=200"),
         db("employee?select=id,first_name,last_name&active=is.true"),
@@ -12202,10 +12407,13 @@ http.createServer(async (req, res) => {
         .filter(Boolean);
       // Completion photos for the inspection boxes (file 11: the manager
       // inspects note + photos together).
+      // Block 321: the rework cards name who is on the fix and the Fix-work hours so far (punches).
+      const fix321 = {};
+      for (const bR of builds.filter((b) => b.state === "rework")) { try { fix321[bR.id] = await fixStatus321(bR.id); } catch (e321) { fix321[bR.id] = { on: [], hours: 0 }; } }
       const rows = lines.map((l) => ({ line: l,
         active: (() => { const a194 = builds.find((b) => b.line_id === l.id && b.state === "active") || null;
           return a194 ? { ...a194, ready194: ready194[a194.id] || null } : null; })(),
-        rework: builds.filter((b) => b.line_id === l.id && b.state === "rework"),
+        rework: builds.filter((b) => b.line_id === l.id && b.state === "rework").map((b) => ({ ...b, fix321: fix321[b.id] || { on: [], hours: 0 } })),   // Block 321: who's on the fix + hours so far
         awaiting: builds.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection")
           .map((b) => { // Block 184: the claim rides along with a display name + Phoenix HH:MM
             const ce184 = b.inspection_claimed_by ? empNames.find((x) => x.id === b.inspection_claimed_by) : null;
@@ -12481,7 +12689,7 @@ http.createServer(async (req, res) => {
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const { byOrder: mgrProj } = proj212;
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215));
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215, canInspect321(me)));   // Block 321: sign-off/send-back controls only for Body Shop managers + admins
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -12986,7 +13194,14 @@ http.createServer(async (req, res) => {
       // and FIX_JOB (Q85: a returned/kicked-back cab resubmitting for re-inspection).
       if (!b || (b.state !== "active" && b.state !== "rework" && b.state !== "fix_job"))
         return json(400, { ok: false, error: "Cab is not in a finishable state" });
-      const open = await db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete&limit=1`);
+      const whenFx321 = claimed_at || new Date().toISOString();
+      // Block 321: on a rework / fix job the ONE "✓ Fix done" tap closes the fix step(s) itself
+      // (audited here) — the crew no longer taps R1 start, R1 done, then hunts for the button.
+      // Hours live on the Fix-work punches, not on the step. Any OTHER open step still blocks.
+      const fixFlow321 = b.state === "rework" || b.state === "fix_job";
+      const openAll321 = await db(`task?select=id,display_no,name,state,source&build_id=eq.${build_id}&is_background=is.false&state=neq.complete`);
+      const openFx321 = fixFlow321 ? openAll321.filter((t) => t.source === "rework" || t.source === "fix") : [];
+      const open = openAll321.filter((t) => !openFx321.includes(t));
       if (open.length) return json(400, { ok: false, error: "There are still open steps on this cab" });
       // Q86: HARD per-product completion-photo gate (product.photo_min; 0 exempts).
       const [prodF] = await db(`product?select=photo_min&part_number=eq.${encodeURIComponent(b.part_number)}`);
@@ -13014,6 +13229,20 @@ http.createServer(async (req, res) => {
       // still route through a manager sign-off: the bar rises only after
       // the work has missed twice.) Loudly logged + bell-noticed so no
       // manager is surprised the cab moved.
+      // Block 321: the fix step(s) close with this tap (after the gates above held), and EVERYONE
+      // on the fix steps off Fix work back to the line they came from — Daniel: "when one person
+      // taps done, both would go back to the line." Hours were the punches; nothing else to type.
+      let fixDone321 = null;
+      if (fixFlow321) {
+        for (const t of openFx321) {
+          const patchT = { state: "complete", completed_by: empId, completed_at: whenFx321 };
+          if (t.state === "not_started") { patchT.started_by = empId; patchT.started_at = whenFx321; }
+          await db(`task?id=eq.${t.id}`, { method: "PATCH", body: JSON.stringify(patchT) });
+          logEvent("task.complete", empId, { build_id, task_id: t.id, display_no: t.display_no, name: t.name, by_fix_done: true, at: whenFx321 });
+        }
+        fixDone321 = await releaseAllFromFix321(build_id, b.line_id, whenFx321, empId);
+        logEvent("fix.done", empId, { build_id, order_number: b.order_number, kind: b.state, hours: Math.round(fixDone321.hours * 100) / 100, people: fixDone321.moved.map((m) => m.name), back_to: fixDone321.moved.map((m) => m.line), steps_closed: openFx321.length });
+      }
       if (b.state === "rework") {
         // Block 256 (supersedes 255's park-at-inspection — Daniel: "i dont want
         // to cause too much work and over inspections"): the manager's
@@ -13053,25 +13282,11 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH",
         body: JSON.stringify({ state: "awaiting_inspection", final_note: note || null,
           inspection_claimed_by: null, inspection_claimed_at: null }) });   // Block 184: a (re-)finished cab arrives at inspection UNCLAIMED
-      // Block 125 (M3): a finished FIX leaves the finisher's screen — drop their
-      // focus and step them off the Fix-work bucket to "off the line" so their
-      // clock stops accruing against a cab that's now at inspection. (Other techs
-      // who shared the fix auto-release: the cab screen ignores a focus whose
-      // build is no longer a fix_job.)
-      if (b.state === "fix_job") {
-        const [lastFF] = await db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-        if (lastFF && lastFF.kind === "clock_in" && lastFF.line_id === FIX_LINE_ID) {
-          const nowFF = new Date(claimed_at || Date.now());
-          await db("clock_event", { method: "POST", body: JSON.stringify({
-            employee_id: empId, line_id: FIX_LINE_ID, kind: "clock_out_early",
-            reason: "Fix finished", claimed_at: nowFF.toISOString() }) });
-          await db("clock_event", { method: "POST", body: JSON.stringify({
-            employee_id: empId, line_id: 14, kind: "clock_in",
-            claimed_at: new Date(nowFF.getTime() + 1000).toISOString() }) });
-        }
-        await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
-      }
-      logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at });
+      // Block 125 (M3) → Block 321: a finished FIX job now takes EVERYONE off Fix work (not just
+      // the finisher) and back to the line each came from — done above in releaseAllFromFix321
+      // (the old path parked only the tapper on 14 and left teammates' hours piling onto the fix).
+      if (b.state === "fix_job") await db(`employee?id=eq.${empId}`, { method: "PATCH", body: JSON.stringify({ focus_build_id: null }) });
+      logEvent("build.finish", empId, { build_id, order_number: b.order_number, note: note || "", from_state: b.state, at: claimed_at, fix_hours: fixDone321 ? Math.round(fixDone321.hours * 100) / 100 : undefined });
       // Q109-7: heading-to-inspection IS warehouse's firm "go pull the next
       // kit" signal — the first real event on the notification matrix.
       // Q106: sandboxed to the owner-rep until cutover, like everything.
@@ -13091,7 +13306,7 @@ http.createServer(async (req, res) => {
       // LINE to walk to, not which cab number. Order stays in the body.
       if (mgrsI99.length) notify("build.ready_inspection", mgrsI99,
         `${lnF ? lnF.name : "A line"} — ready for inspection`,
-        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — production finished. Sign off on the Manager console, or send it back with a reason and hours.`, "/manager#insp153");   // Block 308: lands on the card
+        `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} — production finished. Body Shop managers inspect it from the Manager console (sign off, or send it back with a reason).`, "/manager#insp153");   // Block 308: lands on the card · Block 321: Production managers get this as information only
       // Q91: the manager-facing "line frees up soon" heads-up (distinct from the
       // warehouse pull signal above) — for on-deck planning. Toggle-gated, OFF
       // by default; delivery still obeys the Q106 sandbox.
@@ -13134,9 +13349,9 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/inspect/claim" && req.method === "POST") {
       const empC = await liveSession(req);
       if (!empC) return json(401, { ok: false, error: "Signed out" });
-      const [meC] = await db(`employee?select=role&id=eq.${empC}`);
-      if (!meC || (meC.role !== "manager" && meC.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      const [meC] = await db(`employee?select=role,department&id=eq.${empC}`);
+      if (!canInspect321(meC))   // Block 321: Body Shop managers + admins only
+        return json(403, { ok: false, error: "Inspection is the Body Shop managers' job (admins as backup)" });
       const { build_id, action } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       if (!["claim", "takeover", "release"].includes(action)) return json(400, { ok: false, error: "Unknown action" });   // Block 185: no fall-through to claim
@@ -13178,16 +13393,30 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/build/rework" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!canInspect321(me))   // Block 321 (Daniel 10/21: "inspection should only be body managers… admins as a backup")
+        return json(403, { ok: false, error: "Inspection is the Body Shop managers' job (admins as backup)" });
       const { build_id, reason, note, hours, claimed_at, opts_verified } = await body(req);   // Block 256: verified boxes ride along
       if (!reason) return json(400, { ok: false, error: "Pick a reason" });
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root,fix_assigned_at,fix_kind&id=eq.${build_id}`);
       if (!b || b.state !== "awaiting_inspection")
         return json(400, { ok: false, error: "Only a cab awaiting inspection can be sent back" });
       const when = claimed_at || new Date().toISOString();
+      // Block 321 (Daniel 10/21, T3): a cab that arrived at inspection FROM A FIX JOB stays a fix
+      // job when it is sent back — off the line (its old line has a new cab on it), Fix-work hours,
+      // re-inspected again when done. It never becomes a line-holding rework.
+      if (b.fix_assigned_at) {
+        const priorsF = await db(`task?select=id&build_id=eq.${build_id}&source=eq.fix`);
+        await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "fix_job", inspection_claimed_by: null, inspection_claimed_at: null, fix_note: note || null, fix_reason: reason }) });
+        await db("task", { method: "POST", body: JSON.stringify({ build_id, display_no: `F${priorsF.length + 1}`, name: `Fix: ${reason}${note ? ` — ${note}` : ""}`,
+          day_no: 0, man_hours: 0, is_background: false, source: "fix", state: "not_started", sort_order: 2000 + priorsF.length }) });
+        logEvent("build.fixjob_sent_back", empId, { build_id, order_number: b.order_number, reason, note: note || "", kind: b.fix_kind, at: when });
+        const techsF = await db(`employee?select=id&active=is.true&lines=cs.{${b.line_id}}`);
+        notify("build.rework_assigned", techsF.map((t) => t.id), `Order ${b.order_number} — one more pass on the fix`,
+          `Inspection sent the fix job back: ${reason}${note ? " — " + note : ""}. Tap it on your screen to start.`, "/home");
+        return json(200, { ok: true, fix_job: true });
+      }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "rework", rework_reason: reason, rework_note: note || null,
         rework_hours: null, rework_assigned_at: when,   // Block 281: no time frame — actual crew-hours are the measure
@@ -13320,7 +13549,7 @@ http.createServer(async (req, res) => {
         return json(403, { ok: false, error: "Manager or admin only" });
       const { build_id, claimed_at } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${build_id}`);
       if (!b || b.state !== "fix_job") return json(400, { ok: false, error: "That fix isn't open anymore — refresh" });
       const whenD = claimed_at || new Date().toISOString();
       const openF266 = await db(`task?select=id&build_id=eq.${build_id}&source=eq.fix&state=neq.complete`);
@@ -13331,7 +13560,8 @@ http.createServer(async (req, res) => {
       }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "awaiting_inspection", inspection_claimed_by: null, inspection_claimed_at: null }) });
-      logEvent("build.fixjob_done", empId, { build_id, order_number: b.order_number, steps_closed: openF266.length, at: whenD });
+      const relD321 = await releaseAllFromFix321(build_id, b.line_id, whenD, empId);   // Block 321: everyone off Fix work, back to their line
+      logEvent("build.fixjob_done", empId, { build_id, order_number: b.order_number, steps_closed: openF266.length, at: whenD, hours: Math.round(relD321.hours * 100) / 100, people: relD321.moved.map((m) => m.name) });
       return json(200, { ok: true });
     }
 
@@ -13361,9 +13591,9 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/build/complete" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || (me.role !== "manager" && me.role !== "admin"))
-        return json(403, { ok: false, error: "Manager or admin only" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!canInspect321(me))   // Block 321 (Daniel 10/21): sign-off = Body Shop managers (Isaac, Jason) + admins as backup — not Production
+        return json(403, { ok: false, error: "Inspection is the Body Shop managers' job (admins as backup)" });
       const { build_id, claimed_at, force, opts_checked, opts_ack } = await body(req);   // Block 255: the checklist rides along
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,fix_kind,fix_reason,fix_assigned_at,kit_status,kit_note,part_number,coyote_root&id=eq.${build_id}`);   // Block 255: part/root feed the option gate
