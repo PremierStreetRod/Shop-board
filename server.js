@@ -5676,6 +5676,69 @@ const PICK_LIST_INFO = {
   hold: "Hold reasons",
   fixjob_reason: "Fix-job reasons",
 };
+// Block 324 (Daniel 10/25 14:52, "go with the hybrid"): the two HEAVY admin boxes render on demand. Build
+// steps carried the step-actuals math (every task on every started cab + every tap event + every punch ever —
+// ~5,300 rows and 8 trips on 10/25, growing daily) and Panel prep read Eric's punches over 120 days — on every
+// admin page load, for boxes nobody had opened. Now /api/admin/panel renders them when the box is opened; the
+// small boxes stay on the page (one cheap wave) so their editors work exactly as before.
+const stepsPanelHtml324 = (tmpls, tplId, steps, optItems = [], act258 = null) => `  <!-- C18: switching cabs is a full page load (?tpl=), which used to dump
+       the scroll back to the top — the #steps fragment lands you right here. -->
+  <p>${tmpls.map((t) => t.id === tplId
+    ? `<b style="color:var(--red)">${t.family}</b>`
+    : `<a href="/admin?tpl=${t.id}#steps" onclick="if(window.stepsFamily324){stepsFamily324('${t.id}');return false}" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
+  <table><tr><th>#</th><th>Step</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
+  ${steps.map((s, i) => `<tr>
+    <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
+    <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
+      <textarea id="sx-${s.id}" rows="2" placeholder="Full instruction the tech sees behind + details" style="display:block;width:95%;margin-top:3px;font-size:.8rem;background:#111;color:#ddd;border:1px solid #333;border-radius:6px;padding:4px 6px">${String(s.detail || "").replace(/</g, "&lt;")}</textarea>
+      ${s.wh_callout
+        ? `<div style="margin-top:3px"><input id="sw-${s.id}" value="${String(s.wh_callout).replace(/"/g, "&quot;")}" style="width:95%;font-size:.8rem;opacity:.85" title="Warehouse call-out — pushed to the warehouse crew the moment this step is started. Clear the text and Save to turn it off."> <small style="opacity:.5">&#128230; pushed to warehouse when started</small></div>`
+        : `<a href="#" onclick="return wcal260('${s.id}',this)" style="font-size:.75rem;color:#8e8e93;text-decoration:none" title="Add a warehouse call-out — pushed to the warehouse crew when this step starts">&#128230;+</a>`}</td>
+    <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
+    ${act258 ? `<td>${actPill258(act258, "step", s.id, tplId)}</td>` : ""}
+    <td><button class="b" onclick="saveStep('${s.id}',this)">Save</button></td>
+    <td>${i > 0 ? `<button class="b" onclick="moveStep('${s.id}','up',this)">&uarr;</button>` : ""}
+        ${i < steps.length - 1 ? `<button class="b" onclick="moveStep('${s.id}','down',this)">&darr;</button>` : ""}</td>
+    <td><button class="b red" onclick="arm(this,()=>retireStep('${s.id}'))">Retire</button></td>
+  </tr>`).join("")}</table>
+  ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a number appears at 2 cabs). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
+  <p style="margin-top:10px">Add a step:
+    <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
+    Hrs <input class="num" id="new-hrs" value="1">
+    <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
+  <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
+  <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; "Lands after step" is where it sits in the build (a 0-hour option can be flagged to show on the floor as a reminder). These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
+  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Lands after step</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
+  ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
+    const kids261 = optItems.filter((a) => a.alias_of === o.id);
+    return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
+    <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${esc261(o.match_text)}</code>
+      ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
+      ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
+    <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
+    <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of the list (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
+      <input type="hidden" id="op-d-${o.id}" value="${o.day_no}">
+      ${Number(o.man_hours) === 0 ? `<label style="display:block;font-size:.75rem;opacity:.75;margin-top:2px"><input type="checkbox" id="op-f-${o.id}"${o.show_on_floor ? " checked" : ""}> show on the floor as a reminder (0 h)</label>` : ""}</td>
+    ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
+    <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
+    <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
+  </tr>`; }).join(""))((x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])))}</table>
+  ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
+  ${((labs) => labs.length ? `<p style="opacity:.55;font-size:.8rem;margin:4px 0 0">&#128230; Kit-only dropdowns (never on the inspection checklist, every value incl. Stock/None — the warehouse checks them at crating): <b>${labs.map(escH).join(" &middot; ")}</b></p>` : "")((() => { const by = {}; for (const o of optItems) { if (o.retired) continue; const n = String(o.match_text || "").trim(); if (!n.includes(":")) continue; const lab = n.split(":")[0].trim(); by[lab] = by[lab] || { kit: 0, cab: 0 }; by[lab][o.kit_only ? "kit" : "cab"]++; } return Object.keys(by).filter((l) => by[l].kit > 0 && by[l].cab === 0).sort(); })())}   <!-- Block 322 -->
+  <p style="margin-top:10px">Add an option:
+    <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
+    Hrs <input class="num" id="op-new-hrs" value="1">
+    <button class="b" onclick="addOpt('${tplId}',this)">Add</button></p>
+  <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>`;
+const prepPanelHtml324 = (prep301 = []) => `  <p style="opacity:.5;font-size:.85rem">Laser-stripping the weld areas, done by whoever has <b>Panel prep</b> checked under People (Eric). One number per cab family; 3.0 h to start. <b>Median actual</b> = the middle of the last 12 cabs marked ready (gray until 2 cabs). Punches set the actuals — nothing is typed.</p>
+  ${prep301.length ? `<table><tr><th>Cab family</th><th>Hours allowed</th><th>Median actual</th><th>Last cab</th><th></th></tr>
+  ${prep301.map((r) => `<tr>
+    <td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>
+    <td><input class="num" id="ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}" value="${r.hours}" inputmode="decimal" step="0.25"></td>
+    <td>${r.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${r.median} &middot;${r.n}</span>` : `<span style="opacity:.4">${r.n ? r.n + " cab so far" : "no cabs yet"}</span>`}</td>
+    <td style="opacity:.7">${r.last ? `${r.last.h}h &middot; ${String(r.last.at).slice(5, 10)}` : "—"}</td>
+    <td><button class="b" onclick="savePrepStd301('${String(r.family).replace(/'/g, "\\'")}','ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td>
+  </tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}`;
 const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", shopHrs = { open: 7, close: 16 }, pickLists = [], products = [], calDays = [], nudgeTimes = {}, optItems = [], afterHours = [], act258 = null, prep301 = []) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -5782,57 +5845,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <p style="opacity:.5;font-size:.85rem">A switch only matters once its channel is ON under Features and set up in "Text setup" below. Push also needs the person to allow notifications on their device (the bell).</p>
   </div>
 
-  <div class="panel" id="steps"><h3>Build steps</h3>
-  <!-- C18: switching cabs is a full page load (?tpl=), which used to dump
-       the scroll back to the top — the #steps fragment lands you right here. -->
-  <p>${tmpls.map((t) => t.id === tplId
-    ? `<b style="color:var(--red)">${t.family}</b>`
-    : `<a href="/admin?tpl=${t.id}#steps" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
-  <table><tr><th>#</th><th>Step</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
-  ${steps.map((s, i) => `<tr>
-    <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
-    <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
-      <textarea id="sx-${s.id}" rows="2" placeholder="Full instruction the tech sees behind + details" style="display:block;width:95%;margin-top:3px;font-size:.8rem;background:#111;color:#ddd;border:1px solid #333;border-radius:6px;padding:4px 6px">${String(s.detail || "").replace(/</g, "&lt;")}</textarea>
-      ${s.wh_callout
-        ? `<div style="margin-top:3px"><input id="sw-${s.id}" value="${String(s.wh_callout).replace(/"/g, "&quot;")}" style="width:95%;font-size:.8rem;opacity:.85" title="Warehouse call-out — pushed to the warehouse crew the moment this step is started. Clear the text and Save to turn it off."> <small style="opacity:.5">&#128230; pushed to warehouse when started</small></div>`
-        : `<a href="#" onclick="return wcal260('${s.id}',this)" style="font-size:.75rem;color:#8e8e93;text-decoration:none" title="Add a warehouse call-out — pushed to the warehouse crew when this step starts">&#128230;+</a>`}</td>
-    <td><input class="num" id="sh-${s.id}" value="${Number(s.man_hours)}"></td>
-    ${act258 ? `<td>${actPill258(act258, "step", s.id, tplId)}</td>` : ""}
-    <td><button class="b" onclick="saveStep('${s.id}',this)">Save</button></td>
-    <td>${i > 0 ? `<button class="b" onclick="moveStep('${s.id}','up',this)">&uarr;</button>` : ""}
-        ${i < steps.length - 1 ? `<button class="b" onclick="moveStep('${s.id}','down',this)">&darr;</button>` : ""}</td>
-    <td><button class="b red" onclick="arm(this,()=>retireStep('${s.id}'))">Retire</button></td>
-  </tr>`).join("")}</table>
-  ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a number appears at 2 cabs). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
-  <p style="margin-top:10px">Add a step:
-    <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
-    Hrs <input class="num" id="new-hrs" value="1">
-    <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
-  <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
-  <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; "Lands after step" is where it sits in the build (a 0-hour option can be flagged to show on the floor as a reminder). These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
-  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Lands after step</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
-  ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
-    const kids261 = optItems.filter((a) => a.alias_of === o.id);
-    return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
-    <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${esc261(o.match_text)}</code>
-      ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
-      ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
-    <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
-    <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of the list (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
-      <input type="hidden" id="op-d-${o.id}" value="${o.day_no}">
-      ${Number(o.man_hours) === 0 ? `<label style="display:block;font-size:.75rem;opacity:.75;margin-top:2px"><input type="checkbox" id="op-f-${o.id}"${o.show_on_floor ? " checked" : ""}> show on the floor as a reminder (0 h)</label>` : ""}</td>
-    ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
-    <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
-    <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
-  </tr>`; }).join(""))((x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])))}</table>
-  ${((kc) => kc ? `<p style="opacity:.45;font-size:.8rem;margin:6px 0 0">${kc} kit-item line${kc === 1 ? "" : "s"} recognized silently — sheet-metal-kit parts, not cab work; hidden here (block 137).</p>` : "")(optItems.filter((o) => o.kit_only).length)}
-  ${((labs) => labs.length ? `<p style="opacity:.55;font-size:.8rem;margin:4px 0 0">&#128230; Kit-only dropdowns (never on the inspection checklist, every value incl. Stock/None — the warehouse checks them at crating): <b>${labs.map(escH).join(" &middot; ")}</b></p>` : "")((() => { const by = {}; for (const o of optItems) { if (o.retired) continue; const n = String(o.match_text || "").trim(); if (!n.includes(":")) continue; const lab = n.split(":")[0].trim(); by[lab] = by[lab] || { kit: 0, cab: 0 }; by[lab][o.kit_only ? "kit" : "cab"]++; } return Object.keys(by).filter((l) => by[l].kit > 0 && by[l].cab === 0).sort(); })())}   <!-- Block 322 -->
-  <p style="margin-top:10px">Add an option:
-    <input id="op-new-text" style="min-width:280px" placeholder="Back Window: 5 Window (Corner Windows)">
-    Hrs <input class="num" id="op-new-hrs" value="1">
-    <button class="b" onclick="addOpt('${tplId}',this)">Add</button></p>
-  <p style="opacity:.5;font-size:.85rem">Changes apply to FUTURE cabs only — a cab already started keeps the exact list it started with. Retired steps keep their history and drop off new builds.</p>
-  </div>
+  <div class="panel" id="steps" data-lazy="steps"><h3>Build steps</h3><!-- Block 324: the editor (+ Upgrade options, + the step-actuals math) is fetched when this box is opened — /api/admin/panel?which=steps&tpl= --></div>
 
   <div class="panel" id="features"><h3>Features</h3>
   ${toggles.filter((t) => t.key !== "notify_email" && t.key !== "email_notifications").map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
@@ -5922,17 +5935,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
        last 12 finished cabs beside it so the number can teach us. Hours come from Eric's punches
        on the Panel prep bucket, never typed. Changing the standard is audited and applies to cabs
        not yet marked ready. -->
-  <div class="panel" id="prep301"><h3>Panel prep — hours allowed per cab</h3>
-  <p style="opacity:.5;font-size:.85rem">Laser-stripping the weld areas, done by whoever has <b>Panel prep</b> checked under People (Eric). One number per cab family; 3.0 h to start. <b>Median actual</b> = the middle of the last 12 cabs marked ready (gray until 2 cabs). Punches set the actuals — nothing is typed.</p>
-  ${prep301.length ? `<table><tr><th>Cab family</th><th>Hours allowed</th><th>Median actual</th><th>Last cab</th><th></th></tr>
-  ${prep301.map((r) => `<tr>
-    <td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>
-    <td><input class="num" id="ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}" value="${r.hours}" inputmode="decimal" step="0.25"></td>
-    <td>${r.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${r.median} &middot;${r.n}</span>` : `<span style="opacity:.4">${r.n ? r.n + " cab so far" : "no cabs yet"}</span>`}</td>
-    <td style="opacity:.7">${r.last ? `${r.last.h}h &middot; ${String(r.last.at).slice(5, 10)}` : "—"}</td>
-    <td><button class="b" onclick="savePrepStd301('${String(r.family).replace(/'/g, "\\'")}','ph-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td>
-  </tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}
-  </div>
+  <div class="panel" id="prep301" data-lazy="prep"><h3>Panel prep — hours allowed per cab</h3><!-- Block 324: fetched on open — /api/admin/panel?which=prep --></div>
 
   <div class="panel" id="products"><h3>Product settings — completion photos</h3>
   <p style="opacity:.5;font-size:.85rem">How many completion photos a builder must attach before finishing a cab of each product. Default is 1. Set 0 to exempt a product. This is a hard gate — the phone's Finish button won't send without them.</p>
@@ -6207,6 +6210,59 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function movePick(id, dir, btn){ post("/api/admin/picklist", { action: "move", id, dir }, btn); }
   function retirePick(id, to, btn){ post("/api/admin/picklist", { action: "retire", id, retired: to === true || to === "true" }, btn); }
   function addPick(listKey, btn){ post("/api/admin/picklist", { action: "add", list_key: listKey, label: v("pladd-"+listKey) }, btn); }
+  // Block 324 (Daniel 10/25 14:43 — condense the admin console the same way as the order queue; notices such as
+  // the after-hours approvals always show extended at the top; every other box collapsed by default with its
+  // title and a good description). Every .panel except the after-hours notice (#ah108) folds to title +
+  // description + Open; Open shows the box (small boxes are already on the page and keep their ids and
+  // scripts; the two heavy boxes, data-lazy, are fetched from /api/admin/panel on the first Open); Close folds
+  // it; the boxes left open are remembered on this device, so a Save that reloads the page lands back in the
+  // box being worked. A hash (the sticky nav, the Build-steps family links) opens that box and scrolls to it.
+  // NOTE: no apostrophes or quotes in these comments — the old harness walkers (mgr_view, ready, t293, tcard)
+  // tokenize the page template and a stray quote in a comment desyncs them.
+  var DESC324 = {
+    people: "Everyone on the board. Add a person; set role, department, lines, pay type, panel-prep duty; reset a PIN; deactivate (never delete).",
+    channels117: "Per person: the mobile number on file and whether notices arrive by push and text. Every notice always lands in the bell regardless.",
+    steps: "The build steps and hours for each cab family (pick the family) — add, rename, reorder, retire. Below them, that family's Upgrade options: exact Coyote text, hours, where each lands in the build, and the kit-only dropdowns the warehouse checks at crating.",
+    features: "The on/off switches for how the board behaves — nudges, gates, pace colors, after-hours rules.",
+    channels116: "The text-message (SMS) sending setup and a test send.",
+    cabnums: "Wall cab numbers for every open cab, with the next number up per family.",
+    hours: "The shop's open and close times — they drive clock-in, lunch, after-hours and the day-end sweep.",
+    picklists: "The choices people pick from around the app — clock-out, rework, after-hours, down-for-today and time-off reasons. Rename, reorder, add, retire.",
+    prep301: "Hours allowed for laser-stripping the panels of each cab family, with the running median from Eric's punches.",
+    products: "How many completion photos a builder must attach per product before a cab can go to inspection.",
+    previews: "One-time tool: build small previews for photos taken before previews existed.",
+    calendar: "Holidays and shutdown days, weekends you're working, and the day-start nudge times."
+  };
+  function panelOpenSet324(){ try { return JSON.parse(localStorage.getItem("admin_open_324") || "[]"); } catch (e) { return []; } }
+  function panelRemember324(id, open){ try { var a = panelOpenSet324().filter(function (x) { return x !== id; }); if (open) a.push(id); localStorage.setItem("admin_open_324", JSON.stringify(a)); } catch (e) {} }
+  var LAZY324 = {};
+  function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; }).catch(function () { body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
+  function panelToggle324(id, open){ var body = document.getElementById("pbody324-" + id), btn = document.getElementById("pbtn324-" + id); if (!body) return; if (open == null) open = body.style.display === "none"; body.style.display = open ? "" : "none"; if (btn) btn.innerHTML = open ? "&#9662; Close" : "&#9656; Open"; panelRemember324(id, open); if (open && !LAZY324[id] && document.getElementById(id).getAttribute("data-lazy")) panelLoad324(id, ""); }
+  // Block 324: the Build-steps family links switch the family inside the open box (no page reload); the URL keeps tpl so a reload after Save lands on the same family.
+  function stepsFamily324(tpl){ LAZY324.steps = null; var u = new URL(location.href); u.searchParams.set("tpl", tpl); u.hash = "steps"; history.replaceState(null, "", u.toString()); panelLoad324("steps", "&tpl=" + encodeURIComponent(tpl)); }
+  function panelFromHash324(){ var id = (location.hash || "").replace("#", ""); if (!id) return; var d = document.getElementById("setup154"); if (id === "setup154" && d) { d.open = true; return; } if (document.getElementById("pbody324-" + id)) { panelToggle324(id, true); var inside = document.getElementById(id) && document.getElementById(id).closest("details"); if (inside) inside.open = true; setTimeout(function(){ var el = document.getElementById(id); if (el) el.scrollIntoView({ block: "start" }); }, 30); } }
+  (function fold324(){
+    var remembered = panelOpenSet324();
+    var panels = document.querySelectorAll(".panel");
+    for (var i = 0; i < panels.length; i++) {
+      var pnl = panels[i], id = pnl.id; if (!id || id === "ah108") continue;
+      var h3 = pnl.querySelector("h3"); if (!h3 || h3.parentNode !== pnl) continue;
+      var body = document.createElement("div"); body.id = "pbody324-" + id; body.style.marginTop = "10px";
+      while (h3.nextSibling) body.appendChild(h3.nextSibling);
+      var head = document.createElement("div"); head.style.cssText = "display:flex;align-items:center;gap:10px;cursor:pointer"; head.setAttribute("data-panel", id);
+      var text = document.createElement("div"); text.style.flex = "1";
+      h3.style.margin = "0 0 2px"; text.appendChild(h3);
+      var desc = document.createElement("div"); desc.style.cssText = "opacity:.6;font-size:.85rem"; desc.textContent = DESC324[id] || ""; text.appendChild(desc);
+      var btn = document.createElement("button"); btn.className = "b"; btn.id = "pbtn324-" + id; btn.innerHTML = "&#9656; Open"; btn.setAttribute("data-panel", id);
+      head.appendChild(text); head.appendChild(btn);
+      pnl.insertBefore(head, pnl.firstChild); pnl.appendChild(body);
+      body.style.display = "none";
+      head.addEventListener("click", function (ev) { var pid = this.getAttribute("data-panel"); if (ev.target && ev.target.closest && ev.target.closest("a,input,select,textarea")) return; panelToggle324(pid); });
+      if (remembered.indexOf(id) > -1) panelToggle324(id, true);
+    }
+    panelFromHash324();
+    window.addEventListener("hashchange", panelFromHash324);
+  })();
 </script></body></html>`;
 
 // REPORTS v1 (file 12 / Q26, block 19) — the first slice of the reporting
@@ -14840,9 +14896,10 @@ self.addEventListener("notificationclick", (e) => {
       ]);
       const tplId = url.searchParams.get("tpl") || (tmpls[0] || {}).id;
       const fam94 = ((tmpls.find((t) => t.id === tplId) || {}).family) || "";
-      const [steps, optItems94, ahPhA, linesA108] = await Promise.all([
-        (tplId && isUuid(tplId)) ? db(`step_template?select=id,display_no,name,detail,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplId}&retired=is.false&order=sort_order`) : [],
-        fam94 ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only,alias_of,after_step,show_on_floor&family=eq.${encodeURIComponent(fam94)}&order=retired.asc,day_no.asc,match_text.asc`) : [],   // Block 282
+      // Block 324: the Build-steps editor (+ Upgrade options + step actuals) and Panel prep are rendered on
+      // demand by /api/admin/panel — the page load no longer reads step_template / option_item / the actuals
+      // rows / the prep punches. Only the after-hours notice's photos + lines ride wave 2 now.
+      const [ahPhA, linesA108] = await Promise.all([
         ahRowsA.length ? db(`after_hours_photo?select=id,session_id&session_id=in.(${ahRowsA.map((s) => s.id).join(",")})`) : [],
         ahRowsA.length ? db(`line?select=id,name`) : [],
       ]);
@@ -14873,29 +14930,8 @@ self.addEventListener("notificationclick", (e) => {
         ended: Boolean(s.ended_at), confirmed: Boolean(s.confirmed_by),
         hrs: s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null,
         photos: ahPhA.filter((p2) => p2.session_id === s.id).map((p2) => p2.id) }));
-      // Block 258: STEP ACTUALS — computed only when the toggle is ON, only
-      // for the family being viewed, read-only. A compute hiccup renders the
-      // editor exactly as before (never blocks the admin page).
-      // Block 301: PANEL PREP standards per family with the last-12 median actual beside each (from punches).
-      let prep301 = [];
-      try {
-        const [stdRowsP, doneP] = await Promise.all([
-          db(`prep_standard?select=family,hours,updated_at`),
-          db(`build?select=id,part_number,prep_done_at&prep_state=eq.done&order=prep_done_at.desc&limit=200`),
-        ]);
-        const famOfP = Object.fromEntries(products.map((pr) => [pr.part_number, pr.family]));
-        const hrsP = await prepHours301(doneP.map((b) => b.id));
-        const byFam = {}; for (const b of doneP) { const f = famOfP[b.part_number] || ""; if (!f) continue; (byFam[f] = byFam[f] || []).push({ h: Math.round((hrsP[b.id] || 0) * 100) / 100, at: b.prep_done_at }); }
-        const fams = [...new Set([...stdRowsP.map((r) => r.family), ...Object.keys(byFam), ...products.map((pr) => pr.family).filter(Boolean)])].sort();
-        prep301 = fams.map((f) => { const st = stdRowsP.find((r) => r.family === f); const xs = (byFam[f] || []).slice(0, 12).map((x) => x.h);
-          return { family: f, hours: st ? Number(st.hours) : 3, n: xs.length, median: xs.length >= 2 ? median301(xs) : null, last: (byFam[f] || [])[0] || null }; });
-      } catch (eP301) { console.error("prep standards failed:", eP301.message); }
-      let act258 = null;
-      try {
-        const togSA258 = toggles.find((t) => t.key === "step_actuals");
-        if (togSA258 && togSA258.enabled && fam94) act258 = await stepActuals258(fam94, steps, optItems94);
-      } catch (eA258) { console.error("step actuals failed:", eA258.message); }
-      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, steps, toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, optItems94, ahAdmin, act258, prep301));
+      // (Block 258 step actuals + Block 301 prep standards: moved to adminPanelData324, fetched on open — Block 324.)
+      return send(200, "text/html; charset=utf-8", adminPage(emps, tmpls, tplId, [], toggles, cabRows, nextUp, hrsAdmin, pickLists, products, calDays, nudgeTimes, [], ahAdmin, null, []));
     }
 
     // PEOPLE: department / role / usual lines / active + the C18 PIN reset.
@@ -15316,6 +15352,43 @@ self.addEventListener("notificationclick", (e) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patch) });
       logEvent("build.stage_moved", adminId, { build_id, order_number: b.order_number, cab_number: b.cab_number || null, from: was.key, to, from_label: was.label, to_label: STAGES323[to], reason, coyote_status: (coy[rootOf323(b)] || {}).status || null });
       return json(200, { ok: true, stage: to, label: STAGES323[to] });
+    }
+    // Block 324: one heavy admin box, rendered when it is opened (the page carries only its shell).
+    if (url.pathname === "/api/admin/panel") {
+      const [, failP] = await requireAdmin(); if (failP) return failP;
+      const which = String(url.searchParams.get("which") || "");
+      if (which === "steps") {
+        const tmplsP = await db("build_template?select=id,family&order=family");
+        const tplQ = url.searchParams.get("tpl");
+        const tplIdP = (tplQ && tmplsP.some((t) => String(t.id) === String(tplQ))) ? tplQ : (tmplsP[0] ? tmplsP[0].id : null);   // any known template id (the step read below still guards with isUuid, as the page did)
+        const famP = (tmplsP.find((t) => t.id === tplIdP) || {}).family || "";
+        const [stepsP, optP, togP] = await Promise.all([
+          (tplIdP && isUuid(tplIdP)) ? db(`step_template?select=id,display_no,name,detail,day_no,day_end,man_hours,is_background,wh_callout&template_id=eq.${tplIdP}&retired=is.false&order=sort_order`) : [],
+          famP ? db(`option_item?select=id,match_text,man_hours,day_no,retired,kit_only,alias_of,after_step,show_on_floor&family=eq.${encodeURIComponent(famP)}&order=retired.asc,match_text.asc`) : [],
+          db("feature_toggle?select=key,enabled&key=eq.step_actuals"),
+        ]);
+        let actP = null;
+        try { if (togP[0] && togP[0].enabled && famP) actP = await stepActuals258(famP, stepsP, optP); } catch (eA) { console.error("step actuals failed:", eA.message); }
+        return json(200, { ok: true, which, tpl: tplIdP, html: stepsPanelHtml324(tmplsP, tplIdP, stepsP, optP, actP) });
+      }
+      if (which === "prep") {
+        let prepP = [];
+        try {
+          const [stdRowsP, doneP, productsP] = await Promise.all([
+            db(`prep_standard?select=family,hours,updated_at`),
+            db(`build?select=id,part_number,prep_done_at&prep_state=eq.done&order=prep_done_at.desc&limit=200`),
+            db("product?select=part_number,family&order=family,part_number"),
+          ]);
+          const famOfP = Object.fromEntries(productsP.map((pr) => [pr.part_number, pr.family]));
+          const hrsP = await prepHours301(doneP.map((b) => b.id));
+          const byFam = {}; for (const b of doneP) { const f = famOfP[b.part_number] || ""; if (!f) continue; (byFam[f] = byFam[f] || []).push({ h: Math.round((hrsP[b.id] || 0) * 100) / 100, at: b.prep_done_at }); }
+          const fams = [...new Set([...stdRowsP.map((r) => r.family), ...Object.keys(byFam), ...productsP.map((pr) => pr.family).filter(Boolean)])].sort();
+          prepP = fams.map((f) => { const st = stdRowsP.find((r) => r.family === f); const xs = (byFam[f] || []).slice(0, 12).map((x) => x.h);
+            return { family: f, hours: st ? Number(st.hours) : 3, n: xs.length, median: xs.length >= 2 ? median301(xs) : null, last: (byFam[f] || [])[0] || null }; });
+        } catch (eP) { console.error("prep standards failed:", eP.message); }
+        return json(200, { ok: true, which, html: prepPanelHtml324(prepP) });
+      }
+      return json(400, { ok: false, error: "Which box?" });
     }
     if (url.pathname === "/api/admin/line" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
