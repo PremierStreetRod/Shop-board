@@ -6236,7 +6236,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function panelOpenSet324(){ try { return JSON.parse(localStorage.getItem("admin_open_324") || "[]"); } catch (e) { return []; } }
   function panelRemember324(id, open){ try { var a = panelOpenSet324().filter(function (x) { return x !== id; }); if (open) a.push(id); localStorage.setItem("admin_open_324", JSON.stringify(a)); } catch (e) {} }
   var LAZY324 = {};
-  function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; }).catch(function () { body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
+  function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; LAZY324[id] = { loading: true }; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; if (j.opts261) window.OPTS261 = j.opts261; }).catch(function () { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
   function panelToggle324(id, open){ var body = document.getElementById("pbody324-" + id), btn = document.getElementById("pbtn324-" + id); if (!body) return; if (open == null) open = body.style.display === "none"; body.style.display = open ? "" : "none"; if (btn) btn.innerHTML = open ? "&#9662; Close" : "&#9656; Open"; panelRemember324(id, open); if (open && !LAZY324[id] && document.getElementById(id).getAttribute("data-lazy")) panelLoad324(id, ""); }
   // Block 324: the Build-steps family links switch the family inside the open box (no page reload); the URL keeps tpl so a reload after Save lands on the same family.
   function stepsFamily324(tpl){ LAZY324.steps = null; var u = new URL(location.href); u.searchParams.set("tpl", tpl); u.hash = "steps"; history.replaceState(null, "", u.toString()); panelLoad324("steps", "&tpl=" + encodeURIComponent(tpl)); }
@@ -7227,7 +7227,7 @@ function mapperPreviewPage(d) {
   ${d.dupes ? `<p class="muted" style="font-size:.85rem">${d.raw} raw records · ${d.dupes} older duplicate${d.dupes === 1 ? "" : "s"} collapsed (latest per order wins).</p>` : ""}
   ${section("✅ Will be placed on the board", place.map(placeRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Family</th><th>→ Line</th><th>Board state</th><th>Target ship</th><th>Note</th>', "Queued orders with a recognized cab part. Each becomes an upcoming cab on its routed line; a multi-cab order splits into dotted sub-orders; an invoice note rides onto the cab and raises a manager-review flag.")}
   ${(review.length || needs.length) ? section("⚠️ Need attention before mapping", [...review, ...needs].map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Why it is held back</th>', "Not placed automatically — an unusual status (e.g. Hold), or a part the catalog does not recognize. Resolve it in Coyote or the catalog and it flows through on the next look.") : ""}
-  ${shipped.length ? section("🚚 Already shipped — kept as history, not placed", shipped.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Note</th>', "Processed = shipped. These stay in the record but do not clutter the live board.") : ""}
+  ${shipped.length ? section("&#36; Final payment received (Processed) — kept as history, not placed", shipped.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Note</th>', "Processed = shipped. These stay in the record but do not clutter the live board.") : ""}
   ${excluded.length ? section("⛔ Excluded", excluded.map(simpleRow), '<th>Order #</th><th>Customer</th><th>Cab part(s)</th><th>Status</th><th>Why</th>', "Blazer tops are outsourced and never enter the app.") : ""}
   <p class="muted" style="font-size:.85rem;text-align:center">Read-only preview. The write step — promote an order to a real cab on the board, idempotent and keyed on order # — is the small follow-on once the push cadence is confirmed. The mapping shown here does not change either way.</p>
 </div></body></html>`;
@@ -8383,7 +8383,7 @@ async function trackingPage323(q, page, famOf) {
   const PER = 25;
   const qq = String(q || "").trim().replace(/[,()*\\%]/g, "").slice(0, 40);
   const filt = qq ? `&or=(order_number.ilike.*${encodeURIComponent(qq)}*,cab_number.ilike.*${encodeURIComponent(qq)}*,customer_name.ilike.*${encodeURIComponent(qq)}*)` : "";
-  const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at&state=in.(production_complete,complete)${filt}`;   // (body_done_at joins this select with the Body build — stageOf323 already reads it)
+  const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at&state=in.(production_complete,complete)${filt}`;   // (the Body build adds its sign-out column here; stageOf323 already reads b.body_done_at when present)
   const ids = await dbAll252(`build?select=id&state=in.(production_complete,complete)${filt}&order=id.asc`);
   const total = ids.length, pages = Math.max(1, Math.ceil(total / PER));
   const pg = Math.min(pages, Math.max(1, Number(page) || 1));
@@ -8536,7 +8536,7 @@ function reconcilePage(d, role, frag323 = false) {
   var QVER=null;
   // Block 323: a queue change on another screen redraws ONLY the queue (#queue323) — the folded lanes keep their state.
   function qredraw323(){fetch('/reconcile?frag=queue',{credentials:'same-origin'}).then(function(r){return r.text();}).then(function(h){var q=document.getElementById('queue323');if(q&&h&&h.indexOf('kpi-tot')>=0){q.innerHTML=h;var n=document.getElementById('freshnote');if(n)n.style.display='none';}else{location.reload();}}).catch(function(){location.reload();});}
-  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){QVER=j.v;var f=document.activeElement;if(!f||f.tagName!=='INPUT'){qredraw323();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){QVER=j.v;qredraw323();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
   // Block 323: FOLDED LANES — title + count + one line on load; tap Open fetches the lane body once, tap Close folds it.
   // Which lanes you left open is remembered on this device (localStorage). Tracking lane: search + 25-row pages.
@@ -8547,7 +8547,7 @@ function reconcilePage(d, role, frag323 = false) {
   function laneToggle323(w){var body=document.getElementById('lanebody323-'+w),btn=document.getElementById('lanebtn323-'+w);if(!body)return;var open=body.style.display==='none';if(open){body.style.display='';btn.innerHTML='&#9662; Close';if(!LANE323[w])laneLoad323(w,'');}else{body.style.display='none';btn.innerHTML='&#9656; Open';}laneRemember323(w,open);}
   function laneGo323(w,p){var q=document.getElementById('trq323');laneLoad323(w,'&page='+p+'&q='+encodeURIComponent(q?q.value:''));}
   function laneSearch323(){var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():''));}
-  // Block 323: MOVE a past-production cab between stages (admin) — a chooser with a required reason, two taps, audited. Coyote-Processed cabs have no Move.
+  // Block 323: MOVE a past-production cab between stages (admin) — a chooser with a required reason, two taps, audited.
   var STAGES323=[['body','At Body Shop'],['crating','Crating &amp; shipping'],['shipped','Shipped']];
   function stageMenu323(id,cur,btn){var box=document.getElementById('trmv323-'+id);if(!box)return;if(box.innerHTML){box.innerHTML='';return;}var opts=STAGES323.filter(function(s){return s[0]!==cur;}).map(function(s){return '<option value="'+s[0]+'">'+s[1]+'</option>';}).join('');box.innerHTML='<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="stsel323-'+id+'" style="padding:6px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff">'+opts+'</select><input id="strs323-'+id+'" placeholder="Reason (required)" maxlength="140" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;min-width:160px"><button class="b" onclick="stageMove323(\\''+id+'\\',this)">Move it</button><span class="msg" id="stmsg323-'+id+'"></span></div>';}
   function stageMove323(id,btn){var sel=document.getElementById('stsel323-'+id),rs=document.getElementById('strs323-'+id),m=document.getElementById('stmsg323-'+id);var to=sel.value,reason=rs.value.trim(),name=sel.options[sel.selectedIndex].textContent;if(!reason){m.innerHTML='<span style="color:#ff6b5e">Type a reason</span>';rs.focus();return;}if(!btn.dataset.armed){btn.dataset.armed='1';var o=btn.textContent;btn.textContent='Move to '+name+'? Tap again';setTimeout(function(){btn.dataset.armed='';btn.textContent=o;},5000);return;}btn.disabled=true;m.textContent='Moving…';fetch('/api/admin/build/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,stage:to,reason:reason})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){m.innerHTML='<span style="color:#5edb84">Moved</span>';var pg=(LANE323.tracking&&LANE323.tracking.page)||1;var q=document.getElementById('trq323');laneLoad323('tracking','&page='+pg+'&q='+encodeURIComponent(q?q.value:''));}else{m.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'Could not move it')+'</span>';btn.disabled=false;btn.dataset.armed='';}}).catch(function(){m.innerHTML='<span style="color:#ff6b5e">Network hiccup — try again</span>';btn.disabled=false;btn.dataset.armed='';});}
@@ -15328,9 +15328,8 @@ self.addEventListener("notificationclick", (e) => {
       return json(200, { ok: true, line_id: toLine, override: override318 });
     }
     // Block 323: MOVE (sits BELOW requireAdmin — ruled 10/19, Block 297b: a const used above its line is a 500) a past-production cab between stages — admin only, reason required, audited
-    // build.stage_moved. Coyote is the source of truth for shipped: a Processed cab can't be moved
-    // anywhere (it has shipped); a hand-set Shipped stamps shipped_at. Moving back to body clears the
-    // override only when nothing else (Body sign-out, Coyote) puts it further along.
+    // build.stage_moved. 14:12 ruling: Coyote Processed = final payment, not shipped — so every past-production
+    // cab can move, Processed or not; a hand-set Shipped stamps shipped_at; moving back clears it.
     if (url.pathname === "/api/admin/build/stage" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p = await body(req);
@@ -15369,7 +15368,10 @@ self.addEventListener("notificationclick", (e) => {
         ]);
         let actP = null;
         try { if (togP[0] && togP[0].enabled && famP) actP = await stepActuals258(famP, stepsP, optP); } catch (eA) { console.error("step actuals failed:", eA.message); }
-        return json(200, { ok: true, which, tpl: tplIdP, html: stepsPanelHtml324(tmplsP, tplIdP, stepsP, optP, actP) });
+        // Block 325 (reviewer finding): the Block 261 "this is a duplicate of…" linker reads window.OPTS261, which the
+        // page used to fill from optItems — it ships with the box now and panelLoad324 sets it.
+        const opts261 = optP.filter((o) => !o.kit_only && !o.alias_of && !o.retired).map((o) => ({ id: o.id, text: String(o.match_text).slice(0, 80) }));
+        return json(200, { ok: true, which, tpl: tplIdP, html: stepsPanelHtml324(tmplsP, tplIdP, stepsP, optP, actP), opts261 });
       }
       if (which === "prep") {
         let prepP = [];
