@@ -4045,6 +4045,8 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
     <div class="kv"><b>Status</b>${escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>
+    ${(b.state === "production_complete" || b.state === "complete") ? (() => { const st323 = stageOf323(b); const parts323 = []; if (st323.hand && b.stage_set_at) parts323.push(`moved here by an admin ${escH(phxDate(new Date(b.stage_set_at).getTime()))}${b.stage_reason ? ` — ${escH(b.stage_reason)}` : ""}`); if (b.left_production_at) parts323.push(`left production ${escH(phxDate(new Date(b.left_production_at).getTime()))}`); if (b.shipped_at) parts323.push(`shipped ${escH(phxDate(new Date(b.shipped_at).getTime()))}`); if (isAdmin97) parts323.push(`<a href="/reconcile" style="color:#8e8e93">move it from Order Tracking</a>`); return `<div class="kv"><b>Stage</b>${stageChip323(st323)}<span style="opacity:.7;font-size:.9em;margin-left:8px">${parts323.join(" · ")}</span></div>`; })() : ""}
+    ${detail && detail.order && detail.order.status === "Processed" ? `<div class="kv"><b>&#36; Paid</b>Final payment received in Coyote (Processed)${b.state !== "production_complete" && b.state !== "complete" ? " — the cab stays where it is; Processed is about the money, not the shipping" : ""}</div>` : ""}
     ${fixHrs > 0 ? `<div class="kv"><b>Fix labor</b>${fixHrs.toFixed(1)} hr on returns/kickbacks — this order's rework, on top of the build hours</div>` : ""}
     ${b.prep301 && b.prep301.state !== "none" ? `<div class="kv"><b>Panel prep</b>${b.prep301.state === "done" ? `${b.prep301.hrs.toFixed(1)} hr${b.prep301.by ? ` — ${escH(b.prep301.by)}` : ""}${b.prep301.doneDs ? `, ${escH(b.prep301.doneDs)}` : ""} (${b.prep301.std} hr allowed)` : `in progress — ${b.prep301.hrs.toFixed(1)} hr so far (${b.prep301.std} hr allowed)`}</div>` : ""}   <!-- Block 301: laser-stripping hours, from punches -->
     ${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}
@@ -7054,7 +7056,7 @@ function classifyOrder(o) {
     return { group: "needs-setup", state: "—", reason: "No recognized cab part — add the part to the catalog, or the order isn't a cab." };
   }
   if (st === "Queued") return { group: "place", state: o.cabPartsCount > 1 ? "upcoming · split" : "upcoming", reason: "" };
-  if (st === "Processed") return { group: "shipped", state: "shipped", reason: "Already shipped — kept as history, not placed on the live board." };
+  if (st === "Processed") return { group: "shipped", state: "paid", reason: "Final payment received (Processed) — kept as history, not placed on the live board. (Block 323: Processed means the final/shipping payment landed, NOT that the cab shipped.)" };
   return { group: "review", state: "held", reason: st === "—" ? "No status on the order — check Coyote before mapping." : `Status "${st}" is outside Queued/Processed (e.g. Hold) — not placed until it is back to Queued.` };
 }
 async function mapperPreviewData() {
@@ -7761,7 +7763,13 @@ function classifyForBoard(o) {
   const draft = o.cabParts.filter((c) => !c.ready);
   if (draft.length) return { action: "park", stamp: false, reason: "Cab template not finished (draft): " + [...new Set(draft.map((c) => c.family))].join(", ") + " — held until its build steps are marked ready." };
   const st = o.status;
-  if (st === "Processed") return { action: "complete", stamp: true, reason: "Shipped — kept as history, not placed on the active board." };
+  // Block 323 (Daniel 10/25 14:12 + 14:22): "processed in coyote AUTOMATICALLY happens WHEN a customer PAYS
+  // their final bill. NOT necessarily WHEN the cab is shipped" — the deposit moves Order → Queued, the final
+  // (shipping) payment moves Queued → Processed; a customer who pays in full up front and picks the cab up is
+  // moved to Processed by hand. Two customers paid before their cab was done (23119 a month before it
+  // started; 23109 while on the line). So Processed NEVER moves a cab's state any more: on a cab we have it
+  // is noted (coyote_status "Processed" = final payment received); an order we never placed stays history.
+  if (st === "Processed") return { action: "paid", stamp: true, reason: "Final payment received (Processed) — noted on the cab; never moves it off the board. An order never placed stays history." };
   if (st === "Cancel" || st === "Cancelled" || st === "-") return { action: "cancel", stamp: true, reason: "Cancelled — marked cancelled, kept for the record." };
   if (st === "Hold") return { action: "place", state: "on_hold", stamp: true, reason: "On hold — placed and parked; resumes when it returns to Queued." };
   if (st === "Queued") return { action: "place", state: "upcoming", stamp: true, reason: "" };
@@ -7786,7 +7794,7 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status,line_override&order=id.asc`);   // Block 318: +line_override
+  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status,line_override,left_production_at,shipped_at&order=id.asc`);   // Block 318: +line_override
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   // Block 176 (Fable-5): index builds by their Coyote ROOT order number too, so
   // the stuck-cab detector below can find a cab whether it was placed under the
@@ -7949,17 +7957,15 @@ async function syncRun(apply, actorId) {
       continue;
     }
     if (it.action === "exclude") { sum.excluded++; if (it.stamp) stampIds.push(...it.rowIds); A(it.orderNo, "exclude", { reason: it.reason }); continue; }
-    if (it.action === "complete") {
-      // Block 176 (Fable-5): match by ROOT, patch by id — a multi-cab order's
-      // builds live under DOTTED numbers (23417.1/.2); the old bare-number
-      // patch missed every one of them. Harmless under the old hourly re-push
-      // (a human eventually saw the leftovers), fatal under Aaron's change-only
-      // feed: the final "Processed" push is the LAST push ever, so a missed
-      // complete would leave those cabs on the board forever.
-      const kidsC176 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => b.state !== "production_complete" && b.state !== "cancelled");
-      if (kidsC176.length) {
-        if (apply) for (const bC of kidsC176) await db(`build?id=eq.${bC.id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete" }) });
-        sum.completed += kidsC176.length; A(it.orderNo, "mark shipped / complete", { cabs: kidsC176.length });
+    if (it.action === "paid") {
+      // Block 323: Processed = the final payment landed (NOT shipped). Block 176's root-aware lookup kept —
+      // dotted multi-cab builds (23417.1/.2) live under the root. Note it on every cab of the order that
+      // doesn't carry the note yet; never a state change; one audit row per order per first sighting.
+      const kidsP323 = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => b.state !== "cancelled" && b.coyote_status !== "Processed");
+      if (kidsP323.length) {
+        if (apply) { for (const bP of kidsP323) await db(`build?id=eq.${bP.id}`, { method: "PATCH", body: JSON.stringify({ coyote_status: "Processed" }) });
+          logEvent("sync.final_paid", actorId || null, { order_number: it.orderNo, cabs: kidsP323.map((b) => ({ build_id: b.id, order_number: b.order_number, state: b.state })), note: "Coyote Processed = final payment received; cab state untouched (Block 323)" }); }
+        sum.completed += kidsP323.length; A(it.orderNo, "final payment received — noted, cab state untouched", { cabs: kidsP323.length });
       } else sum.noop++;
       if (it.stamp) stampIds.push(...it.rowIds); continue;
     }
@@ -8000,8 +8006,9 @@ async function syncRun(apply, actorId) {
           if ((b.destination || "") !== (t.destination || "")) patch.destination = t.destination;
           // Block 120 (owner-rep): a STARTED cab never leaves its spot on a
           // Coyote status change. Hold/Cancel are NOTED (coyote_status), never
-          // a state move; only "Processed" (shipped) removes it, handled
-          // above. Queued clears the note (back to normal).
+          // a state move. (Block 323: "Processed" = final payment received — it no
+          // longer removes anything either; it is noted by the "paid" branch above.)
+          // Queued clears the note (back to normal).
           const cs120 = t.state === "on_hold" ? "Hold" : (t.state === "upcoming" ? null : (b.coyote_status || null));
           if ((b.coyote_status || null) !== cs120) patch.coyote_status = cs120;
           const disruptive = (b.line_id !== t.line_id) || (String(b.part_number) !== String(t.part_number));
@@ -8126,7 +8133,7 @@ async function flagCabAlert176(kind, b, text, root, actorId) {
 function syncPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const kpi = (n, label) => `<div class="kpi"><b>${n}</b><span>${label}</span></div>`;
-  const badge = (a) => a === "place" ? '<span class="st q">place</span>' : a === "update" ? '<span class="st p">update</span>' : a === "park" ? '<span class="flag amber">park</span>' : a === "exclude" ? '<span class="flag grey">exclude</span>' : a.indexOf("cancel") > -1 ? '<span class="flag red">cancel</span>' : a.indexOf("complete") > -1 || a.indexOf("shipped") > -1 ? '<span class="flag grey">shipped</span>' : a.indexOf("FLAG") > -1 ? '<span class="flag amber">flagged</span>' : `<span class="st o">${esc(a)}</span>`;
+  const badge = (a) => a === "place" ? '<span class="st q">place</span>' : a === "update" ? '<span class="st p">update</span>' : a === "park" ? '<span class="flag amber">park</span>' : a === "exclude" ? '<span class="flag grey">exclude</span>' : a.indexOf("cancel") > -1 ? '<span class="flag red">cancel</span>' : a.indexOf("final payment") > -1 || a.indexOf("complete") > -1 || a.indexOf("shipped") > -1 ? '<span class="flag grey">final paid</span>' : a.indexOf("FLAG") > -1 ? '<span class="flag amber">flagged</span>' : `<span class="st o">${esc(a)}</span>`;
   const s = d.sum;
   const rows = s.actions.map((a) => `<tr><td><b>${esc(a.order)}</b></td><td>${badge(a.do)}</td><td class="muted" style="white-space:normal">${esc(a.do)}${a.line ? ` · line ${esc(a.line)}` : ""}${a.part ? ` · ${esc(a.part)}` : ""}${a.reason ? ` — ${esc(a.reason)}` : ""}</td></tr>`).join("");
   return `<!doctype html>
@@ -8154,7 +8161,7 @@ function syncPage(d) {
   <h2>Sync <span class="muted" style="font-size:.6em;font-weight:400">— Coyote → board, ${d.preview ? "PREVIEW (writes nothing)" : "last run"}</span></h2>
   <p class="muted" style="margin-top:-8px">${d.preview ? "This is exactly what the automatic engine <b>would do</b> to the board right now — nothing is written here. Once it's turned on, it does this by itself every hour." : "The engine runs automatically every hour."}</p>
   <div style="margin:14px 0">
-    ${kpi(s.placed, "place")}${kpi(s.updated, "update")}${kpi(s.completed, "shipped")}${kpi(s.cancelled, "cancel")}${kpi(s.parked, "parked")}${kpi(s.excluded, "excluded")}${s.flagged ? kpi(s.flagged, "flagged") : ""}
+    ${kpi(s.placed, "place")}${kpi(s.updated, "update")}${kpi(s.completed, "final paid")}${kpi(s.cancelled, "cancel")}${kpi(s.parked, "parked")}${kpi(s.excluded, "excluded")}${s.flagged ? kpi(s.flagged, "flagged") : ""}
   </div>
   ${d.preview ? `<div class="lane" style="text-align:center;padding:16px">
     <button id="runsync" onclick="runSyncNow()" style="background:#0a84ff;color:#fff;border:none;border-radius:12px;padding:12px 24px;font-size:1.05rem;font-weight:600;cursor:pointer">Run sync now</button>
@@ -8215,6 +8222,42 @@ function reconcileShape(open, famOf, lineName, hi) {
   const toReconcile = cabs.filter((c) => !c.numbered && c.fromCoyote).length;
   return { groups, total, numbered, unnumbered: total - numbered, toReconcile };
 }
+// Block 230 (Daniel): WAREHOUSE ACTIVITY — the admin's window on kit work. Part 1: every line's
+// ON-DECK cab with its kit status and how long it has sat unverified (the adoption tell). Part 2: the
+// last 20 kit actions with names and Phoenix times (the pulse). Block 323 moved it out of the /reconcile
+// route: it runs only when the admin opens the lane (/api/queue/lane?which=warehouse).
+async function whActivity230() {
+  let wh230 = null;
+      const [deck230, ev230, emps230, lines230, owed254] = await Promise.all([
+        db(`build?select=id,order_number,cab_number,line_id,kit_status,kit_note,kit_verified_at,kit_verified_by,created_at,queue_pos&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc&limit=200`),
+        db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(kit.status,kit.pull_started,kit.pull_undone,kit.pull_reverted,kit.delivered,kit.delivered_held,kit.note,kit.short_cleared)&order=at.desc&limit=20`),
+        db(`employee?select=id,first_name,last_name`),
+        db(`line?select=id,name&enabled=is.true&order=id`),
+        db(`build?select=order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),   // Block 254: still owed
+      ]);
+      const nm230b = Object.fromEntries(emps230.map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`]));
+      const firstUp230 = {};
+      for (const b2 of deck230) if (b2.line_id != null && !firstUp230[b2.line_id]) firstUp230[b2.line_id] = b2;
+      const onDeck230 = lines230.map((l2) => { const b2 = firstUp230[l2.id]; if (!b2) return { line: l2.name, none: true };
+        const ageD = Math.max(0, Math.floor((Date.now() - new Date(b2.created_at).getTime()) / 86400000));
+        return { line: l2.name, order: b2.order_number, cabno: b2.cab_number || "", status: b2.kit_status || "unverified",
+          note: b2.kit_note || "", vby: b2.kit_verified_by ? (nm230b[b2.kit_verified_by] || "") : "",
+          vat: b2.kit_verified_at ? phxDate(new Date(b2.kit_verified_at).getTime()) : "", age: ageD }; });
+      const phrase230 = { "kit.status": (p2) => p2.status === "verified" ? "verified the kit" : p2.status === "short" ? `marked the kit SHORT${p2.note ? ` — "${String(p2.note).slice(0, 60)}"` : ""}` : "set the kit back to unverified",
+        "kit.pull_started": () => "started pulling the kit", "kit.pull_undone": () => "un-pulled the kit", "kit.pull_reverted": () => "pull auto-reverted (no longer on deck)",
+        "kit.delivered": (p2) => `delivered the kit${p2.short ? " SHORT — parts still owed" : ""}${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": (p2) => `delivered the kit${p2.short ? " SHORT" : ""} (line still held)`, "kit.note": () => "left a kit note",
+        "kit.short_cleared": (p2) => p2.at_signoff ? `signed the cab off with the kit still marked SHORT${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit cleared at sign-off (Block 308)` : `confirmed the missing parts arrived${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit complete` };   // Block 254 · Block 308
+      const feed230 = ev230.map((e2) => ({ who: e2.actor_id ? (nm230b[e2.actor_id] || "someone") : "system",
+        what: (phrase230[e2.event_type] || (() => e2.event_type))(e2.payload || {}),
+        order: (e2.payload || {}).order_number || "", at: `${phxDate(new Date(e2.at).getTime()).slice(5)} ${phxHHMM(e2.at)}` }));
+      const lnNm254 = Object.fromEntries(lines230.map((l2) => [l2.id, l2.name]));
+      wh230 = { onDeck: onDeck230, feed: feed230,
+        stillOwed: owed254.map((s2) => ({ order: s2.order_number, cabno: s2.cab_number || "", line: lnNm254[s2.line_id] || (s2.line_id ? "Line " + s2.line_id : ""),
+          state: String(s2.state || "").replace(/_/g, " "), missing: s2.kit_note || "no note left",
+          since: s2.kit_delivered_at ? phxDate(new Date(s2.kit_delivered_at).getTime()) : "" })) };   // Block 254
+    
+  return wh230;
+}
 async function reconcileData() {
   const open = await dbAll252("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&order=id.asc");   // Block 233: fix_job joined the list — a returned cab on a line was falling off the queue page entirely
   const prods = await db("product?select=part_number,family");
@@ -8236,46 +8279,113 @@ async function reconcileData() {
     why: (b.coyote_status === "Cancel" || b.state === "cancelled") ? "Cancelled" : "On hold",
     when: String(b.created_at || "").slice(0, 10),
   }));
-  // Block 233 (Daniel: "once a cab leaves production... it is gone from the
-  // board" — no way to reach its order page or progress report). MOVED ON:
-  // every cab past production, still one click from its order page. Until the
-  // Body Shop / shipping build-outs exist, production_complete reads "At Body
-  // Shop" — richer stages arrive with those departments.
-  const gone233 = await db("build?select=id,order_number,part_number,cab_number,state,customer_name,created_at&state=in.(production_complete,complete)&order=created_at.desc&limit=150");
-  // Block 308 (Daniel, 10/20: "23850 left production today, not on the 7th"): event_log.build_id is a column
-  // nothing ever fills — the cab lives in the payload — so this lookup was always empty and every
-  // "Left production" fell back to the order's CREATED date. Read the payload like everywhere else.
-  const leftEv233 = await db("event_log?select=at,payload&event_type=eq.build.production_complete&order=at.desc&limit=400");
-  const leftAt233 = {}; for (const e of leftEv233) { const bid = e.payload && e.payload.build_id; if (bid && !leftAt233[bid]) leftAt233[bid] = e.at; }
-  shaped.movedOn = gone233.map((b) => ({
-    order: b.order_number || "—", family: famOf[String(b.part_number || "").toUpperCase()] || b.part_number || "",
-    cab: b.cab_number || "", customer: b.customer_name || "",
-    stage: b.state === "complete" ? "Complete" : "At Body Shop",
-    left: leftAt233[b.id] ? String(leftAt233[b.id]).slice(0, 10) : String(b.created_at || "").slice(0, 10),
-  })).sort((a, z) => (a.left < z.left ? 1 : -1));
+  // Block 323 (Daniel 10/25): the "Moved on" lane became ORDER TRACKING — its rows are fetched when the
+  // lane is opened (/api/queue/lane?which=tracking), never on page load. Only the COUNT rides the page.
+  // (Block 233's 150-row read + the 400-event "left production" lookup are gone; the date now lives on
+  // the row as build.left_production_at, migration 0073.)
+  const goneIds323 = await dbAll252("build?select=id&state=in.(production_complete,complete)&order=id.asc");
+  shaped.trackingCount = goneIds323.length;
   return shaped;
 }
-function reconcilePage(d, role, wh230 = null) {
-  const admin = role === "admin";
+// ===== Block 323 — ORDER TRACKING: the stage ladder, the lane, the admin Move =====
+// Daniel 10/25 13:34: "its more of order tracking page so we can keep an eye on all of our orders and
+// where they are at in the build process past production line". 13:46: "it should read 'at body shop',
+// 'crating and shipping' and 'shipped' for processed orders". 13:49: an admin may move a cab between
+// stages from here — "SHOULD that be available... OR does that do more damage" → built as an audited
+// override with a required reason (the Advance-anyway / Move-to-line pattern), never a silent dropdown.
+// The ladder: body → crating → shipped. 14:12 CORRECTION: Coyote "Processed" = the FINAL PAYMENT landed, not
+// shipped — so shipped comes only from a hand here (the Move, and later the warehouse's ship tap); Processed
+// rides along as a "Final payment received" note. 'crating' lights when the Body department signs a cab out
+// (that build is next — body_done_at is the hook) or when an admin moves it there by hand.
+const STAGES323 = { body: "At Body Shop", crating: "Crating & shipping", shipped: "Shipped" };
+const STAGE_ORDER323 = ["body", "crating", "shipped"];
+function stageOf323(b) {
+  const hand = b && STAGES323[b.stage] ? b.stage : null;
+  if (hand === "shipped" || (b && b.shipped_at)) return { key: "shipped", label: STAGES323.shipped, hand: true };
+  if (hand === "crating" || (b && b.body_done_at)) return { key: "crating", label: STAGES323.crating, hand: hand === "crating" };
+  return { key: "body", label: STAGES323.body, hand: hand === "body" };
+}
+// Block 323 (Daniel 10/25 14:12): Coyote "Processed" = the FINAL (shipping) payment landed — a fact for the
+// office, never a stage. The deposit moves Order → Queued; a paid-in-full pickup is moved to Processed by hand.
+const paidNote323 = (coy) => coy && coy.status === "Processed" ? `Final payment received${coy.paidAt ? " " + phxDate(new Date(coy.paidAt).getTime()) : ""}` : "";
+// latest Coyote status per order root, for a handful of orders (the open page of the lane, or one cab)
+async function coyoteStatusFor323(roots) {
+  const want = [...new Set(roots.filter(Boolean).map(String))];
+  if (!want.length) return {};
+  const rows = await db(`coyote_intake?select=order_number,received_at,st:payload->order->>status,st2:payload->>status&order_number=in.(${want.map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
+  const out = {};
+  for (const r of rows) {   // newest first: the first row seen is the current status; the LAST Processed row seen is the first time it was Processed
+    const st = String(r.st || r.st2 || "").trim();
+    if (!out[r.order_number]) out[r.order_number] = { status: st, paidAt: null };
+    if (st === "Processed") out[r.order_number].paidAt = r.received_at;
+  }
+  return out;
+}
+const rootOf323 = (b) => String(b.coyote_root || String(b.order_number || "").split(".")[0] || "");
+// one page of the tracking lane: search (order # / cab # / customer), 25 rows, newest-left first
+async function trackingPage323(q, page, famOf) {
+  const PER = 25;
+  const qq = String(q || "").trim().replace(/[,()*\\%]/g, "").slice(0, 40);
+  const filt = qq ? `&or=(order_number.ilike.*${encodeURIComponent(qq)}*,cab_number.ilike.*${encodeURIComponent(qq)}*,customer_name.ilike.*${encodeURIComponent(qq)}*)` : "";
+  const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at&state=in.(production_complete,complete)${filt}`;   // (body_done_at joins this select with the Body build — stageOf323 already reads it)
+  const ids = await dbAll252(`build?select=id&state=in.(production_complete,complete)${filt}&order=id.asc`);
+  const total = ids.length, pages = Math.max(1, Math.ceil(total / PER));
+  const pg = Math.min(pages, Math.max(1, Number(page) || 1));
+  const rows = total ? await db(`${base}&order=left_production_at.desc.nullslast,created_at.desc,id.asc&limit=${PER}&offset=${(pg - 1) * PER}`) : [];
+  const coy = await coyoteStatusFor323(rows.map(rootOf323));
+  const setters = [...new Set(rows.map((b) => b.stage_set_by).filter(Boolean))];
+  const emps = setters.length ? await db(`employee?select=id,first_name,last_name&id=in.(${setters.join(",")})`) : [];
+  const nm = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${((e.last_name || "")[0] || "")}.`]));
+  const items = rows.map((b) => {
+    const st = stageOf323(b);
+    return { id: b.id, order: b.order_number || "—", family: (famOf && famOf[String(b.part_number || "").toUpperCase()]) || b.part_number || "", cab: b.cab_number || "", customer: b.customer_name || "",
+      stage: st, paid: paidNote323(coy[rootOf323(b)]), left: b.left_production_at ? phxDate(new Date(b.left_production_at).getTime()) : "",
+      shipped: st.key === "shipped" && b.shipped_at ? phxDate(new Date(b.shipped_at).getTime()) : "",
+      moved: b.stage && b.stage_set_at ? { by: nm[b.stage_set_by] || "an admin", at: phxDate(new Date(b.stage_set_at).getTime()), reason: b.stage_reason || "", to: STAGES323[b.stage] || b.stage } : null };
+  });
+  return { items, total, page: pg, pages, per: PER, q: qq };
+}
+const stageChip323 = (st) => `<span class="flag" style="${st.key === "shipped" ? "background:#173a2b;color:#5edb84" : st.key === "crating" ? "background:#3a2f10;color:#ffd60a" : "background:#10233a;color:#5eaeff"}">${String(st.label).replace(/&/g, "&amp;")}</span>`;
+function trackingLaneHtml323(t, admin) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
-  const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
-    <td class="mvc">${c.reorderable && admin ? `${c.noUp ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.noDown ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
-    <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}${c.coyoteStatus && c.coyoteStatus !== "Queued" && c.coyoteStatus !== "Processed" ? ` <span class="flag" style="background:#3a1520;color:#ff8fa3">Coyote: ${esc(c.coyoteStatus)}</span>` : ""}</td>
-    <td class="muted">${esc(c.customer) || "—"}</td>
-    <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
-    <td class="muted">${esc(c.state)}</td>
-    <td>${admin ? `<input class="cn" id="cn-${c.id}" value="${esc(c.cab)}" placeholder="${esc(c.hint) || "244T"}" autocomplete="off">` : `<b>${esc(c.cab) || "—"}</b>`}</td>
-    ${admin ? `<td><button class="b" onclick="saveCab('${c.id}',this)">Save</button> <span id="msg-${c.id}" class="msg">${c.numbered ? '<span style="color:#5edb84">✓</span>' : ""}</span></td>` : "<td></td>"}
-  </tr>`;
-  const groups = d.groups.map((g) => `<div class="lane"><h3 style="margin:0 0 8px">${esc(g.line)} <span class="muted" style="font-weight:400;font-size:.8em">— ${g.cabs.length} cab${g.cabs.length === 1 ? "" : "s"}</span></h3>
-    <table><tr><th style="width:74px"></th><th>Order #</th><th>Customer</th><th>Family</th><th>State</th><th>Cab #</th><th></th></tr>
-    ${g.cabs.map(row).join("")}</table></div>`).join("");
-  // Block 230: the admin-only warehouse-activity lane (empty for everyone else).
-  const whLane230 = !wh230 ? "" : `<div class="lane" style="border-color:#5ac8fa">
-    <h3 style="margin:0 0 2px">Warehouse activity</h3>
-    <div class="muted" style="font-size:.85rem;margin-bottom:8px">On-deck kits by line, and the last 20 kit actions — who did what, when. Admin view only.</div>
-    <table><tr><th>Line</th><th>On deck</th><th>Kit</th><th>In queue</th></tr>
+  const nav = (lbl, p, on) => on ? `<button class="b" onclick="laneGo323('tracking',${p})">${lbl}</button>` : `<span class="b" style="opacity:.3;cursor:default">${lbl}</span>`;
+  const first = t.total ? (t.page - 1) * t.per + 1 : 0, last = Math.min(t.total, t.page * t.per);
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px">
+    <input id="trq323" value="${esc(t.q)}" placeholder="Search order #, cab #, or customer" autocomplete="off" style="flex:1;min-width:200px;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:#1c1c1e;color:#fff;font-size:.95rem" onkeydown="if(event.key==='Enter'){laneSearch323();}">
+    <button class="b" onclick="laneSearch323()">Search</button>${t.q ? `<button class="b" onclick="document.getElementById('trq323').value='';laneSearch323()">Clear</button>` : ""}
+    <span class="muted" style="font-size:.85rem">${t.total ? `${first}–${last} of ${t.total}` : "no matches"}${t.q ? ` for "${esc(t.q)}"` : ""}</span>
+  </div>
+  ${t.items.length ? `<table><tr><th>Order #</th><th>Cab #</th><th>Customer</th><th>Family</th><th>Stage</th><th>Left production</th><th>Shipped</th>${admin ? "<th></th>" : ""}</tr>
+  ${t.items.map((m) => `<tr id="tr323-${m.id}"><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td>
+    <td>${stageChip323(m.stage)}${m.moved && m.stage.hand ? `<div class="muted" style="font-size:.78rem;margin-top:2px">moved here by ${esc(m.moved.by)} ${esc(m.moved.at)}${m.moved.reason ? ` &mdash; ${esc(m.moved.reason)}` : ""}</div>` : ""}${m.paid ? `<div style="font-size:.78rem;margin-top:2px;color:#5edb84;opacity:.85">&#36; ${esc(m.paid)}</div>` : ""}</td>
+    <td class="muted">${esc(m.left) || "&mdash;"}</td><td class="muted">${esc(m.shipped) || "&mdash;"}</td>
+    ${admin ? `<td style="white-space:nowrap"><button class="b" onclick="stageMenu323('${m.id}','${m.stage.key}',this)">Move &#9656;</button><div id="trmv323-${m.id}"></div></td>` : ""}
+  </tr>`).join("")}</table>
+  <div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:10px;flex-wrap:wrap">
+    ${nav("&laquo; First", 1, t.page > 1)}${nav("&lsaquo; Previous", t.page - 1, t.page > 1)}<span class="muted" style="font-size:.85rem;padding:0 6px">Page ${t.page} of ${t.pages}</span>${nav("Next &rsaquo;", t.page + 1, t.page < t.pages)}${nav("Last &raquo;", t.pages, t.page < t.pages)}
+  </div>` : `<div class="muted">${t.q ? "No past-production order matches that." : "No cab has left production yet."}</div>`}`;
+}
+function asideLaneHtml323(setAside) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  if (!setAside.length) return `<div class="muted">Nothing set aside &mdash; no Coyote hold or cancel on an unstarted cab.</div>`;
+  return `<table><tr><th>Order #</th><th>Customer</th><th>Family</th><th>Cab #</th><th>Why</th><th>Since</th></tr>
+    ${setAside.map((s) => `<tr><td><b><a href="/order/${encodeURIComponent(s.order)}" style="color:inherit">${esc(s.order)}</a></b></td><td class="muted">${esc(s.customer) || "&mdash;"}</td><td>${esc(s.family) || esc(s.part) || "?"}</td><td>${esc(s.cab) || "&mdash;"}</td><td><span class="flag" style="background:#3a1520;color:#ff8fa3">${esc(s.why)}</span></td><td class="muted">${esc(s.when)}</td></tr>`).join("")}</table>`;
+}
+// the folded shell every lane renders into on page load: title · count · one line · ▸ Open
+function laneShell323(which, title, count, blurb, color) {
+  return `<div class="lane lane323" id="lane323-${which}" data-lane="${which}" style="border-color:${color}">
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="laneToggle323('${which}')">
+      <div style="flex:1"><h3 style="margin:0 0 2px">${title}${count != null ? ` <span class="muted" style="font-weight:400;font-size:.8em">(${count})</span>` : ""}</h3>
+      <div class="muted" style="font-size:.85rem">${blurb}</div></div>
+      <button class="b" id="lanebtn323-${which}" onclick="event.stopPropagation();laneToggle323('${which}')">&#9656; Open</button>
+    </div>
+    <div id="lanebody323-${which}" style="display:none;margin-top:10px"></div>
+  </div>`;
+}
+// Block 230 (moved out of reconcilePage by Block 323): the warehouse-activity lane body — fetched when the lane is opened.
+function whLaneHtml230(wh230) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return `    <table><tr><th>Line</th><th>On deck</th><th>Kit</th><th>In queue</th></tr>
     ${wh230.onDeck.map((o2) => o2.none ? `<tr><td>${esc(o2.line)}</td><td class="muted" colspan="3">— nothing queued</td></tr>` : `<tr>
       <td>${esc(o2.line)}</td>
       <td><b><a href="/order/${encodeURIComponent(o2.order)}" style="color:inherit">${esc(o2.order)}</a></b>${o2.cabno ? ` <span class="muted">· Cab #${esc(o2.cabno)}</span>` : ""}</td>
@@ -8294,7 +8404,33 @@ function reconcilePage(d, role, wh230 = null) {
     <div style="margin-top:10px;font-weight:700;font-size:.9rem;opacity:.75">Latest kit actions</div>
     ${wh230.feed.length ? wh230.feed.map((f2) => `<div style="font-size:.9rem;padding:3px 0;border-top:1px solid var(--line)"><b>${esc(f2.who)}</b> ${esc(f2.what)}${f2.order ? ` <span class="muted">· order ${esc(f2.order)}</span>` : ""} <span class="muted" style="float:right">${esc(f2.at)}</span></div>`).join("")
       : `<div class="muted" style="padding:4px 0">No kit actions logged yet — this fills in as warehouse verifies, pulls, and delivers.</div>`}
-  </div>`;
+`;
+}
+// Block 323: the queue part of the page on its own — rendered on load inside #queue323 and re-fetched
+// (?frag=queue) when the queue changes on another screen, so the folded lanes below stay as they are.
+function reconcileQueueHtml323(d, admin, kpi, groups) {
+  return `<div style="margin:14px 0">
+    ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
+  </div>
+  ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}`;
+}
+function reconcilePage(d, role, frag323 = false) {
+  const admin = role === "admin";
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const kpi = (id, n, label) => `<div class="kpi"><b id="${id}">${n}</b><span>${label}</span></div>`;
+  const row = (c) => `<tr id="row-${c.id}" data-cab="1" class="${c.ondeck ? "ondeck" : ""}${c.numbered ? " done" : (c.fromCoyote && !c.numbered ? " unrec" : "")}">
+    <td class="mvc">${c.reorderable && admin ? `${c.noUp ? '<span class="ar dim">&#9650;</span>' : `<button class="ar" title="Move up" onclick="qmove('${c.id}','up',this)">&#9650;</button>`}${c.noDown ? '<span class="ar dim">&#9660;</span>' : `<button class="ar" title="Move down" onclick="qmove('${c.id}','down',this)">&#9660;</button>`}<button class="ar" style="${c.pinned ? "background:#5c4a10;border-color:#ffd60a;" : ""}margin-left:2px" title="${c.pinned ? "Pinned — the warehouse can't move or cross this spot. Tap to unpin." : "Pin this cab to its spot — the warehouse can't move or cross it"}" onclick="qpin('${c.id}',${c.pinned ? "false" : "true"},this)">&#128204;</button>` : ""}${c.pinned && !admin ? '<span title="Held by the front office" style="margin-right:4px">&#128204;</span>' : ""}${c.ondeck ? '<span class="deck">on deck</span>' : ""}</td>
+    <td><b><a href="/order/${encodeURIComponent(c.order)}" style="color:inherit">${esc(c.order)}</a></b>${c.noteFlag ? ' <span class="flag amber">note</span>' : ""}${c.coyoteStatus && c.coyoteStatus !== "Queued" && c.coyoteStatus !== "Processed" ? ` <span class="flag" style="background:#3a1520;color:#ff8fa3">Coyote: ${esc(c.coyoteStatus)}</span>` : ""}</td>
+    <td class="muted">${esc(c.customer) || "—"}</td>
+    <td>${esc(c.family) || esc(c.part) || "?"}${c.suffix ? ` <span class="sfx">${c.suffix}</span>` : ""}</td>
+    <td class="muted">${esc(c.state)}</td>
+    <td>${admin ? `<input class="cn" id="cn-${c.id}" value="${esc(c.cab)}" placeholder="${esc(c.hint) || "244T"}" autocomplete="off">` : `<b>${esc(c.cab) || "—"}</b>`}</td>
+    ${admin ? `<td><button class="b" onclick="saveCab('${c.id}',this)">Save</button> <span id="msg-${c.id}" class="msg">${c.numbered ? '<span style="color:#5edb84">✓</span>' : ""}</span></td>` : "<td></td>"}
+  </tr>`;
+  const groups = d.groups.map((g) => `<div class="lane"><h3 style="margin:0 0 8px">${esc(g.line)} <span class="muted" style="font-weight:400;font-size:.8em">— ${g.cabs.length} cab${g.cabs.length === 1 ? "" : "s"}</span></h3>
+    <table><tr><th style="width:74px"></th><th>Order #</th><th>Customer</th><th>Family</th><th>State</th><th>Cab #</th><th></th></tr>
+    ${g.cabs.map(row).join("")}</table></div>`).join("");
+  if (frag323) return reconcileQueueHtml323(d, admin, kpi, groups);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -8331,23 +8467,10 @@ function reconcilePage(d, role, wh230 = null) {
   <h2>Order Queue <span class="muted" style="font-size:.6em;font-weight:400">— the production lines${admin ? "" : " (view only)"}</span></h2>   <!-- Block 156 (owner-rep E1): named by Daniel -->
   <p class="muted" style="margin-top:-8px">Each line lists its cabs oldest-first — the top upcoming cab is <b>on deck</b> next. ${admin ? "Use the &#9650;&#9660; arrows to move a cab up or down the queue; type a cab its wall number and Save." : "This is a live view — the warehouse and admin control the order; it refreshes here on its own."} Changes on another screen show up here within a few seconds.</p>
   <div id="freshnote" style="display:none">The queue just changed on another screen — this page will refresh as soon as you're done typing.</div>
-  <div style="margin:14px 0">
-    ${kpi("kpi-tot", d.total, "open cabs")}${kpi("kpi-num", d.numbered, "numbered")}${kpi("kpi-un", d.unnumbered, "to reconcile")}
-  </div>
-  ${d.total ? groups : `<div class="lane"><div class="muted">No open cabs on the board yet.</div></div>`}
-  ${whLane230}
-  ${(d.movedOn && d.movedOn.length && role !== "warehouse-view") ? `<div class="lane" style="border-color:#2d5a46">
-    <h3 style="margin:0 0 2px">Moved on <span class="muted" style="font-weight:400;font-size:.8em">&mdash; past production, still one click away (${d.movedOn.length})</span></h3>
-    <div class="muted" style="font-size:.85rem;margin-bottom:6px">Tap any order for its page and progress report. Stages beyond Body Shop (paint, shipping) get their own tracking when those departments are built out.</div>
-    <table><tr><th>Order #</th><th>Cab #</th><th>Customer</th><th>Family</th><th>Stage</th><th>Left production</th></tr>
-    ${d.movedOn.map((m) => `<tr><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td><td><span class="flag" style="background:#173a2b;color:#5edb84">${esc(m.stage)}</span></td><td class="muted">${esc(m.left)}</td></tr>`).join("")}</table>
-  </div>` : ""}
-  ${(d.setAside && d.setAside.length) ? `<div class="lane" style="border-color:#5a2a3a">
-    <h3 style="margin:0 0 6px">Set aside <span class="muted" style="font-weight:400;font-size:.8em">&mdash; Coyote hold / cancel, before production (${d.setAside.length})</span></h3>
-    <p class="muted" style="margin:-2px 0 10px;font-size:.85rem">These were pulled from the line-up by a Coyote status change before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.</p>
-    <table><tr><th>Order #</th><th>Customer</th><th>Family</th><th>Cab #</th><th>Why</th><th>Since</th></tr>
-    ${d.setAside.map((s) => `<tr><td><b><a href="/order/${encodeURIComponent(s.order)}" style="color:inherit">${esc(s.order)}</a></b></td><td class="muted">${esc(s.customer) || "&mdash;"}</td><td>${esc(s.family) || esc(s.part) || "?"}</td><td>${esc(s.cab) || "&mdash;"}</td><td><span class="flag" style="background:#3a1520;color:#ff8fa3">${esc(s.why)}</span></td><td class="muted">${esc(s.when)}</td></tr>`).join("")}</table>
-  </div>` : ""}
+  <div id="queue323">${reconcileQueueHtml323(d, admin, kpi, groups)}</div>
+  ${admin ? laneShell323("warehouse", "Warehouse activity", null, "On-deck kits by line with their kit status, parts still owed in production, and the last 20 kit actions &mdash; who did what, when. Admin view only.", "#5ac8fa") : ""}
+  ${laneShell323("tracking", "Order Tracking <span class=\"muted\" style=\"font-weight:400;font-size:.8em\">&mdash; past production</span>", d.trackingCount || 0, "Every cab that has left the lines &mdash; where it is now (At Body Shop &rarr; Crating &amp; shipping &rarr; Shipped), when it left, when it shipped, and whether the final payment has landed in Coyote. Search by order #, cab #, or customer; 25 per page.", "#2d5a46")}
+  ${laneShell323("aside", "Set aside", (d.setAside || []).length, "Cabs pulled from the line-up by a Coyote hold or cancel before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.", "#5a2a3a")}
   <p class="muted" style="font-size:.8rem;text-align:center">Oldest-first by default; the order you set here (or the warehouse sets for kit-readiness) drives what's on deck. Every move is logged. Cab numbers are never shared or reused.</p>
   <script>
   function recount(){var rows=document.querySelectorAll('tr[data-cab]');var done=0,tot=rows.length;rows.forEach(function(r){var inp=r.querySelector('input.cn');if(inp&&inp.value.trim())done++;});var a=document.getElementById('kpi-num');if(a)a.textContent=done;var b=document.getElementById('kpi-un');if(b)b.textContent=(tot-done);}
@@ -8355,8 +8478,24 @@ function reconcilePage(d, role, wh230 = null) {
   function qmove(id,dir,btn){var all=document.querySelectorAll('.ar');all.forEach(function(x){x.disabled=true;});fetch('/api/queue/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,dir:dir})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){location.reload();}else{all.forEach(function(x){x.disabled=false;});var n=document.getElementById('freshnote');if(n){n.textContent=(j&&j.error)||'Move failed';n.style.display='';}}}).catch(function(){all.forEach(function(x){x.disabled=false;});});}
   function qpin(id,want,btn){btn.disabled=true;fetch('/api/queue/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,pinned:want})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){location.reload();}else{btn.disabled=false;var n=document.getElementById('freshnote');if(n){n.textContent=(j&&j.error)||'Pin failed';n.style.display='';}}}).catch(function(){btn.disabled=false;});}
   var QVER=null;
-  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;if(!f||f.tagName!=='INPUT'){location.reload();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
+  // Block 323: a queue change on another screen redraws ONLY the queue (#queue323) — the folded lanes keep their state.
+  function qredraw323(){fetch('/reconcile?frag=queue',{credentials:'same-origin'}).then(function(r){return r.text();}).then(function(h){var q=document.getElementById('queue323');if(q&&h&&h.indexOf('kpi-tot')>=0){q.innerHTML=h;var n=document.getElementById('freshnote');if(n)n.style.display='none';}else{location.reload();}}).catch(function(){location.reload();});}
+  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){QVER=j.v;var f=document.activeElement;if(!f||f.tagName!=='INPUT'){qredraw323();}else{var n=document.getElementById('freshnote');if(n)n.style.display='';}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
+  // Block 323: FOLDED LANES — title + count + one line on load; tap Open fetches the lane body once, tap Close folds it.
+  // Which lanes you left open is remembered on this device (localStorage). Tracking lane: search + 25-row pages.
+  var LANE323={};
+  function laneOpenSet323(){try{return JSON.parse(localStorage.getItem('oq_open_323')||'[]');}catch(e){return [];}}
+  function laneRemember323(w,open){try{var a=laneOpenSet323().filter(function(x){return x!==w;});if(open)a.push(w);localStorage.setItem('oq_open_323',JSON.stringify(a));}catch(e){}}
+  function laneLoad323(w,extra){var body=document.getElementById('lanebody323-'+w);if(!body)return;body.innerHTML='<div class="muted">Loading…</div>';var u='/api/queue/lane?which='+w+(extra||'');fetch(u,{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){body.innerHTML='<div class="muted">'+((j&&j.error)||'Could not load this lane')+'</div>';return;}body.innerHTML=j.html;LANE323[w]=j;}).catch(function(){body.innerHTML='<div class="muted">Network hiccup — tap Open again</div>';});}
+  function laneToggle323(w){var body=document.getElementById('lanebody323-'+w),btn=document.getElementById('lanebtn323-'+w);if(!body)return;var open=body.style.display==='none';if(open){body.style.display='';btn.innerHTML='&#9662; Close';if(!LANE323[w])laneLoad323(w,'');}else{body.style.display='none';btn.innerHTML='&#9656; Open';}laneRemember323(w,open);}
+  function laneGo323(w,p){var q=document.getElementById('trq323');laneLoad323(w,'&page='+p+'&q='+encodeURIComponent(q?q.value:''));}
+  function laneSearch323(){var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():''));}
+  // Block 323: MOVE a past-production cab between stages (admin) — a chooser with a required reason, two taps, audited. Coyote-Processed cabs have no Move.
+  var STAGES323=[['body','At Body Shop'],['crating','Crating &amp; shipping'],['shipped','Shipped']];
+  function stageMenu323(id,cur,btn){var box=document.getElementById('trmv323-'+id);if(!box)return;if(box.innerHTML){box.innerHTML='';return;}var opts=STAGES323.filter(function(s){return s[0]!==cur;}).map(function(s){return '<option value="'+s[0]+'">'+s[1]+'</option>';}).join('');box.innerHTML='<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="stsel323-'+id+'" style="padding:6px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff">'+opts+'</select><input id="strs323-'+id+'" placeholder="Reason (required)" maxlength="140" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;min-width:160px"><button class="b" onclick="stageMove323(\\''+id+'\\',this)">Move it</button><span class="msg" id="stmsg323-'+id+'"></span></div>';}
+  function stageMove323(id,btn){var sel=document.getElementById('stsel323-'+id),rs=document.getElementById('strs323-'+id),m=document.getElementById('stmsg323-'+id);var to=sel.value,reason=rs.value.trim(),name=sel.options[sel.selectedIndex].textContent;if(!reason){m.innerHTML='<span style="color:#ff6b5e">Type a reason</span>';rs.focus();return;}if(!btn.dataset.armed){btn.dataset.armed='1';var o=btn.textContent;btn.textContent='Move to '+name+'? Tap again';setTimeout(function(){btn.dataset.armed='';btn.textContent=o;},5000);return;}btn.disabled=true;m.textContent='Moving…';fetch('/api/admin/build/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,stage:to,reason:reason})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){m.innerHTML='<span style="color:#5edb84">Moved</span>';var pg=(LANE323.tracking&&LANE323.tracking.page)||1;var q=document.getElementById('trq323');laneLoad323('tracking','&page='+pg+'&q='+encodeURIComponent(q?q.value:''));}else{m.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'Could not move it')+'</span>';btn.disabled=false;btn.dataset.armed='';}}).catch(function(){m.innerHTML='<span style="color:#ff6b5e">Network hiccup — try again</span>';btn.disabled=false;btn.dataset.armed='';});}
+  (function(){laneOpenSet323().forEach(function(w){if(document.getElementById('lanebody323-'+w))laneToggle323(w);});})();
   </script>
 </div></body></html>`;
 }
@@ -13155,42 +13294,35 @@ http.createServer(async (req, res) => {
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const data = await reconcileData();
       const vaR90 = String(url.searchParams.get("viewas") || "").toLowerCase();
-      // Block 230 (Daniel): WAREHOUSE ACTIVITY — the admin's window on kit
-      // work. Part 1: every line's ON-DECK cab with its kit status and how
-      // long it has sat unverified (the adoption tell). Part 2: the last 20
-      // kit actions with names and Phoenix times (the pulse). Admins only —
-      // managers/warehouse see the queue exactly as before.
-      let wh230 = null;
-      if (me.role === "admin" && !vaR90) {
-        const [deck230, ev230, emps230, lines230, owed254] = await Promise.all([
-          db(`build?select=id,order_number,cab_number,line_id,kit_status,kit_note,kit_verified_at,kit_verified_by,created_at,queue_pos&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc&limit=200`),
-          db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(kit.status,kit.pull_started,kit.pull_undone,kit.pull_reverted,kit.delivered,kit.delivered_held,kit.note,kit.short_cleared)&order=at.desc&limit=20`),
-          db(`employee?select=id,first_name,last_name`),
-          db(`line?select=id,name&enabled=is.true&order=id`),
-          db(`build?select=order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),   // Block 254: still owed
-        ]);
-        const nm230b = Object.fromEntries(emps230.map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`]));
-        const firstUp230 = {};
-        for (const b2 of deck230) if (b2.line_id != null && !firstUp230[b2.line_id]) firstUp230[b2.line_id] = b2;
-        const onDeck230 = lines230.map((l2) => { const b2 = firstUp230[l2.id]; if (!b2) return { line: l2.name, none: true };
-          const ageD = Math.max(0, Math.floor((Date.now() - new Date(b2.created_at).getTime()) / 86400000));
-          return { line: l2.name, order: b2.order_number, cabno: b2.cab_number || "", status: b2.kit_status || "unverified",
-            note: b2.kit_note || "", vby: b2.kit_verified_by ? (nm230b[b2.kit_verified_by] || "") : "",
-            vat: b2.kit_verified_at ? phxDate(new Date(b2.kit_verified_at).getTime()) : "", age: ageD }; });
-        const phrase230 = { "kit.status": (p2) => p2.status === "verified" ? "verified the kit" : p2.status === "short" ? `marked the kit SHORT${p2.note ? ` — "${String(p2.note).slice(0, 60)}"` : ""}` : "set the kit back to unverified",
-          "kit.pull_started": () => "started pulling the kit", "kit.pull_undone": () => "un-pulled the kit", "kit.pull_reverted": () => "pull auto-reverted (no longer on deck)",
-          "kit.delivered": (p2) => `delivered the kit${p2.short ? " SHORT — parts still owed" : ""}${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": (p2) => `delivered the kit${p2.short ? " SHORT" : ""} (line still held)`, "kit.note": () => "left a kit note",
-          "kit.short_cleared": (p2) => p2.at_signoff ? `signed the cab off with the kit still marked SHORT${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit cleared at sign-off (Block 308)` : `confirmed the missing parts arrived${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit complete` };   // Block 254 · Block 308
-        const feed230 = ev230.map((e2) => ({ who: e2.actor_id ? (nm230b[e2.actor_id] || "someone") : "system",
-          what: (phrase230[e2.event_type] || (() => e2.event_type))(e2.payload || {}),
-          order: (e2.payload || {}).order_number || "", at: `${phxDate(new Date(e2.at).getTime()).slice(5)} ${phxHHMM(e2.at)}` }));
-        const lnNm254 = Object.fromEntries(lines230.map((l2) => [l2.id, l2.name]));
-        wh230 = { onDeck: onDeck230, feed: feed230,
-          stillOwed: owed254.map((s2) => ({ order: s2.order_number, cabno: s2.cab_number || "", line: lnNm254[s2.line_id] || (s2.line_id ? "Line " + s2.line_id : ""),
-            state: String(s2.state || "").replace(/_/g, " "), missing: s2.kit_note || "no note left",
-            since: s2.kit_delivered_at ? phxDate(new Date(s2.kit_delivered_at).getTime()) : "" })) };   // Block 254
+      // Block 323: the warehouse-activity / tracking / set-aside lanes load on tap (/api/queue/lane); the
+      // page itself carries only the queue + the lane shells. ?frag=queue returns the queue part alone
+      // for the in-place redraw when the queue changes on another screen.
+      const role323 = (vaR90 && me.role === "admin") ? "viewer-preview" : me.role;
+      return send(200, "text/html; charset=utf-8", reconcilePage(data, role323, url.searchParams.get("frag") === "queue"));
+    }
+    // Block 323: one folded lane of the Order Queue, fetched when it is opened. Same door as the page.
+    if (url.pathname === "/api/queue/lane") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return json(403, { ok: false, error: "Not for this sign-in" });
+      const which = String(url.searchParams.get("which") || "");
+      if (which === "warehouse") {
+        if (me.role !== "admin") return json(403, { ok: false, error: "Admin view only" });
+        const wh = await whActivity230();
+        return json(200, { ok: true, which, html: whLaneHtml230(wh) });
       }
-      return send(200, "text/html; charset=utf-8", reconcilePage(data, (vaR90 && me.role === "admin") ? "viewer-preview" : me.role, wh230));
+      if (which === "tracking") {
+        const prods323 = await db("product?select=part_number,family");
+        const famOf323 = {}; for (const p of prods323) famOf323[String(p.part_number).toUpperCase()] = p.family;
+        const t = await trackingPage323(url.searchParams.get("q"), url.searchParams.get("page"), famOf323);
+        return json(200, { ok: true, which, html: trackingLaneHtml323(t, me.role === "admin"), page: t.page, pages: t.pages, total: t.total, q: t.q });
+      }
+      if (which === "aside") {
+        const d = await reconcileData();
+        return json(200, { ok: true, which, html: asideLaneHtml323(d.setAside || []) });
+      }
+      return json(400, { ok: false, error: "Which lane?" });
     }
 
     // TECH FINISH (file 11, builder half): every non-background step complete
@@ -13302,7 +13434,7 @@ http.createServer(async (req, res) => {
         await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
           state: "production_complete", final_note: note || null,
           rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null,
-          inspection_claimed_by: null, inspection_claimed_at: null }) });
+          inspection_claimed_by: null, inspection_claimed_at: null, left_production_at: claimed_at || new Date().toISOString() }) });   // Block 323
         logEvent("build.self_passed", empId, { build_id, order_number: b.order_number, note: note || "", at: claimed_at });
         logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: "rework", self_pass: true, signed_off_at: claimed_at });
         const [lnSP] = await db(`line?select=name&id=eq.${b.line_id}`);
@@ -13674,7 +13806,7 @@ http.createServer(async (req, res) => {
       const wasFix = !!b.fix_assigned_at;
       // Block 123 (logic audit L12): a signed-off cab shouldn't keep stale
       // rework fields — clear them too (a cab that never reworked has null).
-      const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null, inspection_claimed_by: null, inspection_claimed_at: null };   // Block 184: sign-off clears the claim
+      const patchC = { state: "production_complete", rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null, inspection_claimed_by: null, inspection_claimed_at: null, left_production_at: claimed_at || new Date().toISOString() };   // Block 323: the Order Tracking date   // Block 184: sign-off clears the claim
       if (wasFix) { patchC.fix_kind = null; patchC.fix_reason = null; patchC.fix_note = null; patchC.fix_hours = null; patchC.fix_assigned_at = null; }
       if (shortSO254) { patchC.kit_status = "verified"; patchC.kit_note = null; patchC.kit_verified_by = empId; patchC.kit_verified_at = new Date().toISOString(); }   // Block 308: cleared at sign-off
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchC) });
@@ -15158,6 +15290,32 @@ self.addEventListener("notificationclick", (e) => {
           `${fromLn ? fromLn.name : "Its line"} → ${ln.name}. Its kit goes to ${ln.name}'s lane and ${ln.name}'s crew starts it. The build steps don't change.`, "/order/" + encodeURIComponent(b.order_number));
       } catch (e318) { console.error("line_moved notify failed:", e318 && e318.message); }
       return json(200, { ok: true, line_id: toLine, override: override318 });
+    }
+    // Block 323: MOVE (sits BELOW requireAdmin — ruled 10/19, Block 297b: a const used above its line is a 500) a past-production cab between stages — admin only, reason required, audited
+    // build.stage_moved. Coyote is the source of truth for shipped: a Processed cab can't be moved
+    // anywhere (it has shipped); a hand-set Shipped stamps shipped_at. Moving back to body clears the
+    // override only when nothing else (Body sign-out, Coyote) puts it further along.
+    if (url.pathname === "/api/admin/build/stage" && req.method === "POST") {
+      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      const p = await body(req);
+      const build_id = String(p.build_id || ""); const to = String(p.stage || ""); const reason = String(p.reason || "").trim().slice(0, 140);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      if (!STAGES323[to]) return json(400, { ok: false, error: "Pick a stage" });
+      if (!reason) return json(400, { ok: false, error: "Type a reason — every move is on the record" });
+      const [b] = await db(`build?select=id,order_number,coyote_root,cab_number,state,stage,stage_set_at,shipped_at,left_production_at&id=eq.${build_id}`);
+      if (!b) return json(404, { ok: false, error: "Cab not found" });
+      if (!["production_complete", "complete"].includes(String(b.state))) return json(400, { ok: false, error: "Only a cab that has left production can move between these stages — this one is " + String(b.state).replace(/_/g, " ") });
+      const coy = await coyoteStatusFor323([rootOf323(b)]);
+      const was = stageOf323(b);
+      if (was.key === to) return json(400, { ok: false, error: "It is already " + STAGES323[to] });
+      const now = new Date().toISOString();
+      const patch = { stage: to, stage_set_at: now, stage_set_by: adminId, stage_reason: reason };
+      if (to === "shipped") patch.shipped_at = b.shipped_at || now;   // the ship date = the first time someone here said shipped (the warehouse's ship tap will set it too, when built)
+      if (to !== "shipped" && b.shipped_at) patch.shipped_at = null;   // moved back = it hadn't shipped after all
+      if (!b.left_production_at) patch.left_production_at = now;
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      logEvent("build.stage_moved", adminId, { build_id, order_number: b.order_number, cab_number: b.cab_number || null, from: was.key, to, from_label: was.label, to_label: STAGES323[to], reason, coyote_status: (coy[rootOf323(b)] || {}).status || null });
+      return json(200, { ok: true, stage: to, label: STAGES323[to] });
     }
     if (url.pathname === "/api/admin/line" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
