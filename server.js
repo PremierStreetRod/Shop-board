@@ -2598,11 +2598,98 @@ const prepStrip301 = (b, canPrep, clockedIn) => {
       <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">&#9208; Pause &mdash; back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
   return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "&#9654; Resume prepping" : "Prep panels &mdash; start"}</button></div>`;
 };
-const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }, curLine326 = null, wh327 = null) => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}${wh327 ? whCardCss327 : ""}
-<style>
+// Block 328 (Daniel 10/25 20:39: "build warehouses kit lanes to make it and body shop look and feel the same"): the
+// Home shows CARDS — one per waiting cab, no buttons; every action (verify / short / note / build sooner-later / pull /
+// deliver / panel prep / parts arrived) lives on the cab page, exactly as Body does. The card says where the cab is
+// in one line; the endpoints and their rules are untouched (whRow288 renders the actions on the cab page now).
+const whQueueCard328 = (q, i, r, lineName) => {
+  const esc = whEsc288;
+  const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
+  const isNext = i === (pullIdx < 0 ? 0 : pullIdx);
+  const busy = r.active || r.awaiting[0] || r.rework[0];
+  const isShort = q.kit_status === "short", isOk = q.kit_status === "verified";
+  const kitChip = isOk ? '<span class="chip ok">&#10003; Kit verified</span>' : isShort ? '<span class="chip short">Short &mdash; parts missing</span>' : '<span class="chip unv">Not checked yet</span>';
+  const p = q.prep || { state: "none" };
+  const prepChip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; You're prepping" : p.active ? "&#9881; Panels in progress" : "&#9208; Panels paused"} &middot; ${p.hrs}h</span>` : "";
+  const status = q.kit_pull_started_at
+    ? (busy ? `Pull started ${whTime288(q.kit_pull_started_at)} &middot; line busy &mdash; ORDER ${esc(busy.order_number)} is still on it` : `Pull started ${whTime288(q.kit_pull_started_at)} &middot; ready to deliver`)
+    : isNext ? (isOk ? "Next up &mdash; ready to pull" : isShort ? "Next up &mdash; short, pull what we have or wait for parts" : "Next up &mdash; check the kit") : `#${i + 1} on ${esc(lineName)}${isOk ? " &middot; kit ready" : isShort ? " &middot; short" : " &middot; kit not checked"}`;
+  return `<a class="bcard${isNext ? " next328" : ""}" href="/warehouse/${encodeURIComponent(q.order_number)}">
+    <div><span class="qpos" style="display:inline-flex;vertical-align:middle;margin-right:8px">${isNext ? "&#9654;" : i + 1}</span><span class="o">Order ${esc(q.order_number)}</span> <span class="m">${q.cab_number ? `Cab #${esc(q.cab_number)} · ` : ""}${esc(q.family || q.part_number || "")}</span> <span style="float:right">${kitChip}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a">&#128204; Held</span>' : ""}${prepChip ? " " + prepChip : ""}</span></div>
+    <div class="s">${status}${q.kit_note ? ` <span class="m">· ${isShort ? "Missing: " : "Note: "}${esc(q.kit_note)}</span>` : ""}</div>
+  </a>`;
+};
+const whOwedCard328 = (s) => `<a class="bcard" href="/warehouse/${encodeURIComponent(s.order_number)}">
+    <div><span class="o">Order ${whEsc288(s.order_number)}</span> <span class="m">${s.cab_number ? `Cab #${whEsc288(s.cab_number)} · ` : ""}${whEsc288(s.lineName || "")} · ${whEsc288(String(s.state || "").replace(/_/g, " "))}</span> <span style="float:right"><span class="chip short">Parts owed</span></span></div>
+    <div class="s" style="color:#ff9f0a">Missing: ${whEsc288(s.kit_note || "no note left")}</div>
+  </a>`;
+// Block 328: the cab ON THE LINE, on its own page — the panel-prep strip with its buttons (the Home shows the chip only)
+const whOnLineLane328 = (q, canPrep, clockedIn) => `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${whEsc288(q.order_number)}</b>${q.cab_number ? ` &middot; Cab #${whEsc288(q.cab_number)}` : ""}${q.family ? ` &middot; ${whEsc288(q.family)}` : ""}${q.prep && q.prep.state !== "done" ? prepStrip301(q, canPrep, clockedIn) : `<div class="prep301"><span class="chip ok">&#10003; Panels ready${q.prep && q.prep.hrs ? ` &middot; ${q.prep.hrs}h` : ""}${q.prep && q.prep.by ? ` &middot; ${whEsc288(q.prep.by)}` : ""}</span></div>`}</div>`;
+// Block 328: the warehouse queue data — one assembly shared by the Home (cards) and the cab page (the actions).
+// Moved verbatim out of the /home route (Blocks 97/212/254/288/301/305 inside); only the return is new.
+async function whQueueData328(empId, emp) {
+  const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254, prodW288] = await Promise.all([
+    db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
+    db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
+    db(`line?select=id,name&enabled=is.true&order=id`),
+    db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at,prep_state,prep_started_at,prep_done_at,prep_done_by&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),   // Block 301: +prep_*
+    // Block 97 (owner-rep): the delivered history — where warehouse's cabs
+    // ARE in production. Read-only; ship-prep/receive-back is a later stage.
+    db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`),
+    db(`employee?select=id&role=in.(manager,admin)`),
+    shopHours(),
+    // Block 254: STILL OWED — every cab that left upcoming with its kit
+    // short and hasn't had the parts confirmed since. Shorts are rare;
+    // this list is naturally tiny (any growth is itself the signal).
+    db(`build?select=id,order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),
+    db(`product?select=part_number,family`).catch(() => []),   // Block 288: plain cab type on each row (display only — a failed read just leaves it blank)
+  ]);
+  const [lastW] = lastWRows;
+  const famW288 = Object.fromEntries((prodW288 || []).map((p) => [p.part_number, p.family]));
+  buildsW.forEach((b) => { b.family = famW288[b.part_number] || ""; });
+  // Block 301: PANEL PREP on the warehouse page — who may prep, which cab I'm prepping right now,
+  // each cab's prep state + hours so far, and the per-family standard (admin-set, 3.0 seeded).
+  const canPrep301 = Boolean(emp.panel_prep) || emp.role === "admin";
+  const [lastFull301] = await db(`clock_event?select=kind,line_id,fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+  const myPrep301 = lastFull301 && lastFull301.kind === "clock_in" && lastFull301.line_id === PREP_LINE_ID ? { build_id: lastFull301.fix_build_id, since: lastFull301.claimed_at } : null;
+  const prepIds301 = buildsW.filter((b) => b.prep_state && b.prep_state !== "none").map((b) => b.id);
+  const [prepHrs301, stdRows301, whoRows301] = await Promise.all([prepHours301(prepIds301), db(`prep_standard?select=family,hours`).catch(() => []), prepIds301.length ? db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []) : []]);
+  const stdOf301 = Object.fromEntries((stdRows301 || []).map((r) => [r.family, Number(r.hours)]));
+  const whoOf301 = Object.fromEntries((whoRows301 || []).map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`.trim()]));
+  // Block 305 (Daniel: a PAUSE for Eric): a cab is "paused" only when NOBODY with the prep flag is
+  // clocked onto it right now — one tiny read per prepper (Eric today), so the chip stays honest
+  // if a second person ever gets the flag.
+  const lastPreppers305 = await Promise.all((whoRows301 || []).filter((e2) => e2.id !== empId).map((e2) => db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${e2.id}&order=claimed_at.desc&limit=1`).then((r) => r[0]).catch(() => null)));
+  const activeOn305 = new Set(lastPreppers305.filter((ev) => ev && ev.kind === "clock_in" && ev.line_id === PREP_LINE_ID && ev.fix_build_id).map((ev) => ev.fix_build_id)); if (myPrep301 && myPrep301.build_id) activeOn305.add(myPrep301.build_id);
+  buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id), active: activeOn305.has(b.id) }; });
+  const prep301 = { can: canPrep301, mine: myPrep301 };
+  const rowsW = linesW.map((l) => ({ line: l,
+    active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
+    awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
+    rework: buildsW.filter((b) => b.line_id === l.id && b.state === "rework"),
+    queue: buildsW.filter((b) => b.line_id === l.id && b.state === "upcoming")
+      .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
+  const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
+  // Block 132 (logic audit L8): a cockpit-started cab is stamped delivered by
+  // the MANAGER, not warehouse — flag those rows so the list says so.
+  const mgrIds132 = new Set(mgrRows132.map((e) => e.id));
+  histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); h.byMgmt = mgrIds132.has(h.kit_delivered_by); });
+  shortOwedW254.forEach((s) => { s.lineName = lnName97[s.line_id] || (s.line_id ? "Line " + s.line_id : ""); });   // Block 254
+  return { lastW, reasonsW, linesW, buildsW, rowsW, histW97, hrsW212, shortOwedW254, prep301, lastFull301, lnName97, canPrep301 };
+}
+// Block 328: the warehouse page script, shared with the cab page (the kit actions moved there; post(), the note panel,
+// the armed moves, the prep photo, the in-place swap and the queue poll all ride along unchanged).
+// Block 327: the card styles alone (the warehouse Home has its own button/lane styles — only the cards ride in)
+const whCardCss327 = `<style>
+  .bcard{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:8px 0}
+  .bcard:active{filter:brightness(1.2)}
+  .bcard .o{font-size:1.15rem;font-weight:800}.bcard .m{opacity:.65;font-size:.9rem}.bcard .s{margin-top:4px;font-size:.95rem}
+  .bcard .chip{display:inline-block;border-radius:9px;padding:2px 9px;font-size:.8rem;font-weight:700;white-space:nowrap}.bcard .chip.ok{background:#173a2b;color:#5edb84}.bcard .chip.unv{background:#2c2c2e;color:#9a9aa0}
+  .fold326{opacity:.65;font-size:.9rem;cursor:pointer;margin:14px 0 4px}
+  .bcard.next328{border-color:#3d6ea8;background:#141f2e}
+</style>`;
+// Block 328: the warehouse look, shared by the Home and the cab page
+const whCss288 = `<style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
   .lane h3{margin:0 0 10px;font-size:1.15rem}
   .qrow{padding:6px 0;border-bottom:1px solid var(--line)}
@@ -2635,67 +2722,8 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   .pull{flex:1 1 100%;border:1px solid #30d158;border-radius:10px;padding:12px}
   .pstep{margin-bottom:8px;font-size:.92rem}
   .ro288{background:#3a2f10;color:#ffd60a;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-weight:700;text-align:center}
-</style></head>
-<body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
-  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? "&#9679; ON THE CLOCK — Warehouse" : "&#9675; NOT CLOCKED IN"}</div>
-  <div class="lane">
-    ${clockedIn
-      ? `${curLine326 === 10 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(9,this)">&#8646; Back to Warehouse</button> <span style="opacity:.6;font-size:.85rem">you're on Shop time</span></div>` : curLine326 === 9 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(10,this)">&#8646; Switch to Shop time</button> <span style="opacity:.6;font-size:.85rem">jig, meetings, in-house work</span></div>` : ""}<span style="opacity:.75;font-size:.9rem;font-weight:600">Clocking out? Pick what kind:</span><br>
-         ${ah.open ? `<div id="ahwrapW107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:8px auto 4px;max-width:560px;text-align:left">
-           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
-           <input id="wrapW106" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px">
-           <div style="margin-top:8px;opacity:.8;font-size:.85rem">Photos of the work — optional:</div>
-           <input type="file" id="ahphW107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
-           <div id="ahmsgW107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
-           <button class="b grn" style="margin-top:8px" onclick="wrapGoW107(this)">Submit wrap-up &amp; clock out</button>
-         </div>
-         <p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
-         ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
-         <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
-      : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button> <button class="b" style="padding:14px 20px;font-size:1rem" onclick="clockIn(this, 10)">Clock in — Shop time</button>
-         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — one quick tap, then a normal shift.` : hint239}</span>   <!-- Block 239: the hint reads the person's own last punch — never frozen copy -->
-         ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
-           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — one quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
-           <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
-           <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
-           <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px"><br>
-           <span style="opacity:.55;font-size:.85rem">The office approves or denies the hours after you wrap up.</span><br>
-           <button class="b grn" style="margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
-           <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
-         </div>` : ""}`}
-  </div>
-  ${!clockedIn && emp.role !== "manager" && emp.role !== "admin" ? `<div class="ro288">You're not clocked in &mdash; you can read the line-up, but the buttons stay off until you clock in.</div>` : ""}
-  ${rows.map((r) => `
-  <div class="lane">
-    <h3>${r.line.name}</h3>
-    ${r.active ? `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}${r.active.prep && r.active.prep.state !== "done" ? prepStrip301(r.active, prep301.can, clockedIn) : ""}</div>` : ""}
-    ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
-    ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
-    ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
-    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first)</div>
-      ${r.queue.map((q, i) => whRow288(q, i, r, clockedIn || emp.role === "manager" || emp.role === "admin", prep301.can, clockedIn)).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
-  </div>`).join("")}
-  ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
-    <h3>Started short — parts still owed</h3>
-    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When the missing pieces arrive and go out to the cab, tap the button — that closes the loop and clears it off this list.</div>
-    ${(shortOwed254 || []).map((s) => `<div class="qrow"><b>ORDER ${s.order_number}</b>${s.cab_number ? ` · Cab #${s.cab_number}` : ""} · ${s.lineName || ""} · ${String(s.state || "").replace(/_/g, " ")}<br>
-      <span style="color:#ff9f0a;font-weight:700">Missing: ${String(s.kit_note || "no note left").replace(/[&<>"]/g, "")}</span>
-      <div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${s.id}'},this))">Parts arrived — kit complete &#10003;</button></div>
-    </div>`).join("")}
-  </div>` : ""}
-  ${wh327 ? `<div class="lane" style="border-color:#5eaeff">${whList327(wh327, false)}<div style="opacity:.5;font-size:.8rem;margin-top:6px">Tap a cab for its done-right checklist, the crating clock and the Shipped / Picked up tap. Pickup or ship comes from the Coyote order.</div></div>` : ""}
-  <div class="lane">
-    <h3>Delivered — now in production</h3>
-    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come back to you above, the moment Body taps Done in primer.</div>
-    ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}${h.byMgmt ? ` · <span style="color:#ffd60a">started by management</span>` : ""}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
-  </div>
-  <div class="msg err" id="err"></div>
-  <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
-  <a href="/logout" style="color:#8e8e93">Sign out</a></p>
-</div>
-<script>${netJs}
+</style>`;
+const whPageScript328 = (ah) => `${netJs}
   // Same sturdy patterns as the consoles: two-tap arm on anything that
   // changes another team's world; plain posts; full reload on success.
   function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ""; }
@@ -2738,7 +2766,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
         // template the backslashes vanished and the whole line became a comment after "return" —
         // every successful warehouse tap since v265 saved its data and then did NOTHING on screen.
         // Plain string tests now; NEVER write "\/" inside a page template.
-        if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out");   // Block 292: clock taps redraw in place
+        if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/switch") > -1 ? "Switched" : url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out");   // Block 292: clock taps redraw in place · Block 328: a switch is not a clock-out
         if (url.indexOf("/api/prep/") === 0) return swapIn292(".wrap", url.indexOf("/start") > -1 ? "Prepping panels" : url.indexOf("/done") > -1 ? "Panels ready" : "Back on warehouse");   // Block 304
         return location.reload();   // every other action still reloads
       }
@@ -2772,6 +2800,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   // posting (the server enforces the three answers either way).
   function clockIn(btn, line){
     const p106 = document.getElementById("ahpW");
+    window.__line326 = line || 9;   // Block 328 (reviewer): the after-hours questionnaire clocks in on the line that was tapped
     if (p106) { p106.style.display = "block"; return; }
     post("/api/clock/in", { line_id: line || 9 }, btn);   // Block 326: 10 = Shop time (jig, meetings, in-house work) — Daniel 10/25 16:17
   }
@@ -2783,7 +2812,7 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
       r.style.opacity = "1"; r.style.outline = "2px solid #30d158"; }
   });
   function ahGoW(btn){
-    post("/api/clock/in", { line_id: 9, ah_reason: ahReasonW,
+    post("/api/clock/in", { line_id: window.__line326 || 9, ah_reason: ahReasonW,
       ah_plan: val("ahplanW") }, btn);
   }
   function clockOut(reason, btn, note){
@@ -2831,7 +2860,69 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
   var QVER=null;
   function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
-</script></body></html>`;
+`;
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }, curLine326 = null, wh327 = null) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}${whCardCss327}
+${whCss288}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? `&#9679; ON THE CLOCK — ${curLine326 === 10 ? "Shop time" : "Warehouse"}` : "&#9675; NOT CLOCKED IN"}</div>
+  <div class="lane">
+    ${clockedIn
+      ? `${curLine326 === 10 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(9,this)">&#8646; Back to Warehouse</button> <span style="opacity:.6;font-size:.85rem">you're on Shop time</span></div>` : curLine326 === 9 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(10,this)">&#8646; Switch to Shop time</button> <span style="opacity:.6;font-size:.85rem">jig, meetings, in-house work</span></div>` : ""}<span style="opacity:.75;font-size:.9rem;font-weight:600">Clocking out? Pick what kind:</span><br>
+         ${ah.open ? `<div id="ahwrapW107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:8px auto 4px;max-width:560px;text-align:left">
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER-HOURS wrap-up — last step, then you're out:</p>
+           <input id="wrapW106" maxlength="200" placeholder="What did you get done? (required)" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:10px">
+           <div style="margin-top:8px;opacity:.8;font-size:.85rem">Photos of the work — optional:</div>
+           <input type="file" id="ahphW107" accept="image/*" multiple style="margin-top:4px;color:#8e8e93">
+           <div id="ahmsgW107" style="color:#ffd60a;font-size:.85rem;margin-top:6px;min-height:1em"></div>
+           <button class="b grn" style="margin-top:8px" onclick="wrapGoW107(this)">Submit wrap-up &amp; clock out</button>
+         </div>
+         <p style="color:#ffd60a;margin:8px 0 2px;font-size:.9rem">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
+         ${reasons.length ? reasons.map((x) => `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('${x.label.replace(/'/g, "\\'")}',this)">${x.label}</button>`).join("") : `<button class="b" style="margin:8px 6px 0 0" onclick="clockOut('End of day',this)">Clock out</button>`}
+         <div id="oth97" style="display:none;margin-top:10px"><input id="othn97" maxlength="120" placeholder="quick note — why / what kind" style="width:55%;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="b grn" onclick="clockOut(window.__oth97,this,val('othn97'))">Clock out</button></div>`
+      : `<button class="b grn" style="padding:14px 28px;font-size:1rem" onclick="clockIn(this)">Clock in — Warehouse</button> <button class="b" style="padding:14px 20px;font-size:1rem" onclick="clockIn(this, 10)">Clock in — Shop time</button>
+         <span style="opacity:.5;font-size:.85rem;margin-left:10px">${ah.now ? `<span style="color:#ffd60a;font-weight:700">After hours</span> — one quick tap, then a normal shift.` : hint239}</span>   <!-- Block 239: the hint reads the person's own last punch — never frozen copy -->
+         ${ah.now ? `<div id="ahpW" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin-top:12px">
+           <p style="color:#ffd60a;font-weight:700;margin:0 0 6px">AFTER HOURS — one quick tap${ah.lastReason ? " (your last answer is pre-picked)" : ""}:</p>
+           <p style="opacity:.7;margin:10px 0 4px">What's it for?</p>
+           <div>${ah.reasons.map((r) => `<button class="b ahreW" data-ahreason="${r.replace(/"/g, "&quot;")}" style="margin:4px 6px 0 0;${r === ah.lastReason ? "opacity:1;outline:2px solid #30d158" : "opacity:.75"}">${r}</button>`).join("")}</div>
+           <input id="ahplanW" maxlength="200" placeholder="Anything to add? (optional)" style="width:70%;margin-top:10px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px"><br>
+           <span style="opacity:.55;font-size:.85rem">The office approves or denies the hours after you wrap up.</span><br>
+           <button class="b grn" style="margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
+           <button class="b" style="margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
+         </div>` : ""}`}
+  </div>
+  ${!clockedIn && emp.role !== "manager" && emp.role !== "admin" ? `<div class="ro288">You're not clocked in &mdash; you can read the line-up and open any cab, but the buttons stay off until you clock in.</div>` : ""}
+  ${rows.map((r) => `
+  <div class="lane">
+    <h3>${r.line.name}</h3>
+    ${r.active ? `<a class="now" href="/warehouse/${encodeURIComponent(r.active.order_number)}" style="display:block;text-decoration:none;color:inherit"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}${r.active.prep && r.active.prep.state !== "done" ? prepStrip301({ ...r.active, prep: { ...r.active.prep, mine: false } }, false, clockedIn) : ""}</a>` : ""}
+    ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
+    ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
+    ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
+    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first) &middot; tap a cab to work it</div>
+      ${r.queue.map((q, i) => whQueueCard328(q, i, r, r.line.name)).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
+  </div>`).join("")}
+  ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
+    <h3>Started short — parts still owed</h3>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When the missing pieces arrive and go out to the cab, open the cab and tap Parts arrived — that closes the loop and clears it off this list.</div>
+    ${(shortOwed254 || []).map(whOwedCard328).join("")}
+  </div>` : ""}
+  ${wh327 ? `<div class="lane" style="border-color:#5eaeff">${whList327(wh327, false)}<div style="opacity:.5;font-size:.8rem;margin-top:6px">Tap a cab for its done-right checklist, the crating clock and the Shipped / Picked up tap. Pickup or ship comes from the Coyote order.</div></div>` : ""}
+  <div class="lane">
+    <h3>Delivered — now in production</h3>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come back to you above, the moment Body taps Done in primer.</div>
+    ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}${h.byMgmt ? ` · <span style="color:#ffd60a">started by management</span>` : ""}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
+  </div>
+  <div class="msg err" id="err"></div>
+  <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
+  <a href="/logout" style="color:#8e8e93">Sign out</a></p>
+</div>
+<script>${whPageScript328(ah)}</script></body></html>`;
 
 // Block 290: the MARKETING clock card — top of Daniel's first screen, phone-first.
 // Block 291 (Daniel's screenshots, 10/16: "a bit LOUD and taking up too much
@@ -3854,9 +3945,19 @@ async function zipStream296(res, zipName, next) {
 }
 // Every VISIBLE photo on a cab (progress / finish / task — the report's feed), oldest first, with a
 // desktop-sortable file name: 2026-10-15_07-door-and-rocker_1.jpg · 2026-10-16_end-of-day_2.jpg · 2026-10-17_finish_1.jpg
+// Block 328 (reviewer): the "Customer sees ALL body photos" toggle was seeded and labelled in 326 but nothing read it — the
+// customer-facing photo kinds come from here now (cached a minute): primer always; body (the filler-stage work photos) only
+// when the owners flip the toggle ON.
+let CUST_KINDS326 = { at: 0, v: "progress,finish,task,prep,primer" };
+async function customerKinds326() {
+  if (Date.now() - CUST_KINDS326.at < 60000) return CUST_KINDS326.v;
+  try { const [tg] = await db("feature_toggle?select=enabled&key=eq.body_customer_photos_all"); CUST_KINDS326 = { at: Date.now(), v: tg && tg.enabled ? "progress,finish,task,prep,primer,body" : "progress,finish,task,prep,primer" }; } catch (e) { CUST_KINDS326.at = Date.now(); }
+  return CUST_KINDS326.v;
+}
 async function cabPhotos296(buildId) {
+  const kinds326 = await customerKinds326();
   const [ph, tk] = await Promise.all([
-    db(`build_photo?select=id,kind,task_id,storage_path,thumb_path,created_at,hidden&build_id=eq.${buildId}&hidden=is.false&kind=in.(progress,finish,task,prep,primer)&order=created_at.asc&limit=400`),
+    db(`build_photo?select=id,kind,task_id,storage_path,thumb_path,created_at,hidden&build_id=eq.${buildId}&hidden=is.false&kind=in.(${kinds326})&order=created_at.asc&limit=400`),
     db(`task?select=id,name,display_no&build_id=eq.${buildId}&limit=600`),
   ]);
   const tn = Object.fromEntries(tk.map((t) => [t.id, t]));
@@ -6274,7 +6375,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function panelOpenSet324(){ try { return JSON.parse(localStorage.getItem("admin_open_324") || "[]"); } catch (e) { return []; } }
   function panelRemember324(id, open){ try { var a = panelOpenSet324().filter(function (x) { return x !== id; }); if (open) a.push(id); localStorage.setItem("admin_open_324", JSON.stringify(a)); } catch (e) {} }
   var LAZY324 = {};
-  function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; LAZY324[id] = { loading: true }; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; if (j.opts261) window.OPTS261 = j.opts261; }).catch(function () { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
+  function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; LAZY324[id] = { loading: true }; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; if (j.opts261) window.OPTS261 = j.opts261; }).catch(function () { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
   function panelToggle324(id, open){ var body = document.getElementById("pbody324-" + id), btn = document.getElementById("pbtn324-" + id); if (!body) return; if (open == null) open = body.style.display === "none"; body.style.display = open ? "" : "none"; if (btn) btn.innerHTML = open ? "&#9662; Close" : "&#9656; Open"; panelRemember324(id, open); if (open && !LAZY324[id] && document.getElementById(id).getAttribute("data-lazy")) panelLoad324(id, ""); }
   // Block 324: the Build-steps family links switch the family inside the open box (no page reload); the URL keeps tpl so a reload after Save lands on the same family.
   function stepsFamily324(tpl){ LAZY324.steps = null; var u = new URL(location.href); u.searchParams.set("tpl", tpl); u.hash = "steps"; history.replaceState(null, "", u.toString()); panelLoad324("steps", "&tpl=" + encodeURIComponent(tpl)); }
@@ -6436,13 +6537,23 @@ function bodyBucket326(evs) {
   const h = (m) => { const out = {}; for (const k in m) out[k] = m[k] / 3600000; return out; };
   return { byBuild: h(byBuild), byTask: h(byTask), onNow };
 }
+// Block 328: the punch window for a department's hours engine — the day before the OLDEST cab in the set entered the
+// department (its own column), never more than 180 days; a cab with no date falls back to the 180 days.
+async function punchWindow328(buildIds, col) {
+  const floor = Date.now() - 180 * 86400000;
+  try { const rows = await db(`build?select=${col}&id=in.(${buildIds.join(",")})&limit=400`);
+    if (!rows.length || rows.some((r) => !r[col])) return new Date(floor).toISOString();
+    const oldest = Math.min(...rows.map((r) => new Date(r[col]).getTime())) - 86400000;
+    return new Date(Math.max(floor, oldest)).toISOString(); } catch (e) { return new Date(floor).toISOString(); }
+}
 async function bodyHours326(buildIds) {
   if (!buildIds.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
   const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${BODY_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&kind=eq.clock_in&limit=4000`);
   if (!seed.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
   const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const since = await punchWindow328(buildIds, "left_production_at");   // Block 328 (reviewer): read punches only from the day before the oldest cab entered, not 180 days
   const [evs, people] = await Promise.all([
-    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,body_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${new Date(Date.now() - 180 * 86400000).toISOString()}&order=claimed_at.asc,id.asc`),
+    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,body_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${since}&order=claimed_at.asc,id.asc`),
     db(`employee?select=id,first_name,last_name&id=in.(${emps.join(",")})`),
   ]);
   const out = bodyBucket326(evs);
@@ -6643,8 +6754,9 @@ async function whHours327(buildIds) {
   const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${WH_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&wh_task_id=not.is.null&kind=eq.clock_in&limit=4000`);
   if (!seed.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
   const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const since = await punchWindow328(buildIds, "body_done_at");
   const [evs, people] = await Promise.all([
-    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,wh_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${new Date(Date.now() - 180 * 86400000).toISOString()}&order=claimed_at.asc,id.asc`),
+    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,wh_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${since}&order=claimed_at.asc,id.asc`),
     db(`employee?select=id,first_name,last_name&id=in.(${emps.join(",")})`),
   ]);
   const out = whBucket327(evs);
@@ -6741,14 +6853,6 @@ async function whLineAfter327(empId, me) {
 const canShip327 = (me) => Boolean(me && (me.role === "admin" || me.department === "Warehouse"));
 const whModeChip327 = (st) => st.mode === "pickup" ? `<span class="chip" style="background:#3a2f10;color:#ffd60a">&#128663; PICKUP</span>` : `<span class="chip" style="background:#10233a;color:#5eaeff">&#128230; SHIP</span>`;
 const whChip327 = (st) => st.gone ? `<span class="chip ok">&#10003; ${st.mode === "pickup" ? "Picked up" : "Shipped"}</span>` : st.back ? `<span class="chip" style="background:#3a1520;color:#ff8fa3">Back in Body</span>` : st.task && st.task.state === "complete" ? `<span class="chip" style="background:#173a2b;color:#5edb84">Crated</span>` : st.task && st.task.state === "in_progress" && st.task.on.length ? `<span class="chip" style="background:#10233a;color:#5eaeff">&#9881; In progress</span>` : st.task && st.task.state === "in_progress" ? `<span class="chip" style="background:#2c2c2e;color:#c7c7cc">&#9208; Paused</span>` : `<span class="chip unv">Waiting</span>`;
-// the card styles alone (the warehouse Home has its own button/lane styles — only the cards ride in)
-const whCardCss327 = `<style>
-  .bcard{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:8px 0}
-  .bcard:active{filter:brightness(1.2)}
-  .bcard .o{font-size:1.15rem;font-weight:800}.bcard .m{opacity:.65;font-size:.9rem}.bcard .s{margin-top:4px;font-size:.95rem}
-  .bcard .chip{display:inline-block;border-radius:9px;padding:2px 9px;font-size:.8rem;font-weight:700;white-space:nowrap}.bcard .chip.ok{background:#173a2b;color:#5edb84}.bcard .chip.unv{background:#2c2c2e;color:#9a9aa0}
-  .fold326{opacity:.65;font-size:.9rem;cursor:pointer;margin:14px 0 4px}
-</style>`;
 // the lists — cards only, no buttons (the department pattern)
 function whList327(stats, forHome) {
   const esc = escH;
@@ -6810,13 +6914,15 @@ const whCabPage327 = (emp, st, opts) => {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — Crating · ${esc(b.order_number)}</title>${style}${bodyCss326}</head>
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — ${o.kit ? "Warehouse" : "Crating"} · ${esc(b.order_number)}</title>${style}${bodyCss326}${o.kit || o.owed ? whCss288 : ""}</head>
 <body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/warehouse" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Crating &amp; shipping</a></p>
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="${o.kit || o.owed ? "/home" : "/warehouse"}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; ${o.kit || o.owed ? "Warehouse" : "Crating &amp; shipping"}</a></p>
   ${nav196(emp)}
-  <h2 style="margin:10px 0 2px">Order ${esc(b.order_number)} ${whModeChip327(st)} ${whChip327(st)}</h2>
+  <h2 style="margin:10px 0 2px">Order ${esc(b.order_number)} ${o.kit ? "" : whModeChip327(st) + " " + whChip327(st)}</h2>
   <div style="opacity:.7;margin-bottom:8px">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(st.family || b.part_number || "")}${b.customer_name ? ` · ${esc(b.customer_name)}` : ""} · <a href="/order/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">order page</a></div>
-  <div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
+  ${o.kit ? `<div class="lane" style="border-color:#3d6ea8;padding:12px"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">&#128230; KIT &mdash; ${esc(o.kit.lineName)}</div><div style="opacity:.7;font-size:.9rem;margin-bottom:8px">${o.kit.context}</div>${o.kit.html}<div class="msg err" id="err"></div></div>` : ""}
+  ${o.owed ? `<div class="lane" style="border-color:#ff9f0a"><b>Started short &mdash; parts still owed</b><div style="color:#ff9f0a;font-weight:700;margin:4px 0">Missing: ${esc(o.owed.kit_note || "no note left")}</div><div style="opacity:.6;font-size:.85rem;margin-bottom:8px">When the missing pieces arrive and go out to the cab, tap the button &mdash; that closes the loop.</div>${o.canAct ? `<button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${b.id}'},this))">Parts arrived — kit complete &#10003;</button>` : `<span style="opacity:.6">Clock in to tap Parts arrived.</span>`}<div class="msg err" id="err"></div></div>` : ""}
+  ${o.kit && !b.body_done_at ? "" : `<div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
   ${!o.clockedIn && !st.gone ? `<div class="lane" style="opacity:.8">Clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen first — then the buttons wake up.</div>` : ""}
   ${st.back ? `<div class="lane" style="border-color:#ff8fa3"><b>Sent back to Body</b> ${b.wh_sent_back_at ? esc(phxDate(new Date(b.wh_sent_back_at).getTime())) : ""}${b.wh_sent_back_reason ? ` — ${esc(b.wh_sent_back_reason)}` : ""} · the cab comes back here when Body taps Done in primer again.</div>` : ""}
   <div class="lane"><b>&#9745; Done-right check</b> <span style="opacity:.6;font-size:.9rem">— ${nChecked} of ${rows.length} · tap each one standing at the cab</span>${groups || `<div style="opacity:.6;margin-top:6px">No order lines came through for this cab.</div>`}</div>
@@ -6830,8 +6936,9 @@ const whCabPage327 = (emp, st, opts) => {
       <div id="wback327" style="display:none;margin-top:6px"><input id="wbr327" maxlength="140" placeholder="Why (required) — e.g. primer thin on the left door" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff"><button class="b red" onclick="arm(this,()=>whPost('/api/wh/back',{build_id:'${b.id}',reason:document.getElementById('wbr327').value},this))">Send it back</button></div>
     </div>
   </div>` : ""}
-  ${st.gone ? `<div class="lane"><b>&#10003; ${shipWord}</b> ${esc(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && nm(b.shipped_by) ? ` — ${esc(nm(b.shipped_by))}` : ""}${st.hours ? ` · ${st.hours} h to ${st.mode === "pickup" ? "stage" : "crate"}` : ""}</div>` : ""}
+  ${st.gone ? `<div class="lane"><b>&#10003; ${shipWord}</b> ${esc(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && nm(b.shipped_by) ? ` — ${esc(nm(b.shipped_by))}` : ""}${st.hours ? ` · ${st.hours} h to ${st.mode === "pickup" ? "stage" : "crate"}` : ""}</div>` : ""}`}
   <div id="wmsg327" class="msg err" style="text-align:center;margin-top:8px"></div>
+  ${o.kit || o.owed ? `<script>${whPageScript328(o.ah || { lastReason: "" })}</script>` : ""}
   <script>${netJs}
   function arm(btn, fn){ if (!btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; } btn.dataset.armed = ""; fn(); }
   async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
@@ -11458,53 +11565,7 @@ http.createServer(async (req, res) => {
       if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
         // Block 212 (v201 SPEED): independent reads fired together.
-        const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254, prodW288] = await Promise.all([
-          db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
-          db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
-          db(`line?select=id,name&enabled=is.true&order=id`),
-          db(`build?select=id,order_number,part_number,cab_number,line_id,state,kit_status,kit_note,kit_pull_started_at,queue_pos,queue_pinned,created_at,prep_state,prep_started_at,prep_done_at,prep_done_by&state=in.(upcoming,active,awaiting_inspection,rework)&order=created_at`),   // Block 301: +prep_*
-          // Block 97 (owner-rep): the delivered history — where warehouse's cabs
-          // ARE in production. Read-only; ship-prep/receive-back is a later stage.
-          db(`build?select=order_number,cab_number,line_id,state,kit_delivered_at,kit_delivered_by&kit_delivered_at=not.is.null&state=in.(active,awaiting_inspection,rework,production_complete,complete)&order=kit_delivered_at.desc&limit=15`),
-          db(`employee?select=id&role=in.(manager,admin)`),
-          shopHours(),
-          // Block 254: STILL OWED — every cab that left upcoming with its kit
-          // short and hasn't had the parts confirmed since. Shorts are rare;
-          // this list is naturally tiny (any growth is itself the signal).
-          db(`build?select=id,order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),
-          db(`product?select=part_number,family`).catch(() => []),   // Block 288: plain cab type on each row (display only — a failed read just leaves it blank)
-        ]);
-        const [lastW] = lastWRows;
-        const famW288 = Object.fromEntries((prodW288 || []).map((p) => [p.part_number, p.family]));
-        buildsW.forEach((b) => { b.family = famW288[b.part_number] || ""; });
-        // Block 301: PANEL PREP on the warehouse page — who may prep, which cab I'm prepping right now,
-        // each cab's prep state + hours so far, and the per-family standard (admin-set, 3.0 seeded).
-        const canPrep301 = Boolean(emp.panel_prep) || emp.role === "admin";
-        const [lastFull301] = await db(`clock_event?select=kind,line_id,fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
-        const myPrep301 = lastFull301 && lastFull301.kind === "clock_in" && lastFull301.line_id === PREP_LINE_ID ? { build_id: lastFull301.fix_build_id, since: lastFull301.claimed_at } : null;
-        const prepIds301 = buildsW.filter((b) => b.prep_state && b.prep_state !== "none").map((b) => b.id);
-        const [prepHrs301, stdRows301, whoRows301] = await Promise.all([prepHours301(prepIds301), db(`prep_standard?select=family,hours`).catch(() => []), prepIds301.length ? db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []) : []]);
-        const stdOf301 = Object.fromEntries((stdRows301 || []).map((r) => [r.family, Number(r.hours)]));
-        const whoOf301 = Object.fromEntries((whoRows301 || []).map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`.trim()]));
-        // Block 305 (Daniel: a PAUSE for Eric): a cab is "paused" only when NOBODY with the prep flag is
-        // clocked onto it right now — one tiny read per prepper (Eric today), so the chip stays honest
-        // if a second person ever gets the flag.
-        const lastPreppers305 = await Promise.all((whoRows301 || []).filter((e2) => e2.id !== empId).map((e2) => db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${e2.id}&order=claimed_at.desc&limit=1`).then((r) => r[0]).catch(() => null)));
-        const activeOn305 = new Set(lastPreppers305.filter((ev) => ev && ev.kind === "clock_in" && ev.line_id === PREP_LINE_ID && ev.fix_build_id).map((ev) => ev.fix_build_id)); if (myPrep301 && myPrep301.build_id) activeOn305.add(myPrep301.build_id);
-        buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id), active: activeOn305.has(b.id) }; });
-        const prep301 = { can: canPrep301, mine: myPrep301 };
-        const rowsW = linesW.map((l) => ({ line: l,
-          active: buildsW.find((b) => b.line_id === l.id && (b.state === "active")) || null,
-          awaiting: buildsW.filter((b) => b.line_id === l.id && b.state === "awaiting_inspection"),
-          rework: buildsW.filter((b) => b.line_id === l.id && b.state === "rework"),
-          queue: buildsW.filter((b) => b.line_id === l.id && b.state === "upcoming")
-            .sort((a, b) => (a.queue_pos ?? 9999) - (b.queue_pos ?? 9999) || (a.created_at < b.created_at ? -1 : 1)) }));
-        const lnName97 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));
-        // Block 132 (logic audit L8): a cockpit-started cab is stamped delivered by
-        // the MANAGER, not warehouse — flag those rows so the list says so.
-        const mgrIds132 = new Set(mgrRows132.map((e) => e.id));
-        histW97.forEach((h) => { h.lineName = lnName97[h.line_id] || (h.line_id ? "Line " + h.line_id : ""); h.byMgmt = mgrIds132.has(h.kit_delivered_by); });
-        shortOwedW254.forEach((s) => { s.lineName = lnName97[s.line_id] || (s.line_id ? "Line " + s.line_id : ""); });   // Block 254
+        const { lastW, reasonsW, linesW, buildsW, rowsW, histW97, hrsW212, shortOwedW254, prep301, lastFull301 } = await whQueueData328(empId, emp);   // Block 328: shared with the cab page
         // Block 106 (owner-rep live test): warehouse clocks in from THIS page,
         // but the Q112 after-hours questionnaire only existed on the floor's
         // home screen — an evening warehouse punch-in was flatly denied. Same
@@ -12266,8 +12327,9 @@ http.createServer(async (req, res) => {
       const tasks = await db(`body_task?select=id,step_no,name,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build_id}&order=step_no.asc`);
       const t = tasks.find((x) => x.id === task_id);
       if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
-      const whenS = new Date(p.claimed_at || Date.now()); if (isNaN(whenS.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const whenS0 = new Date(p.claimed_at || Date.now()); if (isNaN(whenS0.getTime())) return json(400, { ok: false, error: "Bad time" });
       const [lastS] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`);
+      const whenS = new Date(Math.max(whenS0.getTime(), lastS ? new Date(lastS.claimed_at).getTime() + 1000 : 0));   // Block 328 (reviewer): a phone clock behind the last punch can never write an inverted pair
       const onThis = Boolean(lastS && lastS.kind === "clock_in" && lastS.line_id === BODY_LINE_ID && lastS.fix_build_id === build_id && lastS.body_task_id === task_id);
       const backLine = async () => bodyLineAfter326(eS, meS);
       if (action === "reopen") {
@@ -12301,6 +12363,12 @@ http.createServer(async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: back, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
       if (action === "done") {
         await db(`body_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ state: "complete", completed_by: eS, completed_at: whenS.toISOString() }) });
+        // Block 328 (reviewer): anyone who JOINED this step is released with it — their clock goes back where they came from
+        try { const onJ = (await bodyHours326([build_id])).onNow[task_id] || [];
+          for (const o of onJ) { if (o.emp === eS) continue; const [mJ] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backJ = await bodyLineAfter326(o.emp, mJ);
+            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: `Body: ${t.name} done (by ${meS.first_name})`, fix_build_id: build_id, body_task_id: task_id, claimed_at: new Date(whenS.getTime() + 2000).toISOString() }) });
+            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backJ, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 3000).toISOString() }) });
+            logEvent("body.helper_released", eS, { build_id, order_number: bS.order_number, task_id, employee_id: o.emp, back_to: backJ }); } } catch (eJ) { console.error("body helper release:", eJ && eJ.message); }
         const hrsD = await bodyHours326([build_id]);
         const stepH = Math.round((hrsD.byTask[task_id] || 0) * 100) / 100;
         logEvent("body.step_done", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name, hours: stepH, back_to: back });
@@ -12403,8 +12471,9 @@ http.createServer(async (req, res) => {
       const [bS, badS] = await whCab327(build_id); if (badS) return badS;
       const [t] = await db(`wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed&id=eq.${task_id}&build_id=eq.${build_id}`);
       if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
-      const whenS = new Date(p.claimed_at || Date.now()); if (isNaN(whenS.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const whenS0 = new Date(p.claimed_at || Date.now()); if (isNaN(whenS0.getTime())) return json(400, { ok: false, error: "Bad time" });
       const [lastS] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`);
+      const whenS = new Date(Math.max(whenS0.getTime(), lastS ? new Date(lastS.claimed_at).getTime() + 1000 : 0));   // Block 328 (reviewer): never an inverted pair
       const onThis = Boolean(lastS && lastS.kind === "clock_in" && lastS.line_id === WH_LINE_ID && lastS.fix_build_id === build_id && lastS.wh_task_id === task_id);
       if (action === "reopen") {
         if (!canShip327(meS)) return json(403, { ok: false, error: "Only the warehouse or an admin can reopen the step" });
@@ -12436,6 +12505,11 @@ http.createServer(async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: back, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
       if (action === "done") {
         await db(`wh_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ state: "complete", completed_by: eS, completed_at: whenS.toISOString() }) });
+        try { const onJ = (await whHours327([build_id])).onNow[task_id] || [];   // Block 328 (reviewer): joined helpers are released with the step
+          for (const o of onJ) { if (o.emp === eS) continue; const [mJ] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backJ = await whLineAfter327(o.emp, mJ);
+            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: WH_LINE_ID, kind: "clock_out_early", reason: `Crating: ${t.name} finished (by ${meS.first_name})`, fix_build_id: build_id, wh_task_id: task_id, claimed_at: new Date(whenS.getTime() + 2000).toISOString() }) });
+            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backJ, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 3000).toISOString() }) });
+            logEvent("wh.helper_released", eS, { build_id, order_number: bS.order_number, task_id, employee_id: o.emp, back_to: backJ }); } } catch (eJ) { console.error("crating helper release:", eJ && eJ.message); }
         const hrsD = await whHours327([build_id]);
         const stepH = Math.round((hrsD.byTask[task_id] || 0) * 100) / 100;
         logEvent("wh.step_done", eS, { build_id, order_number: bS.order_number, task_id, name: t.name, hours: stepH, allowed: Number(t.hours_allowed), back_to: back });
@@ -12879,8 +12953,9 @@ http.createServer(async (req, res) => {
       // Block 296: the admin's photo lane — visible-photo count + this cab's live share links.
       let share296 = null;
       if (isAdmin97r) {
+        const kindsO326 = await customerKinds326();
         const [phC296, lk296, me296, emps296] = await Promise.all([
-          db(`build_photo?select=id&build_id=eq.${bO.id}&hidden=is.false&kind=in.(progress,finish,task,prep,primer)&limit=400`),
+          db(`build_photo?select=id&build_id=eq.${bO.id}&hidden=is.false&kind=in.(${kindsO326})&limit=400`),
           db(`share_link?select=id,token,created_by,created_at,expires_at,views&build_id=eq.${bO.id}&revoked_at=is.null&expires_at=gt.${new Date().toISOString()}&order=created_at.desc`),
           db(`employee?select=mobile&id=eq.${empId86}`),
           db(`employee?select=id,first_name,last_name`),
@@ -12961,10 +13036,11 @@ http.createServer(async (req, res) => {
       // "the individual task photos and notes NEEDS to be in the customer
       // report" — so the under-every-step Add photo/note link now feeds the
       // customer document (admin hides anything that shouldn't ship).
+      const kindsRep326 = await customerKinds326();   // Block 328: the body-photos toggle
       const [prodRep, tasksRep, photosRep, notesRep, milesRep, tnotesRep218, taskNamesRep218] = await Promise.all([
         db(`product?select=family&part_number=eq.${encodeURIComponent(bRep.part_number)}`),
         db(`task?select=name,completed_at&build_id=eq.${bRep.id}&state=eq.complete&is_background=is.false&order=completed_at.asc.nullslast&limit=500`),
-        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(progress,finish,task,prep,primer)&order=created_at.asc&limit=300`),
+        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bRep.id}&kind=in.(${kindsRep326})&order=created_at.asc&limit=300`),
         db(`build_note?select=id,note,note_date,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
         db(`event_log?select=at,event_type&event_type=in.(build.manager_started,build.start,build.production_complete,build.self_passed)&payload->>build_id=eq.${bRep.id}&order=at.asc&limit=30`),
         db(`task_note?select=id,task_id,note,hidden,created_at&build_id=eq.${bRep.id}&order=created_at.asc&limit=300`),
@@ -14195,7 +14271,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/warehouse" || url.pathname.startsWith("/warehouse/")) {
       const empW = await liveSession(req);
       if (!empW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const [meW] = await db(`employee?select=id,first_name,last_name,role,department,must_change_pin&id=eq.${empW}`);
+      const [meW] = await db(`employee?select=id,first_name,last_name,role,department,must_change_pin,panel_prep,lines&id=eq.${empW}`);
       if (!meW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       if (meW.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
       const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empW}&order=claimed_at.desc&limit=1`);
@@ -14210,7 +14286,29 @@ http.createServer(async (req, res) => {
       const [stW] = await whStatus327([bW], true);
       const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false&order=created_at.asc&limit=100`);
       let trackingW = ""; try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); trackingW = ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { trackingW = ""; }
-      return send(200, "text/html; charset=utf-8", whCabPage327(meW, stW, { clockedIn: clockedW, canShip: canShip327(meW), photos: photosW, tracking: trackingW }));
+      // Block 328: the KIT work (verify / short / note / build sooner-later / pull / deliver / panel prep) lives HERE now —
+      // the same whRow288 actions the Home used to carry, with the line context around them; a cab started short carries
+      // the Parts-arrived tap. The queue data is the Home's own assembly (whQueueData328).
+      let kit328 = null, owed328 = null; const canAct328 = clockedW || meW.role === "manager" || meW.role === "admin";
+      if (["upcoming", "active", "awaiting_inspection", "rework"].includes(String(bW.state))) {
+        try {
+          const dW = await whQueueData328(empW, meW);
+          const rW = dW.rowsW.find((r) => r.line.id === bW.line_id) || null; const qW = dW.buildsW.find((x) => x.id === bW.id) || null;
+          if (rW && qW) {
+            if (bW.state === "upcoming") {
+              const iW = rW.queue.findIndex((x) => x.id === bW.id);
+              const pullIdxW = (rW.queue[0] && rW.queue[0].queue_pinned && rW.queue[0].kit_status !== "verified") ? rW.queue.findIndex((z) => z.kit_status === "verified") : 0;
+              const nextW = rW.queue[pullIdxW < 0 ? 0 : pullIdxW]; const busyW = rW.active || rW.awaiting[0] || rW.rework[0];
+              const ctx = `${iW === (pullIdxW < 0 ? 0 : pullIdxW) ? "<b>Next up on this line.</b>" : `#${iW + 1} of ${rW.queue.length} waiting${nextW ? ` — Order ${whEsc288(nextW.order_number)} goes first` : ""}.`} ${busyW ? `Order ${whEsc288(busyW.order_number)} is on the line now (${whEsc288(String(busyW.state).replace(/_/g, " "))}).` : "The line is clear — deliver when the kit is ready."}`;
+              kit328 = { lineName: rW.line.name, context: ctx, html: whRow288(qW, iW, rW, canAct328, dW.canPrep301, clockedW) };
+            } else {
+              kit328 = { lineName: rW.line.name, context: `On the line now — ${whEsc288(String(bW.state).replace(/_/g, " "))}${bW.kit_delivered_at ? `, kit delivered ${whEsc288(String(bW.kit_delivered_at).slice(0, 10))}` : ""}.`, html: whOnLineLane328(qW, dW.canPrep301, clockedW) };
+            }
+          }
+        } catch (eK) { console.error("warehouse kit section:", eK && eK.message); kit328 = null; }
+      }
+      if (bW.kit_status === "short" && bW.state !== "upcoming" && bW.state !== "cancelled") owed328 = { kit_note: bW.kit_note || "" };
+      return send(200, "text/html; charset=utf-8", whCabPage327(meW, stW, { clockedIn: clockedW, canShip: canShip327(meW), photos: photosW, tracking: trackingW, kit: kit328, owed: owed328, canAct: canAct328 }));
     }
     if (url.pathname === "/reconcile") {
       const empId = await liveSession(req);
