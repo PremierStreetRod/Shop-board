@@ -2598,10 +2598,10 @@ const prepStrip301 = (b, canPrep, clockedIn) => {
       <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">&#9208; Pause &mdash; back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
   return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "&#9654; Resume prepping" : "Prep panels &mdash; start"}</button></div>`;
 };
-const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }, curLine326 = null) => `<!doctype html>
+const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { now: false, approvers: [], reasons: [], open: false }, hint239 = "", shortOwed254 = [], prep301 = { can: false, mine: null }, curLine326 = null, wh327 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Warehouse</title>${style}${wh327 ? whCardCss327 : ""}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
   .lane h3{margin:0 0 10px;font-size:1.15rem}
@@ -2685,9 +2685,10 @@ const warehousePage = (emp, clockedIn, reasons, lines, rows, hist = [], ah = { n
       <div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${s.id}'},this))">Parts arrived — kit complete &#10003;</button></div>
     </div>`).join("")}
   </div>` : ""}
+  ${wh327 ? `<div class="lane" style="border-color:#5eaeff">${whList327(wh327, false)}<div style="opacity:.5;font-size:.8rem;margin-top:6px">Tap a cab for its done-right checklist, the crating clock and the Shipped / Picked up tap. Pickup or ship comes from the Coyote order.</div></div>` : ""}
   <div class="lane">
     <h3>Delivered — now in production</h3>
-    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come BACK to warehouse for ship-prep in a later stage.</div>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">Read-only. These come back to you above, the moment Body taps Done in primer.</div>
     ${(hist || []).length ? (hist || []).map((h) => `<div class="qrow" style="opacity:.85"><b>ORDER ${h.order_number}</b>${h.cab_number ? ` · Cab #${h.cab_number}` : ""} · ${h.lineName || ""} · ${String(h.state || "").replace(/_/g, " ")} · delivered ${String(h.kit_delivered_at || "").slice(0, 10)}${h.byMgmt ? ` · <span style="color:#ffd60a">started by management</span>` : ""}</div>`).join("") : `<div style="opacity:.5">Nothing delivered yet.</div>`}
   </div>
   <div class="msg err" id="err"></div>
@@ -4013,7 +4014,7 @@ const bodyLane326 = (st, isAdmin) => { if (!st || (!st.total && !st.b.body_done_
     ${b.body_moved_to_build_at ? `<div style="padding:6px 0;border-top:1px solid var(--line)">Moved to the Build department ${escH(phxDate(new Date(b.body_moved_to_build_at).getTime()))}${b.body_build_reason ? ` — ${escH(b.body_build_reason)}` : ""}</div>` : ""}
     <div style="margin-top:6px"><a href="/body/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">open the Body page</a>${isAdmin ? ` · <span style="opacity:.6">steps reopen from the Body page; hours are punches (Time corrections under the Manager console)</span>` : ""}</div>
   </div>`; };
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = [], body326 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = [], body326 = null, wh327 = null) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
   const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
@@ -4053,6 +4054,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <div class="msg err" id="mvmsg318" style="margin-top:6px"></div>
   </div>` : ""}
   ${body326 ? bodyLane326(body326, isAdmin97) : ""}
+  ${wh327 ? whLane327(wh327, isAdmin97) : ""}
   ${share296 ? shareLane296(b, share296.photoCount, share296.links, share296.myMobile) : ""}
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
@@ -4251,7 +4253,7 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true, body326 = false)
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/body", "Body"], ["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/body", "Body"], ["/warehouse", "Crating & shipping"], ["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/changes", "Order changes"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];   // Block 233 (Ross/Daniel): "Changes" (the Coyote push-to-push diff) is PLUMBING — off the top nav row, into the Tools drawer where the other pipeline pages live
   const tools = tools95 === "time"
     ? [["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed · Block 290: + the salaried hours log (read-only, so Kailey can answer Rob)
@@ -4303,8 +4305,9 @@ function nav196(emp, showReports = false) {
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
     <a href="/body" style="color:#8e8e93;margin-right:16px">Body</a>
+    <a href="/warehouse" style="color:#8e8e93;margin-right:16px">Crating</a>
     <a href="/logout" style="color:#8e8e93">Sign out</a>
-  </div>`;   // Block 326 (Daniel 10/25 16:17): warehouse + production help in Body — the door is on everyone's nav; a Start tap on the cab page moves their clock
+  </div>`;   // Block 326 (Daniel 10/25 16:17): warehouse + production help in Body — the door is on everyone's nav; a Start tap on the cab page moves their clock · Block 327: the Crating door the same way
 };
 
 // ⚙ MY SETTINGS (block 117, owner-approved spec + owner-rep add: "each of
@@ -5753,6 +5756,10 @@ const bodyStdPanelHtml326 = (rows = []) => `  <p style="opacity:.5;font-size:.85
   ${rows.length ? `<table><tr><th>Cab family</th>${BODY_STEPS326.map((s) => `<th>${s.no}. ${s.name}</th>`).join("")}<th></th></tr>
   ${rows.map((r) => `<tr><td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>${r.steps.map((st) => `<td><input class="num" id="bh-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}-${st.no}" value="${st.hours}" inputmode="decimal" step="0.25" style="width:4.5em"> ${st.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${st.median} &middot;${st.n}</span>` : `<span style="opacity:.4">${st.n ? st.n + " so far" : "—"}</span>`}</td>`).join("")}
     <td><button class="b" onclick="saveBodyStd326('${String(r.family).replace(/'/g, "\\'")}','${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td></tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}`;
+const whStdPanelHtml327 = (rows = []) => `  <p style="opacity:.5;font-size:.85rem">After Body: <b>Crating</b> for a cab we ship (Truck Freight in Coyote) and <b>Stage for pickup</b> for a cab the customer collects (Will Call). One number each per cab family; 2 h and 1 h to start. <b>Median actual</b> = the middle of the last 12 finished steps, from Warehouse punches (gray until 2). Changing a number applies to cabs that come out of Body from now on.</p>
+  ${rows.length ? `<table><tr><th>Cab family</th><th>Crating</th><th>Stage for pickup</th><th></th></tr>
+  ${rows.map((r) => `<tr><td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>${["crate", "stage"].map((k) => { const st = r[k]; return `<td><input class="num" id="wh-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}-${k}" value="${st.hours}" inputmode="decimal" step="0.25" style="width:4.5em"> ${st.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${st.median} &middot;${st.n}</span>` : `<span style="opacity:.4">${st.n ? st.n + " so far" : "—"}</span>`}</td>`; }).join("")}
+    <td><button class="b" onclick="saveWhStd327('${String(r.family).replace(/'/g, "\\'")}','${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td></tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}`;
 const prepPanelHtml324 = (prep301 = []) => `  <p style="opacity:.5;font-size:.85rem">Laser-stripping the weld areas, done by whoever has <b>Panel prep</b> checked under People (Eric). One number per cab family; 3.0 h to start. <b>Median actual</b> = the middle of the last 12 cabs marked ready (gray until 2 cabs). Punches set the actuals — nothing is typed.</p>
   ${prep301.length ? `<table><tr><th>Cab family</th><th>Hours allowed</th><th>Median actual</th><th>Last cab</th><th></th></tr>
   ${prep301.map((r) => `<tr>
@@ -5961,6 +5968,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <div class="panel" id="prep301" data-lazy="prep"><h3>Panel prep — hours allowed per cab</h3><!-- Block 324: fetched on open — /api/admin/panel?which=prep --></div>
 
   <div class="panel" id="body326" data-lazy="body"><h3>Body steps — hours allowed per cab family</h3><!-- Block 326: fetched on open — /api/admin/panel?which=body --></div>
+
+  <div class="panel" id="wh327" data-lazy="wh"><h3>Warehouse finish-out — hours allowed to crate / stage per cab family</h3><!-- Block 327: fetched on open — /api/admin/panel?which=wh --></div>
 
   <div class="panel" id="products"><h3>Product settings — completion photos</h3>
   <p style="opacity:.5;font-size:.85rem">How many completion photos a builder must attach before finishing a cab of each product. Default is 1. Set 0 to exempt a product. This is a hard gate — the phone's Finish button won't send without them.</p>
@@ -6227,6 +6236,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
   function saveBodyStd326(family, key, btn){ post("/api/admin/body-standard", { family: family, hours: [1, 2, 3].map(function (n) { return Number(v("bh-" + key + "-" + n)); }) }, btn); }   // Block 326
+  function saveWhStd327(family, key, btn){ post("/api/admin/wh-standard", { family: family, crate: Number(v("wh-" + key + "-crate")), stage: Number(v("wh-" + key + "-stage")) }, btn); }   // Block 327
   // Q91: shop calendar + day-start nudge times.
   function saveNudge(btn){ post("/api/admin/nudge-times", { mon: v("ng-mon"), tue: v("ng-tue"), wed: v("ng-wed"), thu: v("ng-thu"), fri: v("ng-fri") }, btn); }
   function saveCalendar(isOpen, btn){ post("/api/admin/calendar", { action: "set", cal_date: v("cal-date"), is_open: isOpen, reason: v("cal-reason") }, btn); }
@@ -6256,6 +6266,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     picklists: "The choices people pick from around the app — clock-out, rework, after-hours, down-for-today and time-off reasons. Rename, reorder, add, retire.",
     prep301: "Hours allowed for laser-stripping the panels of each cab family, with the running median from Eric's punches.",
     body326: "The three Body steps (Metal & filler · Prep & final sanding · Blowout, clean, mask & prime): hours allowed per cab family, with the median actual beside each once two cabs finish. Nothing is typed on the floor — Body hours are punches.",
+    wh327: "The warehouse finish-out after Body: hours allowed to crate a cab we ship, and to stage a cab the customer picks up (Will Call in Coyote), per cab family, with the median actual beside each. Hours are Warehouse punches on the crating step — nothing is typed.",
     products: "How many completion photos a builder must attach per product before a cab can go to inspection.",
     previews: "One-time tool: build small previews for photos taken before previews existed.",
     calendar: "Holidays and shutdown days, weekends you're working, and the day-start nudge times."
@@ -6421,7 +6432,7 @@ function bodyBucket326(evs) {
     if (e.kind === "clock_in") { close(e.employee_id, t); open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id, task: e.body_task_id }; }
     else close(e.employee_id, t);
   }
-  for (const emp in open) { const o = open[emp]; if (o && o.line === BODY_LINE_ID && o.fix) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (now - o.start); if (o.task) { byTask[o.task] = (byTask[o.task] || 0) + (now - o.start); onNow[o.task] = (onNow[o.task] || []).concat([{ emp, since: new Date(o.start).toISOString() }]); } } }
+  for (const emp in open) { const o = open[emp]; if (o && o.line === BODY_LINE_ID && o.fix) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (now - o.start); if (o.task) { byTask[o.task] = (byTask[o.task] || 0) + (now - o.start); onNow[o.task] = (onNow[o.task] || []).concat([{ emp, since: new Date(o.start).toISOString(), build: o.fix }]); } } }
   const h = (m) => { const out = {}; for (const k in m) out[k] = m[k] / 3600000; return out; };
   return { byBuild: h(byBuild), byTask: h(byTask), onNow };
 }
@@ -6600,6 +6611,252 @@ const bodyCabPage326 = (emp, st, opts) => {
   </script>
 </div></body></html>`;
 };
+// ===== Block 327 — WAREHOUSE FINISH-OUT (Daniel 10/25 19:41: "warehouse's job here is to verify everything is done
+// correctly, crate it up, and make sure its shipped off correctly. so the time you will be calculating is the time
+// it takes to crate it up… a start, pause, finish for crating. and a button to check off when it has either been
+// picked up or shipped off."). Playbooks/62_Warehouse_Finish_Plan.md. The Body pattern, second department: a cab
+// arrives when Body taps Done in primer (one wh_task: Crating, or Stage for pickup when Coyote says Will Call);
+// the done-right checklist = every sold line (cab lines + the kit panels Block 322 set aside for crating) + three
+// fixed checks, each a tap, recorded in option_check gate=ship (migration 0058 reserved it); hours are punches on
+// the Warehouse line (9) stamped cab + step (clock_event.fix_build_id + wh_task_id); ONE button — ✓ Shipped or
+// ✓ Picked up — sets build.shipped_at (Order Tracking reads Shipped). Money, freight and paperwork stay in Coyote.
+const WH_LINE_ID = 9;
+const WH_KIND327 = { ship: { kind: "crate", name: "Crating", dflt: 2 }, pickup: { kind: "stage", name: "Stage for pickup", dflt: 1 } };
+const WH_FIXED327 = ["Primer coverage — whole cab, nothing missed", "Hardware & parts bag with the cab", "No damage — cab, glass, panels"];
+const WH_CHECK_PREFIX327 = "WH: ";
+// pickup vs ship, read from the latest Coyote push (order.ship_method): "Will Call" = the customer picks it up; anything else we crate & ship
+const shipModeOf327 = (sm) => /will\s*call|pick\s*up|pickup/i.test(String(sm || "")) ? "pickup" : "ship";
+function whBucket327(evs) {
+  const open = {}, byBuild = {}, byTask = {}, onNow = {}, now = Date.now();
+  const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === WH_LINE_ID && o.fix && o.task) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (t - o.start); byTask[o.task] = (byTask[o.task] || 0) + (t - o.start); } open[emp] = null; } };
+  for (const e of evs) {
+    const t = new Date(e.claimed_at).getTime();
+    if (e.kind === "clock_in") { close(e.employee_id, t); open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id, task: e.wh_task_id }; }
+    else close(e.employee_id, t);
+  }
+  for (const emp in open) { const o = open[emp]; if (o && o.line === WH_LINE_ID && o.fix && o.task) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (now - o.start); byTask[o.task] = (byTask[o.task] || 0) + (now - o.start); onNow[o.task] = (onNow[o.task] || []).concat([{ emp, since: new Date(o.start).toISOString(), build: o.fix }]); } }
+  const h = (m) => { const out = {}; for (const k in m) out[k] = m[k] / 3600000; return out; };
+  return { byBuild: h(byBuild), byTask: h(byTask), onNow };
+}
+async function whHours327(buildIds) {
+  if (!buildIds.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
+  const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${WH_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&wh_task_id=not.is.null&kind=eq.clock_in&limit=4000`);
+  if (!seed.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
+  const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const [evs, people] = await Promise.all([
+    dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,wh_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${new Date(Date.now() - 180 * 86400000).toISOString()}&order=claimed_at.asc,id.asc`),
+    db(`employee?select=id,first_name,last_name&id=in.(${emps.join(",")})`),
+  ]);
+  const out = whBucket327(evs);
+  out.names = Object.fromEntries(people.map((p) => [p.id, `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim()]));
+  return out;
+}
+// the latest ship_method per order root (same read as coyoteStatusFor323, one more column)
+async function shipMethodFor327(roots) {
+  const want = [...new Set(roots.filter(Boolean).map(String))];
+  if (!want.length) return {};
+  const rows = await db(`coyote_intake?select=order_number,received_at,sm:payload->order->>ship_method&order_number=in.(${want.map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
+  const out = {};
+  for (const r of rows) if (!(r.order_number in out)) out[r.order_number] = String(r.sm || "").trim();
+  return out;
+}
+// The one step for a cab, created when Body signs it out (Done in primer). Idempotent — a cab sent back to Body and
+// signed out again keeps the step (and its hours). Hours allowed freeze from wh_standard by family.
+async function ensureWhTask327(b, actorId) {
+  const have = await db(`wh_task?select=id&build_id=eq.${b.id}&limit=1`);
+  if (have.length) return false;
+  const [prod] = b.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(b.part_number)}`) : [null];
+  const fam = prod && prod.family ? prod.family : "";
+  const sm = (await shipMethodFor327([rootOf323(b)]))[rootOf323(b)] || "";
+  const mode = shipModeOf327(sm); const k = WH_KIND327[mode];
+  const std = fam ? await db(`wh_standard?select=kind,hours&family=eq.${encodeURIComponent(fam)}&kind=eq.${k.kind}`) : [];
+  await db("wh_task", { method: "POST", body: JSON.stringify([{ build_id: b.id, kind: k.kind, name: k.name, state: "not_started", hours_allowed: std[0] ? Number(std[0].hours) : k.dflt }]) });
+  logEvent("wh.entered", actorId || null, { build_id: b.id, order_number: b.order_number, family: fam, mode, ship_method: sm || null, step: k.name });
+  return true;
+}
+// the done-right checklist: every sold line (cab lines + the kit panels) + the fixed checks; evidence = the inspection
+// confirmation (option_check gate=body: who / when); checks = option_check gate=ship rows
+async function whChecklist327(b) {
+  let keep = [], kit = [];
+  try { const L = await optionList255(b); keep = (L || []).map((x) => typeof x === "string" ? x : (x && (x.text || x.label)) || "").filter(Boolean); kit = (L && L.kit322) || []; } catch (e) { keep = []; kit = []; }
+  const checks = await db(`option_check?select=gate,item_text,checked_by,checked_at,voided&build_id=eq.${b.id}&order=checked_at.asc`).catch(() => []);
+  const bodyOf = {}; for (const c of checks) if (c.gate === "body" && !c.voided) bodyOf[c.item_text] = c;
+  const shipOf = {}; for (const c of checks) if (c.gate === "ship" && !c.voided) shipOf[c.item_text] = c;
+  const rows = [];
+  for (const l of keep) rows.push({ key: l, label: l, group: "cab", evidence: bodyOf[l] ? { by: bodyOf[l].checked_by, at: bodyOf[l].checked_at } : null, check: shipOf[l] || null });
+  for (const l of kit) rows.push({ key: l, label: l, group: "kit", evidence: null, kit: true, check: shipOf[l] || null });
+  for (const f of WH_FIXED327) rows.push({ key: WH_CHECK_PREFIX327 + f, label: f, group: "fixed", evidence: null, check: shipOf[WH_CHECK_PREFIX327 + f] || null });
+  return rows;
+}
+// Everything one Warehouse cab card / page needs.
+async function whStatus327(builds, withChecks = false) {
+  const ids = builds.map((b) => b.id);
+  if (!ids.length) return [];
+  const [tasks, hrs, prods, sms] = await Promise.all([
+    dbAll252(`wh_task?select=id,build_id,kind,name,hours_allowed,state,started_by,started_at,completed_by,completed_at&build_id=in.(${ids.join(",")})&order=created_at.asc`),
+    whHours327(ids),
+    db("product?select=part_number,family"),
+    shipMethodFor327(builds.map(rootOf323)),
+  ]);
+  const famOf = Object.fromEntries(prods.map((p) => [String(p.part_number).toUpperCase(), p.family]));
+  const checksAll = withChecks ? await Promise.all(builds.map((b) => whChecklist327(b))) : null;
+  const who = new Set(); for (const t of tasks) { if (t.started_by) who.add(t.started_by); if (t.completed_by) who.add(t.completed_by); } for (const b of builds) { if (b.shipped_by) who.add(b.shipped_by); if (b.body_done_by) who.add(b.body_done_by); }
+  if (checksAll) for (const rows of checksAll) for (const r of rows) { if (r.check && r.check.checked_by) who.add(r.check.checked_by); if (r.evidence && r.evidence.by) who.add(r.evidence.by); }
+  const extra = [...who].filter((id) => !hrs.names[id]);
+  if (extra.length) for (const p of await db(`employee?select=id,first_name,last_name&id=in.(${extra.join(",")})`)) hrs.names[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
+  const shipCounts = withChecks ? null : Object.fromEntries((await db(`option_check?select=build_id,item_text&gate=eq.ship&voided=is.false&build_id=in.(${ids.join(",")})&limit=4000`).catch(() => [])).reduce((m, c) => { m.set(c.build_id, (m.get(c.build_id) || 0) + 1); return m; }, new Map()));
+  return builds.map((b, i) => {
+    const t0 = tasks.find((t) => t.build_id === b.id) || null;
+    const task = t0 ? { ...t0, hours: Math.round((hrs.byTask[t0.id] || 0) * 10) / 10, on: (hrs.onNow[t0.id] || []).map((o) => ({ id: o.emp, name: hrs.names[o.emp] || "someone", since: o.since })) } : null;
+    const sm = sms[rootOf323(b)] || ""; const mode = b.ship_mode || (b.shipped_at ? "ship" : shipModeOf327(sm));
+    const checks = checksAll ? checksAll[i] : null;
+    const checked = checks ? checks.filter((r) => r.check).length : (shipCounts[b.id] || 0);
+    const total = checks ? checks.length : null;
+    const hours = Math.round((hrs.byBuild[b.id] || 0) * 10) / 10;
+    const gone = Boolean(b.shipped_at); const back = Boolean(b.wh_sent_back_at && !b.body_done_at);
+    const status = gone ? `${mode === "pickup" ? "picked up" : "shipped"} ${phxDate(new Date(b.shipped_at).getTime())}` : back ? "sent back to Body" : !task ? "waiting — no step yet"
+      : task.state === "complete" ? `${task.name.toLowerCase()} finished — ${task.hours} h · ready for the ${mode === "pickup" ? "pickup" : "ship"} tap` : task.state === "in_progress" ? `${task.name.toLowerCase()} — ${task.hours} of ${Number(task.hours_allowed)} h${task.on.length ? ` · ${task.on.map((o) => o.name).join(" + ")} on it` : " · paused"}` : `not started · ${checked}${total != null ? " of " + total : ""} checked`;
+    return { b, family: famOf[String(b.part_number || "").toUpperCase()] || "", task, mode, shipMethod: sm, hours, allowed: task ? Number(task.hours_allowed) : 0, checks, checked, total, gone, back, status, names: hrs.names, onNames: task ? [...new Set(task.on.map((o) => o.name))] : [] };
+  });
+}
+// the finish-out list: every cab out of Body and not gone (oldest first), the cabs sent back (so the list says so), and the last 15 gone
+async function whFinishList327() {
+  const cols = "id,order_number,cab_number,part_number,coyote_root,customer_name,state,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_sent_back_reason";
+  const [here, gone] = await Promise.all([
+    dbAll252(`build?select=${cols}&state=in.(production_complete,complete)&body_moved_to_build_at=is.null&shipped_at=is.null&or=(body_done_at.not.is.null,wh_sent_back_at.not.is.null)&order=body_done_at.asc.nullslast,left_production_at.asc.nullslast,id.asc`),
+    db(`build?select=${cols}&shipped_at=not.is.null&order=shipped_at.desc&limit=15`),
+  ]);
+  const seen = new Set(); const all = [];
+  for (const b of here.concat(gone)) { if (seen.has(b.id)) continue; seen.add(b.id); if (b.stage === "shipped" && !b.shipped_at) continue; all.push(b); }
+  return whStatus327(all);
+}
+// the clock stint helpers — a pause / finish puts the person back where they came from
+async function whLineAfter327(empId, me) {
+  if (me && me.department === "Warehouse") return WH_LINE_ID;
+  const rows = await db(`clock_event?select=line_id&voided=is.false&employee_id=eq.${empId}&kind=eq.clock_in&line_id=neq.${WH_LINE_ID}&order=claimed_at.desc&limit=1`);
+  const l = rows[0] ? Number(rows[0].line_id) : null;
+  if (l && l !== 14) return l;
+  return me && me.department === "Body Shop" ? BODY_LINE_ID : me && me.department === "Build" ? 12 : SHOP_LINE_ID;
+}
+const canShip327 = (me) => Boolean(me && (me.role === "admin" || me.department === "Warehouse"));
+const whModeChip327 = (st) => st.mode === "pickup" ? `<span class="chip" style="background:#3a2f10;color:#ffd60a">&#128663; PICKUP</span>` : `<span class="chip" style="background:#10233a;color:#5eaeff">&#128230; SHIP</span>`;
+const whChip327 = (st) => st.gone ? `<span class="chip ok">&#10003; ${st.mode === "pickup" ? "Picked up" : "Shipped"}</span>` : st.back ? `<span class="chip" style="background:#3a1520;color:#ff8fa3">Back in Body</span>` : st.task && st.task.state === "complete" ? `<span class="chip" style="background:#173a2b;color:#5edb84">Crated</span>` : st.task && st.task.state === "in_progress" && st.task.on.length ? `<span class="chip" style="background:#10233a;color:#5eaeff">&#9881; In progress</span>` : st.task && st.task.state === "in_progress" ? `<span class="chip" style="background:#2c2c2e;color:#c7c7cc">&#9208; Paused</span>` : `<span class="chip unv">Waiting</span>`;
+// the card styles alone (the warehouse Home has its own button/lane styles — only the cards ride in)
+const whCardCss327 = `<style>
+  .bcard{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:8px 0}
+  .bcard:active{filter:brightness(1.2)}
+  .bcard .o{font-size:1.15rem;font-weight:800}.bcard .m{opacity:.65;font-size:.9rem}.bcard .s{margin-top:4px;font-size:.95rem}
+  .bcard .chip{display:inline-block;border-radius:9px;padding:2px 9px;font-size:.8rem;font-weight:700;white-space:nowrap}.bcard .chip.ok{background:#173a2b;color:#5edb84}.bcard .chip.unv{background:#2c2c2e;color:#9a9aa0}
+  .fold326{opacity:.65;font-size:.9rem;cursor:pointer;margin:14px 0 4px}
+</style>`;
+// the lists — cards only, no buttons (the department pattern)
+function whList327(stats, forHome) {
+  const esc = escH;
+  const inWh = stats.filter((s) => !s.gone);   // a cab sent back to Body stays on the list with its chip — Eric sees where it went
+  const gone = stats.filter((s) => s.gone);
+  const card = (s) => `<a class="bcard" href="/warehouse/${encodeURIComponent(s.b.order_number)}">
+    <div><span class="o">Order ${esc(s.b.order_number)}</span> <span class="m">${s.b.cab_number ? `Cab #${esc(s.b.cab_number)} · ` : ""}${esc(s.family || s.b.part_number || "")}${s.b.customer_name ? ` · ${esc(s.b.customer_name)}` : ""}</span> <span style="float:right">${whModeChip327(s)} ${whChip327(s)}</span></div>
+    <div class="s">${esc(s.status)}${s.b.body_done_at && !s.gone ? ` <span class="m">· in from Body ${esc(phxDate(new Date(s.b.body_done_at).getTime()))}</span>` : ""}</div>
+  </a>`;
+  const fold = (id, title, list) => list.length ? `<div class="fold326" onclick="var b=document.getElementById('${id}');b.style.display=b.style.display==='none'?'':'none'">&#9656; ${title} (${list.length})</div><div id="${id}" style="display:none">${list.map(card).join("")}</div>` : "";
+  return `<div id="whlist327">
+    <h2 style="margin:${forHome ? "18px" : "6px"} 0 6px">&#128230; In from Body — to finish out <span style="opacity:.6;font-size:.6em;font-weight:400">— ${inWh.length} cab${inWh.length === 1 ? "" : "s"}</span></h2>
+    ${inWh.length ? inWh.map(card).join("") : `<div class="lane" style="opacity:.6">Nothing waiting — the next cab appears here the moment Body taps Done in primer.</div>`}
+    ${fold("whgone327", "Gone — shipped or picked up", gone)}
+  </div>`;
+}
+const whHomePage327 = (emp, stats, clockedIn) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Crating &amp; shipping</title>${style}${bodyCss326}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(emp)}
+  ${clockedIn === false ? `<div class="lane" style="opacity:.75">You're not on the clock — you can read the list; clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen before you tap a step.</div>` : ""}
+  ${whList327(stats, false)}
+  <p style="opacity:.5;font-size:.8rem;text-align:center">Oldest first. Tap a cab for its checklist, the crating clock and the ship tap. Hours come from Warehouse punches — nothing is typed.</p>
+</div></body></html>`;
+// The cab page — the checklist, the one timed step, the one button.
+const whCabPage327 = (emp, st, opts) => {
+  const esc = escH; const b = st.b; const o = opts || {}; const t = st.task;
+  const can = o.clockedIn && !st.gone && !st.back;
+  const mineOn = t && t.on.some((x) => x.id === emp.id);
+  const nm = (id) => (id && st.names[id]) || "";
+  const rows = st.checks || [];
+  const nChecked = rows.filter((r) => r.check).length;
+  const allChecked = rows.length > 0 && nChecked === rows.length;
+  const groupTitle = { cab: "Sold with the cab — built in production, confirmed at inspection", kit: "Loose kit panels — in the crate, not on the cab", fixed: "Before it leaves" };
+  const checkRow = (r) => {
+    const ev = r.evidence ? `confirmed at inspection${nm(r.evidence.by) ? " by " + esc(nm(r.evidence.by)) : ""}${r.evidence.at ? " " + esc(phxDate(new Date(r.evidence.at).getTime())) : ""}` : r.kit ? "a kit panel — goes in the crate with the cab" : r.group === "fixed" ? "" : `<span style="color:#ffd60a">no record of this being built — look hard</span>`;
+    const done = r.check ? `<span style="color:#5edb84">&#10003; ${esc(nm(r.check.checked_by) || "checked")}${r.check.checked_at ? " " + esc(phxDate(new Date(r.check.checked_at).getTime())) : ""}</span>` : "";
+    const keyA = esc(r.key).replace(/"/g, "&quot;");
+    const btn = !can ? "" : r.check ? `<button class="b mv" data-key="${keyA}" onclick="whCheck327('${b.id}',this,false)">undo</button>` : `<button class="b grn" data-key="${keyA}" onclick="whCheck327('${b.id}',this,true)">&#10003; On the cab</button>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)"><div><div style="font-weight:${r.check ? 500 : 700}">${esc(r.label)}</div><div style="opacity:.65;font-size:.85rem">${ev}${done ? (ev ? " · " : "") + done : ""}</div></div><div style="flex:0 0 auto">${btn}</div></div>`;
+  };
+  const groups = ["cab", "kit", "fixed"].map((g) => { const rs = rows.filter((r) => r.group === g); return rs.length ? `<div style="margin-top:10px;opacity:.6;font-size:.8rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase">${groupTitle[g]}</div>${rs.map(checkRow).join("")}` : ""; }).join("");
+  const stepLabel = !t ? "" : t.state === "complete" ? `&#10003; finished${t.completed_by ? ` — ${esc(nm(t.completed_by))}` : ""}${t.completed_at ? ` ${esc(phxDate(new Date(t.completed_at).getTime()))}` : ""}` : t.state === "in_progress" && t.on.length ? `&#9881; ${esc(t.on.map((x) => x.name).join(" + "))} on it` : t.state === "in_progress" ? "&#9208; paused" : "ready to start";
+  const stepBtns = !t || !can ? "" : t.state === "complete"
+    ? (o.canShip ? `<button class="b mv" onclick="arm(this,()=>whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'reopen'},this))">Reopen</button>` : "")
+    : mineOn
+      ? `<button class="b grn big" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Finish</button> <button class="b" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('wpf327').click()">&#128247; Photo</button><input type="file" id="wpf327" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpm327')"><span id="wpm327" class="msg"></span>`
+      : `<button class="b grn" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : "Resume") : "&#9654; Start"}</button>`;
+  const stepDone = t && t.state === "complete";
+  const shipWord = st.mode === "pickup" ? "Picked up" : "Shipped";
+  const missing = [];
+  if (!allChecked) missing.push(`${rows.length - nChecked} item${rows.length - nChecked === 1 ? "" : "s"} not checked`);
+  if (!stepDone) missing.push(t ? `${t.name.toLowerCase()} not finished` : "no step on this cab");
+  const photos = (o.photos || []);
+  const pic = (p) => `<a href="/photo-view/${p.id}" target="_blank"><img src="/pthumb/${p.id}" loading="lazy" style="height:72px;border-radius:8px;margin:2px"></a>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Crating · ${esc(b.order_number)}</title>${style}${bodyCss326}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/warehouse" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Crating &amp; shipping</a></p>
+  ${nav196(emp)}
+  <h2 style="margin:10px 0 2px">Order ${esc(b.order_number)} ${whModeChip327(st)} ${whChip327(st)}</h2>
+  <div style="opacity:.7;margin-bottom:8px">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(st.family || b.part_number || "")}${b.customer_name ? ` · ${esc(b.customer_name)}` : ""} · <a href="/order/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">order page</a></div>
+  <div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
+  ${!o.clockedIn && !st.gone ? `<div class="lane" style="opacity:.8">Clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen first — then the buttons wake up.</div>` : ""}
+  ${st.back ? `<div class="lane" style="border-color:#ff8fa3"><b>Sent back to Body</b> ${b.wh_sent_back_at ? esc(phxDate(new Date(b.wh_sent_back_at).getTime())) : ""}${b.wh_sent_back_reason ? ` — ${esc(b.wh_sent_back_reason)}` : ""} · the cab comes back here when Body taps Done in primer again.</div>` : ""}
+  <div class="lane"><b>&#9745; Done-right check</b> <span style="opacity:.6;font-size:.9rem">— ${nChecked} of ${rows.length} · tap each one standing at the cab</span>${groups || `<div style="opacity:.6;margin-top:6px">No order lines came through for this cab.</div>`}</div>
+  ${t ? `<div class="bstep${t.state === "in_progress" && t.on.length ? " on" : t.state === "complete" ? " done" : ""}"><h3>&#9201; ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${stepLabel}</div><div>${stepBtns}</div></div>` : `<div class="lane" style="opacity:.6">No crating step on this cab yet.</div>`}
+  <div class="lane"><b>Photos</b> <span style="opacity:.6;font-size:.9rem">— the crated cab, optional (${photos.length})</span>${can ? ` <button class="b mv" onclick="document.getElementById('wpfC').click()">&#128247; Add photo</button><input type="file" id="wpfC" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpmC')"><span id="wpmC" class="msg"></span>` : ""}<div>${photos.map(pic).join("")}</div></div>
+  ${o.canShip && !st.gone && !st.back ? `<div class="lane" style="border-color:${allChecked && stepDone ? "#30d158" : "var(--line)"}">
+    <button class="b grn big" ${allChecked && stepDone ? "" : "disabled"} onclick="arm(this,()=>whPost('/api/wh/ship',{build_id:'${b.id}'},this))">&#10003; ${shipWord} — it has left the building</button>
+    <div style="opacity:.6;font-size:.85rem;margin-top:4px">${allChecked && stepDone ? `Everything is checked and ${t ? t.name.toLowerCase() : "the step"} is finished. This marks the cab ${shipWord.toLowerCase()} on Order Tracking.` : `Not yet: ${missing.join(" · ")}.`}</div>
+    <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+      <button class="b mv" onclick="var d=document.getElementById('wback327');d.style.display=d.style.display==='none'?'':'none'">Send back to Body…</button>
+      <div id="wback327" style="display:none;margin-top:6px"><input id="wbr327" maxlength="140" placeholder="Why (required) — e.g. primer thin on the left door" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff"><button class="b red" onclick="arm(this,()=>whPost('/api/wh/back',{build_id:'${b.id}',reason:document.getElementById('wbr327').value},this))">Send it back</button></div>
+    </div>
+  </div>` : ""}
+  ${st.gone ? `<div class="lane"><b>&#10003; ${shipWord}</b> ${esc(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && nm(b.shipped_by) ? ` — ${esc(nm(b.shipped_by))}` : ""}${st.hours ? ` · ${st.hours} h to ${st.mode === "pickup" ? "stage" : "crate"}` : ""}</div>` : ""}
+  <div id="wmsg327" class="msg err" style="text-align:center;margin-top:8px"></div>
+  <script>${netJs}
+  function arm(btn, fn){ if (!btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; } btn.dataset.armed = ""; fn(); }
+  async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
+    try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
+      var j = await r.json(); if (j && j.ok) { location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
+    catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
+  function whCheck327(bid, btn, on){ whPost("/api/wh/check", { build_id: bid, key: btn.getAttribute("data-key"), on: on }, btn); }
+  async function whPhoto327(bid, input, msgId){ var m = document.getElementById(msgId); var files = Array.from(input.files || []); if (!files.length) return; var okN = 0;
+    for (var i = 0; i < files.length; i++) { m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
+      try { var blob; try { blob = await photoPrep317(files[i], bid, "crate"); } catch (e317) { m.textContent = e317.message; input.value = ""; return; }
+        var o = await sbUpload("/api/photo/upload?build_id=" + bid + "&kind=crate", blob, blob.type || "image/jpeg", function(t){ m.textContent = t; });
+        if (o && o.ok) okN++; else { m.textContent = (o && o.error) || "Photo did not make it — try again"; input.value = ""; return; } }
+      catch (e) { m.textContent = "Network hiccup — try again"; input.value = ""; return; } }
+    m.textContent = "✓ " + okN + " on the cab"; input.value = ""; setTimeout(function(){ location.reload(); }, 700); }
+  </script>
+</div></body></html>`;
+};
+// the WAREHOUSE lane on the order page — admins and managers see the checklist count, the step, hours, who, the ship tap
+const whLane327 = (st, isAdmin) => { if (!st || (!st.task && !st.b.shipped_at)) return ""; const b = st.b; const t = st.task;
+  return `<div class="lane" style="border-color:#5eaeff">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><b>&#128230; WAREHOUSE — crating &amp; shipping</b> ${whModeChip327(st)} ${whChip327(st)} <span style="opacity:.7;font-size:.9em">${st.hours} of ${st.allowed} h${st.total != null ? ` · ${st.checked} of ${st.total} checked` : ""}${b.body_done_at ? ` · in from Body ${escH(phxDate(new Date(b.body_done_at).getTime()))}` : ""}${b.shipped_at ? ` · ${st.mode === "pickup" ? "picked up" : "shipped"} ${escH(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && st.names[b.shipped_by] ? " — " + escH(st.names[b.shipped_by]) : ""}` : ""}</span></div>
+    ${t ? `<div style="padding:6px 0;border-top:1px solid var(--line);font-size:.95rem"><b>${escH(t.name)}</b> <span style="opacity:.75">· ${t.hours} of ${Number(t.hours_allowed)} h · ${t.state === "complete" ? `finished${t.completed_by && st.names[t.completed_by] ? " — " + escH(st.names[t.completed_by]) : ""}${t.completed_at ? " " + escH(phxDate(new Date(t.completed_at).getTime())) : ""}` : t.state === "in_progress" ? (t.on.length ? `${escH(t.on.map((o) => o.name).join(" + "))} on it` : "paused") : "not started"}</span></div>` : ""}
+    ${b.wh_sent_back_at ? `<div style="padding:6px 0;border-top:1px solid var(--line)">Sent back to Body ${escH(phxDate(new Date(b.wh_sent_back_at).getTime()))}${b.wh_sent_back_reason ? ` — ${escH(b.wh_sent_back_reason)}` : ""}</div>` : ""}
+    <div style="margin-top:6px"><a href="/warehouse/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">open the Crating page</a>${isAdmin ? ` · <span style="opacity:.6">checks and the step are undone from the Crating page; hours are punches (Time corrections under the Manager console)</span>` : ""}</div>
+  </div>`; };
 function workIntervals(events, nowMs) {
   const open = {}; const out = [];
   for (const ev of events) {
@@ -8586,7 +8843,7 @@ const STAGES323 = { body: "At Body Shop", crating: "Crating & shipping", shipped
 const STAGE_ORDER323 = ["body", "crating", "shipped"];
 function stageOf323(b) {
   const hand = b && STAGES323[b.stage] ? b.stage : null;
-  if (hand === "shipped" || (b && b.shipped_at)) return { key: "shipped", label: STAGES323.shipped, hand: true };
+  if (hand === "shipped" || (b && b.shipped_at)) return { key: "shipped", label: b && b.ship_mode === "pickup" ? "Picked up" : STAGES323.shipped, hand: true };   // Block 327: the warehouse's tap says which
   if (b && b.body_moved_to_build_at) return { key: "build", label: STAGES323.build, hand: false };   // Block 326
   if (hand === "crating" || (b && b.body_done_at)) return { key: "crating", label: STAGES323.crating, hand: hand === "crating" };
   return { key: "body", label: STAGES323.body, hand: hand === "body" };
@@ -8613,7 +8870,7 @@ async function trackingPage323(q, page, famOf) {
   const PER = 25;
   const qq = String(q || "").trim().replace(/[,()*\\%]/g, "").slice(0, 40);
   const filt = qq ? `&or=(order_number.ilike.*${encodeURIComponent(qq)}*,cab_number.ilike.*${encodeURIComponent(qq)}*,customer_name.ilike.*${encodeURIComponent(qq)}*)` : "";
-  const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at,body_done_at,body_moved_to_build_at&state=in.(production_complete,complete)${filt}`;   // Block 326: the Body columns drive the ladder
+  const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at,ship_mode,body_done_at,body_moved_to_build_at&state=in.(production_complete,complete)${filt}`;   // Block 326: the Body columns drive the ladder · Block 327: ship_mode (Shipped vs Picked up)
   const ids = await dbAll252(`build?select=id&state=in.(production_complete,complete)${filt}&order=id.asc`);
   const total = ids.length, pages = Math.max(1, Math.ceil(total / PER));
   const pg = Math.min(pages, Math.max(1, Number(page) || 1));
@@ -9734,7 +9991,7 @@ async function cabRecap310(b) {
     db("employee?select=id,first_name,last_name,department"),
     dbAll252(`event_log?select=at,event_type,actor_id,payload&payload->>build_id=eq.${b.id}&order=at.asc,id.asc`),
     db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc&limit=400`),
-    db(`option_check?select=item_text,checked_by,checked_at&build_id=eq.${b.id}&order=checked_at.asc`).catch(() => []),
+    db(`option_check?select=item_text,checked_by,checked_at&build_id=eq.${b.id}&gate=eq.body&order=checked_at.asc`).catch(() => []),   // Block 327: the inspection gate only — the crating re-check has its own section
     db(`option_flag?select=flag_text&build_id=eq.${b.id}`).catch(() => []),
     db(`line_down?select=reason,down_at,up_at&build_id=eq.${b.id}&order=down_at.asc`).catch(() => []),
     db(`task_note?select=task_id,note,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc`).catch(() => []),
@@ -9915,6 +10172,31 @@ async function cabRecap310(b) {
     kit, options, optionFlags, oddities: odd, noPhotoDays, photoCounts, photoTotal: vis.length, strip: strip.map((p) => p.id), notes, finalNote: b.final_note || "",
   };
 }
+// Block 327 (Daniel 10/25 19:32: "admin needs to be able to look at and report on everything all the way through so it
+// can figure out correct landing costs for every cab and upgrade option"): the WHOLE-CYCLE line — calendar days per
+// hand-off and hours by department. Hours only; the rate lives in the office (Daniel 19:41: "all of that is handled
+// through coyote"). Every date is a column a tap wrote; a leg with no date reads "—".
+function cycle327(b, R) {
+  const d = (a, z) => (a && z) ? Math.max(0, Math.round((new Date(z).getTime() - new Date(a).getTime()) / 86400000 * 10) / 10) : null;
+  const kitAt = R.kit && R.kit.deliveredAt ? R.kit.deliveredAt : null;
+  const startAt = R.startedAt || null, signAt = R.signedOffAt || b.left_production_at || null;
+  const primerAt = b.body_done_at || null, goneAt = b.shipped_at || null;
+  const legs = [
+    { name: "Kit delivered → build started", days: d(kitAt, startAt) },
+    { name: "Build started → signed off", days: d(startAt, signAt) },
+    { name: "Signed off → done in primer (Body)", days: d(signAt, primerAt) },
+    { name: `Done in primer → ${b.ship_mode === "pickup" ? "picked up" : "shipped"} (Warehouse)`, days: d(primerAt, goneAt) },
+  ];
+  const total = d(kitAt || startAt, goneAt);
+  const hours = [
+    { dept: "Production (crew on the line)", h: Number(R.crewHours || 0), allowed: Number(R.allowed || 0) },
+    { dept: "Panel prep", h: Number(R.prepH327 || 0), allowed: null },
+    { dept: "Fix work (returns)", h: Number(R.fixHours || 0), allowed: null },
+    { dept: "Body", h: R.body326 ? Number(R.body326.hours || 0) : 0, allowed: R.body326 ? Number(R.body326.allowed || 0) : null },
+    { dept: b.ship_mode === "pickup" ? "Warehouse — stage for pickup" : "Warehouse — crating", h: R.wh327 ? Number(R.wh327.hours || 0) : 0, allowed: R.wh327 ? Number(R.wh327.allowed || 0) : null },
+  ];
+  return { legs, total, hours, totalH: Math.round(hours.reduce((s, x) => s + x.h, 0) * 10) / 10, gone: Boolean(goneAt), mode: b.ship_mode || null };
+}
 // The one-page render — Block 311 layout (Daniel 10/20 14:18: "if you were Rob or Ross… WHAT would they want to
 // see at the finish of production for every cab?"). Reading order: the verdict in plain sentences + four colored
 // tiles → who built it → where the hours went (five columns, over/under) → what went sideways (one plain list)
@@ -10012,6 +10294,17 @@ const recapPage310 = (R, emp196 = null) => {
   <div style="margin-bottom:12px">${R.body326.steps.length ? `<table style="width:100%;border-collapse:collapse;font-size:.92rem"><tr><th style="text-align:left;opacity:.55;padding:4px 6px">Step</th><th style="text-align:left;opacity:.55;padding:4px 6px">Allowed</th><th style="text-align:left;opacity:.55;padding:4px 6px">This cab</th><th style="text-align:left;opacity:.55;padding:4px 6px">Who</th></tr>
     ${R.body326.steps.map((t) => `<tr><td style="padding:4px 6px;border-top:1px solid var(--line)">${t.step_no}. ${e(t.name)}</td><td style="padding:4px 6px;border-top:1px solid var(--line)">${Number(t.hours_allowed)} h</td><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>${t.hours} h</b>${t.state !== "complete" ? ` <span class="mut">(${t.state === "in_progress" ? "open" : "not started"})</span>` : ""}</td><td style="padding:4px 6px;border-top:1px solid var(--line)" class="mut">${t.completed_by && R.body326.names[t.completed_by] ? e(R.body326.names[t.completed_by]) : ""}</td></tr>`).join("")}
     <tr><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>Body total</b></td><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>${R.body326.allowed} h</b></td><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>${R.body326.hours} h</b></td><td style="padding:4px 6px;border-top:1px solid var(--line)" class="mut">${R.body326.b.body_done_at ? `done in primer ${e(phxDay310(R.body326.b.body_done_at))}` : R.body326.b.body_moved_to_build_at ? "moved to the Build department" : "still in Body"}</td></tr></table>` : `<span class="mut">No Body steps on this cab.</span>`}</div>` : ""}
+  ${R.wh327 ? `<div class="sec">&#128230; Warehouse &mdash; crating &amp; shipping</div>
+  <div style="margin-bottom:12px;font-size:.95rem">${R.wh327.task ? `<b>${e(R.wh327.task.name)}</b> &middot; ${R.wh327.task.hours} h of ${Number(R.wh327.task.hours_allowed)} allowed${R.wh327.task.completed_by && R.wh327.names[R.wh327.task.completed_by] ? ` &middot; ${e(R.wh327.names[R.wh327.task.completed_by])}` : ""}${R.wh327.task.state !== "complete" ? ` <span class="mut">(${R.wh327.task.state === "in_progress" ? "open" : "not started"})</span>` : ""}` : `<span class="mut">No crating step on this cab.</span>`}
+    ${R.wh327.total != null ? ` &middot; ${R.wh327.checked} of ${R.wh327.total} items checked` : R.wh327.checked ? ` &middot; ${R.wh327.checked} items checked` : ""}${R.wh327.b.shipped_at ? ` &middot; <b>${R.wh327.mode === "pickup" ? "picked up" : "shipped"} ${e(phxDay310(R.wh327.b.shipped_at))}</b>${R.wh327.b.shipped_by && R.wh327.names[R.wh327.b.shipped_by] ? ` by ${e(R.wh327.names[R.wh327.b.shipped_by])}` : ""}` : ""}${R.wh327.b.wh_sent_back_at ? `<div style="color:#ff9f0a;margin-top:4px">Sent back to Body ${e(phxDay310(R.wh327.b.wh_sent_back_at))}${R.wh327.b.wh_sent_back_reason ? ` &mdash; ${e(R.wh327.b.wh_sent_back_reason)}` : ""}</div>` : ""}</div>` : ""}
+  ${R.cycle327 ? `<div class="sec">The whole cycle &mdash; days per hand-off &middot; hours by department</div>
+  <div class="two" style="margin-bottom:12px">
+    <div><table style="width:100%;border-collapse:collapse;font-size:.92rem">${R.cycle327.legs.map((l) => `<tr><td style="padding:4px 6px;border-top:1px solid var(--line)">${e(l.name)}</td><td class="n" style="padding:4px 6px;border-top:1px solid var(--line);text-align:right">${l.days == null ? "&mdash;" : `${l.days} d`}</td></tr>`).join("")}
+      <tr><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>Kit → gone</b></td><td style="padding:4px 6px;border-top:1px solid var(--line);text-align:right"><b>${R.cycle327.total == null ? (R.cycle327.gone ? "&mdash;" : "still here") : `${R.cycle327.total} d`}</b></td></tr></table></div>
+    <div><table style="width:100%;border-collapse:collapse;font-size:.92rem">${R.cycle327.hours.map((h) => `<tr><td style="padding:4px 6px;border-top:1px solid var(--line)">${e(h.dept)}</td><td style="padding:4px 6px;border-top:1px solid var(--line);text-align:right"><b>${h1_310(h.h)} h</b>${h.allowed != null && h.allowed > 0 ? ` <span class="mut">of ${h1_310(h.allowed)}</span>` : ""}</td></tr>`).join("")}
+      <tr><td style="padding:4px 6px;border-top:1px solid var(--line)"><b>All departments</b></td><td style="padding:4px 6px;border-top:1px solid var(--line);text-align:right"><b>${h1_310(R.cycle327.totalH)} h</b></td></tr></table>
+      <div class="mut" style="font-size:.8rem;margin-top:4px">Hours are punches, by department. Put the shop rate on them in the office &mdash; the board never carries dollars.</div></div>
+  </div>` : ""}
   <div class="two">
     <div>
       <div class="sec">Who built it</div>
@@ -10654,7 +10947,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
     const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved"];   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
-    const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab.") || String(eventType).startsWith("body."));   // Block 326: Body notices are facts for the bell, never a buzz
+    const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab.") || String(eventType).startsWith("body.") || String(eventType).startsWith("wh."));   // Block 326: Body notices are facts for the bell, never a buzz · Block 327: warehouse finish-out notices the same
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
     // get push/text/email ONLY for the big stuff (ship-date risk, short
@@ -11231,13 +11524,14 @@ http.createServer(async (req, res) => {
         // rightly called it out. Now it reads his own LAST punch: a clock-out
         // earlier TODAY means he's coming back (lunch named when that was the
         // reason); anything else means this tap starts his day.
+        let wh327 = null; try { wh327 = await whFinishList327(); } catch (eW) { console.error("warehouse finish list:", eW && eW.message); wh327 = null; }   // Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
         let hint239 = "First punch of the day — this starts your hours.";
         if (lastW && lastW.kind !== "clock_in" && lastW.claimed_at && phxDate(new Date(lastW.claimed_at).getTime()) === phxDate(Date.now()))
           hint239 = /lunch/i.test(lastW.reason || "") ? "Back from lunch — this picks your day back up." : "Welcome back — this picks your day back up.";
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
             { now: ahNowW, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
-              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239, shortOwedW254, prep301, clockedInW106 ? Number(lastW.line_id) : null));   // Block 326: the line you're on (Warehouse ↔ Shop time switch)
+              lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239, shortOwedW254, prep301, clockedInW106 && lastFull301 ? Number(lastFull301.line_id) : null, wh327));   // Block 326: the line you're on (Warehouse ↔ Shop time switch) — Block 327 fix: lastW never carried line_id, so the switch button never rendered on v304; lastFull301 does
       }
       if (emp.department !== "Production") {
         // Block 92 (owner-rep): Body Shop + Build punch here — dept-time lines
@@ -11973,7 +12267,7 @@ http.createServer(async (req, res) => {
       const t = tasks.find((x) => x.id === task_id);
       if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
       const whenS = new Date(p.claimed_at || Date.now()); if (isNaN(whenS.getTime())) return json(400, { ok: false, error: "Bad time" });
-      const [lastS] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`);
+      const [lastS] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`);
       const onThis = Boolean(lastS && lastS.kind === "clock_in" && lastS.line_id === BODY_LINE_ID && lastS.fix_build_id === build_id && lastS.body_task_id === task_id);
       const backLine = async () => bodyLineAfter326(eS, meS);
       if (action === "reopen") {
@@ -11992,9 +12286,10 @@ http.createServer(async (req, res) => {
         // the one-in-hand rule: whatever stint is open closes (another Body step on another cab = that step pauses by itself)
         const fromBody = lastS.line_id === BODY_LINE_ID && lastS.fix_build_id && lastS.fix_build_id !== build_id;
         const priorMine = await db(`clock_event?select=id&voided=is.false&employee_id=eq.${eS}&body_task_id=eq.${task_id}&kind=eq.clock_in&limit=1`);   // read BEFORE the new stint lands
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: lastS.line_id, kind: "clock_out_early", reason: fromBody ? `Body: switched to order ${bS.order_number}` : lastS.line_id === BODY_LINE_ID ? `Body: started order ${bS.order_number}` : `Switched to Body — order ${bS.order_number}`, claimed_at: whenS.toISOString(), ...(lastS.fix_build_id ? { fix_build_id: lastS.fix_build_id, body_task_id: lastS.body_task_id || null } : {}) }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: lastS.line_id, kind: "clock_out_early", reason: fromBody ? `Body: switched to order ${bS.order_number}` : lastS.line_id === BODY_LINE_ID ? `Body: started order ${bS.order_number}` : `Switched to Body — order ${bS.order_number}`, claimed_at: whenS.toISOString(), ...(lastS.fix_build_id ? { fix_build_id: lastS.fix_build_id, body_task_id: lastS.body_task_id || null, wh_task_id: lastS.wh_task_id || null } : {}) }) });
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_in", fix_build_id: build_id, body_task_id: task_id, claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
         if (fromBody && lastS.body_task_id) logEvent("body.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.body_task_id, because: build_id, order_number: bS.order_number });
+        if (lastS.line_id === WH_LINE_ID && lastS.wh_task_id) logEvent("wh.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.wh_task_id, because: build_id, order_number: bS.order_number, body: true });   // Block 327: a crating stint pauses the same way when a Body step starts
         const patchT = { state: "in_progress" }; if (!t.started_at) { patchT.started_by = eS; patchT.started_at = whenS.toISOString(); }
         await db(`body_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patchT) });
         logEvent(priorMine.length ? "body.step_resumed" : "body.step_started", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name, from_line: lastS.line_id, helper: meS.department !== "Body Shop", joined: t.state === "in_progress" && !priorMine.length });
@@ -12022,7 +12317,7 @@ http.createServer(async (req, res) => {
       if (!canInspect321(meD)) return json(403, { ok: false, error: "Only a Body Shop manager or an admin can sign a cab out of Body" });
       const p = await body(req); const build_id = String(p.build_id || "");
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [bD] = await db(`build?select=id,order_number,cab_number,part_number,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`);
+      const [bD] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`);
       if (!bD) return json(404, { ok: false, error: "Cab not found" });
       if (bD.body_done_at) return json(400, { ok: false, error: "Already done in primer" });
       if (bD.body_moved_to_build_at) return json(400, { ok: false, error: "This cab moved to the Build department" });
@@ -12038,14 +12333,15 @@ http.createServer(async (req, res) => {
       if (minD > 0 && photosD.length < minD) return json(400, { ok: false, error: `Needs ${minD - photosD.length} more in-primer photo${minD - photosD.length === 1 ? "" : "s"} first (${photosD.length} of ${minD})` });
       const whenD = new Date(p.claimed_at || Date.now()); if (isNaN(whenD.getTime())) return json(400, { ok: false, error: "Bad time" });
       // close any open stint still on this cab (someone forgot to pause) — their time stops here
-      const onD = (await bodyHours326([build_id])).onNow; const stuck = Object.values(onD).flat();
+      const onD = (await bodyHours326([build_id])).onNow; const stuck = Object.values(onD).flat().filter((o) => o.build === build_id);   // Block 327 (reviewer): only the stints on THIS cab
       for (const o of stuck) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await bodyLineAfter326(o.emp, mO);
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: `Body: done in primer (by ${meD.first_name})`, fix_build_id: build_id, claimed_at: whenD.toISOString() }) });
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(whenD.getTime() + 1000).toISOString() }) }); }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ body_done_at: whenD.toISOString(), body_done_by: eD }) });
+      try { await ensureWhTask327(bD, eD); } catch (eW327) { console.error("warehouse entry failed:", eW327 && eW327.message); }   // Block 327: the cab lands on the warehouse's finish-out list (idempotent — a send-back and re-Done keeps the step)
       const hrsAll = (await bodyHours326([build_id])).byBuild[build_id] || 0;
       logEvent("body.done", eD, { build_id, order_number: bD.order_number, hours: Math.round(hrsAll * 100) / 100, photos_primer: photosD.length, released: stuck.length });
-      try { const who = [...new Set([...(await warehouseIds()), ...(await adminIds225())])]; void notify("body.done", who, `Order ${bD.order_number}${bD.cab_number ? ` (Cab #${bD.cab_number})` : ""} is done in primer — ready to crate`, `Body signed it out (${Math.round(hrsAll * 10) / 10} h in Body). It is now Crating & shipping on Order Tracking.`, "/order/" + encodeURIComponent(bD.order_number)); } catch (e) { console.error("body done notify:", e && e.message); }
+      try { const who = [...new Set([...(await warehouseIds()), ...(await adminIds225())])]; void notify("body.done", who, `Order ${bD.order_number}${bD.cab_number ? ` (Cab #${bD.cab_number})` : ""} is done in primer — ready to crate`, `Body signed it out (${Math.round(hrsAll * 10) / 10} h in Body). It is on the warehouse's finish-out list and reads Crating & shipping on Order Tracking.`, "/warehouse/" + encodeURIComponent(bD.order_number)); } catch (e) { console.error("body done notify:", e && e.message); }   // Block 327: the bell opens the Crating page
       return json(200, { ok: true, hours: Math.round(hrsAll * 10) / 10 });
     }
     if (url.pathname === "/api/body/build" && req.method === "POST") {
@@ -12062,6 +12358,130 @@ http.createServer(async (req, res) => {
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ body_moved_to_build_at: whenM, body_moved_to_build_by: eM, body_build_reason: reason }) });
       logEvent("body.moved_to_build", eM, { build_id, order_number: bM.order_number, reason });
       try { void notify("body.moved_to_build", await adminIds225(), `Order ${bM.order_number} moved to the Build department`, reason, "/order/" + encodeURIComponent(bM.order_number)); } catch (e) {}
+      return json(200, { ok: true });
+    }
+    // ===== Block 327 — WAREHOUSE FINISH-OUT taps: the checklist, the one timed step, the ship tap, the send-back.
+    // Same door as Body (anyone signed in on the shop Wi-Fi); the step moves the clock onto the Warehouse line stamped
+    // cab + step (one open stint per person = the one-in-hand rule across Body AND crating); Shipped / Picked up and
+    // the send-back are the warehouse's (Eric) + admins.
+    const whCab327 = async (build_id) => {
+      if (!isUuid(build_id)) return [null, json(400, { ok: false, error: "That cab reference isn't valid" })];
+      const [bW] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at&id=eq.${build_id}`);
+      if (!bW) return [null, json(404, { ok: false, error: "Cab not found" })];
+      if (bW.shipped_at || bW.stage === "shipped") return [null, json(400, { ok: false, error: `This cab already ${bW.ship_mode === "pickup" ? "was picked up" : "shipped"}` })];
+      if (!bW.body_done_at) return [null, json(400, { ok: false, error: bW.wh_sent_back_at ? "This cab is back in Body — it returns here when Body taps Done in primer again" : "This cab hasn't come out of Body yet" })];
+      return [bW, null];
+    };
+    if (url.pathname === "/api/wh/check" && req.method === "POST") {
+      const [eC, failC] = await bodyAuth326(); if (failC) return failC;
+      const p = await body(req); const build_id = String(p.build_id || ""); const key = String(p.key || "").slice(0, 300); const on = p.on !== false && p.on !== "false";
+      const [bC, bad] = await whCab327(build_id); if (bad) return bad;
+      if (!key) return json(400, { ok: false, error: "Which item?" });
+      const [lastC] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${eC}&order=claimed_at.desc&limit=1`);
+      if (!lastC || lastC.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first" });
+      const rows = await whChecklist327(bC);
+      const row = rows.find((r) => r.key === key);
+      if (!row) return json(404, { ok: false, error: "That item isn't on this cab's list — refresh" });
+      const whenC = new Date(p.claimed_at || Date.now()); if (isNaN(whenC.getTime())) return json(400, { ok: false, error: "Bad time" });
+      if (on) {
+        if (row.check) return json(200, { ok: true });
+        await db("option_check", { method: "POST", body: JSON.stringify([{ build_id, gate: "ship", item_text: key, checked_by: eC, checked_at: whenC.toISOString() }]) });
+        logEvent("wh.check", eC, { build_id, order_number: bC.order_number, item: key, group: row.group, had_inspection_record: Boolean(row.evidence) });
+      } else {
+        if (!row.check) return json(200, { ok: true });
+        await db(`option_check?build_id=eq.${build_id}&gate=eq.ship&item_text=eq.${encodeURIComponent(key)}&voided=is.false`, { method: "PATCH", body: JSON.stringify({ voided: true }) });   // never deleted — the undo voids the tap (the row and the audit stay)
+        logEvent("wh.uncheck", eC, { build_id, order_number: bC.order_number, item: key, was_by: row.check.checked_by, was_at: row.check.checked_at });
+      }
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/wh/step" && req.method === "POST") {
+      const [eS, failS, meS] = await bodyAuth326(); if (failS) return failS;
+      const p = await body(req);
+      const build_id = String(p.build_id || ""), task_id = String(p.task_id || ""), action = String(p.action || "");
+      if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
+      if (!["start", "pause", "done", "reopen"].includes(action)) return json(400, { ok: false, error: "Which tap?" });
+      const [bS, badS] = await whCab327(build_id); if (badS) return badS;
+      const [t] = await db(`wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed&id=eq.${task_id}&build_id=eq.${build_id}`);
+      if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
+      const whenS = new Date(p.claimed_at || Date.now()); if (isNaN(whenS.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const [lastS] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`);
+      const onThis = Boolean(lastS && lastS.kind === "clock_in" && lastS.line_id === WH_LINE_ID && lastS.fix_build_id === build_id && lastS.wh_task_id === task_id);
+      if (action === "reopen") {
+        if (!canShip327(meS)) return json(403, { ok: false, error: "Only the warehouse or an admin can reopen the step" });
+        if (t.state !== "complete") return json(400, { ok: false, error: "That step isn't finished" });
+        await db(`wh_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ state: "in_progress", completed_by: null, completed_at: null }) });
+        logEvent("wh.step_reopened", eS, { build_id, order_number: bS.order_number, task_id, name: t.name });
+        return json(200, { ok: true });
+      }
+      if (action === "start") {
+        if (!lastS || lastS.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first, then start" });
+        if (t.state === "complete") return json(400, { ok: false, error: "That step is finished — the warehouse can reopen it" });
+        if (onThis) return json(400, { ok: false, error: "You're already on this step" });
+        // the one-in-hand rule, across departments: whatever stint is open closes (a Body step on another cab, or crating on another cab, pauses by itself)
+        const fromWh = lastS.line_id === WH_LINE_ID && lastS.wh_task_id && lastS.fix_build_id !== build_id;
+        const fromBody = lastS.line_id === BODY_LINE_ID && lastS.body_task_id;
+        const priorMine = await db(`clock_event?select=id&voided=is.false&employee_id=eq.${eS}&wh_task_id=eq.${task_id}&kind=eq.clock_in&limit=1`);
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: lastS.line_id, kind: "clock_out_early", reason: fromWh ? `Crating: switched to order ${bS.order_number}` : lastS.line_id === WH_LINE_ID ? `Crating: started order ${bS.order_number}` : `Switched to crating — order ${bS.order_number}`, claimed_at: whenS.toISOString(), ...(lastS.fix_build_id ? { fix_build_id: lastS.fix_build_id, body_task_id: lastS.body_task_id || null, wh_task_id: lastS.wh_task_id || null } : {}) }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: WH_LINE_ID, kind: "clock_in", fix_build_id: build_id, wh_task_id: task_id, claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
+        if (fromWh) logEvent("wh.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.wh_task_id, because: build_id, order_number: bS.order_number });
+        if (fromBody) logEvent("body.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.body_task_id, because: build_id, order_number: bS.order_number, crating: true });
+        const patchT = { state: "in_progress" }; if (!t.started_at) { patchT.started_by = eS; patchT.started_at = whenS.toISOString(); }
+        await db(`wh_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patchT) });
+        logEvent(priorMine.length ? "wh.step_resumed" : "wh.step_started", eS, { build_id, order_number: bS.order_number, task_id, name: t.name, from_line: lastS.line_id, helper: meS.department !== "Warehouse", joined: t.state === "in_progress" && !priorMine.length });
+        return json(200, { ok: true });
+      }
+      if (!onThis) return json(400, { ok: false, error: "You're not on this step right now" });
+      const back = await whLineAfter327(eS, meS);
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: WH_LINE_ID, kind: "clock_out_early", reason: action === "done" ? `Crating: ${t.name} finished` : "Crating: paused", fix_build_id: build_id, wh_task_id: task_id, claimed_at: whenS.toISOString() }) });
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: back, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
+      if (action === "done") {
+        await db(`wh_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ state: "complete", completed_by: eS, completed_at: whenS.toISOString() }) });
+        const hrsD = await whHours327([build_id]);
+        const stepH = Math.round((hrsD.byTask[task_id] || 0) * 100) / 100;
+        logEvent("wh.step_done", eS, { build_id, order_number: bS.order_number, task_id, name: t.name, hours: stepH, allowed: Number(t.hours_allowed), back_to: back });
+        return json(200, { ok: true, hours: stepH });
+      }
+      logEvent("wh.step_paused", eS, { build_id, order_number: bS.order_number, task_id, back_to: back });
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/wh/ship" && req.method === "POST") {
+      const [eH, failH, meH] = await bodyAuth326(); if (failH) return failH;
+      if (!canShip327(meH)) return json(403, { ok: false, error: "Only the warehouse or an admin can mark a cab shipped or picked up" });
+      const p = await body(req); const build_id = String(p.build_id || "");
+      const [bH, badH] = await whCab327(build_id); if (badH) return badH;
+      const [rows, tasksH] = await Promise.all([whChecklist327(bH), db(`wh_task?select=id,name,state&build_id=eq.${build_id}`)]);
+      const openC = rows.filter((r) => !r.check);
+      if (openC.length) return json(400, { ok: false, error: `${openC.length} item${openC.length === 1 ? "" : "s"} not checked: ${openC.slice(0, 3).map((r) => r.label).join(" · ")}${openC.length > 3 ? " …" : ""}` });
+      if (!tasksH.length) return json(400, { ok: false, error: "This cab has no crating step" });
+      const openT = tasksH.filter((t) => t.state !== "complete");
+      if (openT.length) return json(400, { ok: false, error: `${openT[0].name} isn't finished — tap Finish on it first` });
+      const whenH = new Date(p.claimed_at || Date.now()); if (isNaN(whenH.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const sm = (await shipMethodFor327([rootOf323(bH)]))[rootOf323(bH)] || ""; const mode = shipModeOf327(sm);
+      // close any open stint still on this cab (someone forgot to pause) — their time stops here
+      const onH = (await whHours327([build_id])).onNow; const stuck = Object.values(onH).flat().filter((o) => o.build === build_id);   // reviewer: only the stints on THIS cab (a person crating another cab keeps their clock)
+      for (const o of stuck) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await whLineAfter327(o.emp, mO);
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: WH_LINE_ID, kind: "clock_out_early", reason: `Crating: cab ${mode === "pickup" ? "picked up" : "shipped"} (by ${meH.first_name})`, fix_build_id: build_id, claimed_at: whenH.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(whenH.getTime() + 1000).toISOString() }) }); }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ shipped_at: whenH.toISOString(), shipped_by: eH, ship_mode: mode }) });
+      const hrsAll = (await whHours327([build_id])).byBuild[build_id] || 0;
+      logEvent("wh.shipped", eH, { build_id, order_number: bH.order_number, mode, ship_method: sm || null, hours: Math.round(hrsAll * 100) / 100, checks: rows.length, released: stuck.length });
+      try { void notify("wh.shipped", await adminIds225(), `Order ${bH.order_number}${bH.cab_number ? ` (Cab #${bH.cab_number})` : ""} ${mode === "pickup" ? "was picked up" : "shipped"}`, `${meH.first_name} checked every sold item on the cab and tapped ${mode === "pickup" ? "Picked up" : "Shipped"} (${Math.round(hrsAll * 10) / 10} h to ${mode === "pickup" ? "stage" : "crate"}). It reads ${mode === "pickup" ? "Picked up" : "Shipped"} on Order Tracking.`, "/order/" + encodeURIComponent(bH.order_number)); } catch (e) { console.error("ship notify:", e && e.message); }
+      return json(200, { ok: true, mode, hours: Math.round(hrsAll * 10) / 10 });
+    }
+    if (url.pathname === "/api/wh/back" && req.method === "POST") {
+      const [eK, failK, meK] = await bodyAuth326(); if (failK) return failK;
+      if (!canShip327(meK)) return json(403, { ok: false, error: "Only the warehouse or an admin can send a cab back to Body" });
+      const p = await body(req); const build_id = String(p.build_id || ""); const reason = String(p.reason || "").trim().slice(0, 140);
+      if (!reason) return json(400, { ok: false, error: "Type why — it goes on the record and to Body" });
+      const [bK, badK] = await whCab327(build_id); if (badK) return badK;
+      const whenK = new Date(p.claimed_at || Date.now()); if (isNaN(whenK.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const onK = (await whHours327([build_id])).onNow; const stuckK = Object.values(onK).flat().filter((o) => o.build === build_id);
+      for (const o of stuckK) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await whLineAfter327(o.emp, mO);
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: WH_LINE_ID, kind: "clock_out_early", reason: `Crating: cab sent back to Body (by ${meK.first_name})`, fix_build_id: build_id, claimed_at: whenK.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(whenK.getTime() + 1000).toISOString() }) }); }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ body_done_at: null, body_done_by: null, wh_sent_back_at: whenK.toISOString(), wh_sent_back_by: eK, wh_sent_back_reason: reason, ...(bK.stage === "crating" ? { stage: null } : {}) }) });   // a hand-set Crating stage is released too, so Order Tracking reads At Body Shop again
+      logEvent("wh.sent_back", eK, { build_id, order_number: bK.order_number, reason, was_done_in_primer_at: bK.body_done_at, by: bK.body_done_by, released: stuckK.length });
+      try { void notify("wh.sent_back", [...new Set([...(await floorMgrIds220("inspect")), ...(await adminIds225())])], `Order ${bK.order_number}${bK.cab_number ? ` (Cab #${bK.cab_number})` : ""} is back in Body`, `${meK.first_name} sent it back from crating: ${reason}. Reopen the step it needs, then tap Done in primer again.`, "/body/" + encodeURIComponent(bK.order_number)); } catch (e) { console.error("sent-back notify:", e && e.message); }
       return json(200, { ok: true });
     }
     if (url.pathname === "/api/prep/start" && req.method === "POST") {
@@ -12126,6 +12546,21 @@ http.createServer(async (req, res) => {
         if (row) await db(`body_standard?family=eq.${encodeURIComponent(famS)}&step_no=eq.${i + 1}`, { method: "PATCH", body: JSON.stringify({ hours: hs[i], updated_by: eS, updated_at: new Date().toISOString() }) });
         else await db("body_standard", { method: "POST", body: JSON.stringify({ family: famS, step_no: i + 1, hours: hs[i], updated_by: eS }) }); }
       logEvent("config.body_hours", eS, { family: famS, from: [1, 2, 3].map((n) => { const r = cur.find((x) => Number(x.step_no) === n); return r ? Number(r.hours) : null; }), to: hs });
+      return json(200, { ok: true });
+    }
+    // Block 327: the warehouse finish-out standards — crate / stage hours per family, audited
+    if (url.pathname === "/api/admin/wh-standard" && req.method === "POST") {
+      const eS = await liveSession(req); if (!eS) return json(401, { ok: false, error: "Signed out" });
+      const [mS] = await db(`employee?select=role&id=eq.${eS}`); if (!mS || mS.role !== "admin") return json(403, { ok: false, error: "Admin only" });
+      const { family, crate, stage } = await body(req);
+      const famS = String(family || "").trim().slice(0, 80); const hs = { crate: Number(crate), stage: Number(stage) };
+      if (!famS) return json(400, { ok: false, error: "Which cab family?" });
+      if (Object.values(hs).some((h) => !Number.isFinite(h) || h < 0 || h > 40)) return json(400, { ok: false, error: "Two numbers between 0 and 40" });
+      const cur = await db(`wh_standard?select=kind,hours&family=eq.${encodeURIComponent(famS)}`);
+      for (const k of ["crate", "stage"]) { const row = cur.find((r) => r.kind === k);
+        if (row) await db(`wh_standard?family=eq.${encodeURIComponent(famS)}&kind=eq.${k}`, { method: "PATCH", body: JSON.stringify({ hours: hs[k], updated_by: eS, updated_at: new Date().toISOString() }) });
+        else await db("wh_standard", { method: "POST", body: JSON.stringify({ family: famS, kind: k, hours: hs[k], updated_by: eS }) }); }
+      logEvent("config.wh_hours", eS, { family: famS, from: { crate: (cur.find((x) => x.kind === "crate") || {}).hours ?? null, stage: (cur.find((x) => x.kind === "stage") || {}).hours ?? null }, to: hs });
       return json(200, { ok: true });
     }
     if (url.pathname === "/api/admin/prep-standard" && req.method === "POST") {
@@ -12284,6 +12719,10 @@ http.createServer(async (req, res) => {
       if (!bR310) return json(404, { ok: false, error: "No such order" });
       const R310 = await cabRecap310(bR310);
       try { const [bs326] = await bodyStatus326([bR310]); R310.body326 = bs326 && (bs326.total || bR310.body_done_at) ? bs326 : null; } catch (eR) { R310.body326 = null; }   // Block 326: the recap grows a Body section once the cab has steps
+      // Block 327: the WAREHOUSE section + the whole-cycle line (days per hand-off, hours by department) — the landed-cost input, hours only
+      try { const [ws327] = await whStatus327([bR310]); R310.wh327 = ws327 && (ws327.task || bR310.shipped_at) ? ws327 : null; } catch (eW) { R310.wh327 = null; }
+      try { R310.prepH327 = (await prepHours301([bR310.id]))[bR310.id] || 0; } catch (eP) { R310.prepH327 = 0; }
+      R310.cycle327 = cycle327(bR310, R310);
       logEvent("recap.viewed", adminR310, { build_id: bR310.id, order_number: bR310.order_number });
       return send(200, "text/html; charset=utf-8", recapPage310(R310));
     }
@@ -12462,7 +12901,9 @@ http.createServer(async (req, res) => {
       // Block 326: the BODY lane for staff (managers/admins/warehouse/accounting — the people who open order pages) once the cab has steps
       let body326o = null;
       if (canFull86 && (bO.body_done_at || bO.body_moved_to_build_at || ["production_complete", "complete", "rework", "fix_job"].includes(String(bO.state)))) { try { body326o = (await bodyStatus326([bO]))[0] || null; if (body326o && !body326o.total && !bO.body_done_at && !bO.body_moved_to_build_at) body326o = null; } catch (eB) { body326o = null; } }
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318, body326o));
+      let wh327o = null;
+      if (canFull86 && (bO.body_done_at || bO.shipped_at || bO.wh_sent_back_at)) { try { wh327o = (await whStatus327([bO], true))[0] || null; } catch (eW) { wh327o = null; } }   // Block 327: the WAREHOUSE lane once the cab is out of Body
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318, body326o, wh327o));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -13749,6 +14190,27 @@ http.createServer(async (req, res) => {
       const photosB = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bB.id}&kind=in.(body,primer)&hidden=is.false&order=created_at.asc&limit=300`);
       let linesB = []; try { const L = await optionList255(bB); linesB = (L || []).map((x) => typeof x === "string" ? x : (x && (x.text || x.label)) || "").filter(Boolean); } catch (e) { linesB = []; }
       return send(200, "text/html; charset=utf-8", bodyCabPage326(meB, stB, { clockedIn: clockedB, canDone: canInspect321(meB), photos: photosB, photoMin: BODY_PHOTO_MIN326, lines: linesB }));
+    }
+    // ===== Block 327 — WAREHOUSE FINISH-OUT: the list (also on the warehouse's own Home), the cab page, the taps =====
+    if (url.pathname === "/warehouse" || url.pathname.startsWith("/warehouse/")) {
+      const empW = await liveSession(req);
+      if (!empW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [meW] = await db(`employee?select=id,first_name,last_name,role,department,must_change_pin&id=eq.${empW}`);
+      if (!meW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      if (meW.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const [lastW] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empW}&order=claimed_at.desc&limit=1`);
+      const clockedW = Boolean(lastW && lastW.kind === "clock_in");
+      if (url.pathname === "/warehouse") {
+        const stats = await whFinishList327();
+        return send(200, "text/html; charset=utf-8", whHomePage327(meW, stats, clockedW));
+      }
+      const ordW = decodeURIComponent(url.pathname.slice(11));
+      const [bW] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ordW)}`);
+      if (!bW) return send(404, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ordW)}" at crating</h2><p><a href="/warehouse" style="color:#8e8e93">← Crating &amp; shipping</a></p></div></body></html>`);
+      const [stW] = await whStatus327([bW], true);
+      const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false&order=created_at.asc&limit=100`);
+      let trackingW = ""; try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); trackingW = ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { trackingW = ""; }
+      return send(200, "text/html; charset=utf-8", whCabPage327(meW, stW, { clockedIn: clockedW, canShip: canShip327(meW), photos: photosW, tracking: trackingW }));
     }
     if (url.pathname === "/reconcile") {
       const empId = await liveSession(req);
@@ -15256,10 +15718,10 @@ self.addEventListener("notificationclick", (e) => {
     // file; it goes in the Backups folder. Audited (backup.snapshot {tables, rows, bytes}).
     if (url.pathname === "/api/admin/snapshot.json") {
       const [adminS303, failS303] = await requireAdmin(); if (failS303) return failS303;
-      const TABLES303 = ["after_hours_photo", "after_hours_session", "build", "build_note", "build_photo", "build_template", "clock_event", "employee", "event_log", "feature_toggle", "line", "line_down", "notification_log", "option_catalog", "option_check", "option_flag", "option_item", "pick_list_item", "prep_standard", "product", "push_subscription", "share_link", "shop_calendar", "shop_setting", "step_actuals_archive", "step_template", "task", "task_note", "time_off_request", "work_log"];
+      const TABLES303 = ["after_hours_photo", "after_hours_session", "body_standard", "body_task", "build", "build_note", "build_photo", "build_template", "clock_event", "employee", "event_log", "feature_toggle", "line", "line_down", "notification_log", "option_catalog", "option_check", "option_flag", "option_item", "pick_list_item", "prep_standard", "product", "push_subscription", "share_link", "shop_calendar", "shop_setting", "step_actuals_archive", "step_template", "task", "task_note", "time_off_request", "wh_standard", "wh_task", "work_log"];   // Block 327: + the Body and Warehouse tables (326 shipped without body_* in the snapshot)
       const snap303 = { __meta: { generated_at: new Date().toISOString(), source: "supabase project mxmiujjrayquatmleehf, live production", app_version: "v281 (Block 303b)", by: adminS303, note: "coyote_intake (raw Coyote payload cache) deliberately EXCLUDED — Coyote is the source of truth; a re-sync rebuilds it. option_item_backup_* / step_template_backup_* scratch copies excluded. Photo BINARIES live in the Supabase storage bucket cab-photos (build_photo rows here hold the metadata + storage paths). employee.pin_hash is included (it is a salted scrypt hash, not a PIN); temp_pin is blanked." }, __counts: {} };
       // Tables keyed by something other than id (paging needs a stable order on a real column).
-      const KEY303 = { prep_standard: "family", feature_toggle: "key", shop_setting: "key", shop_calendar: "cal_date", product: "part_number" };
+      const KEY303 = { prep_standard: "family", body_standard: "family", wh_standard: "family", feature_toggle: "key", shop_setting: "key", shop_calendar: "cal_date", product: "part_number" };
       let rows303 = 0;
       for (const t of TABLES303) {
         try {
@@ -15794,6 +16256,17 @@ self.addEventListener("notificationclick", (e) => {
         const med = {}; for (const t of tasksB) { const f = famOfBuild[t.build_id]; if (!f) continue; const k = f + "|" + t.step_no; (med[k] = med[k] || []).push(Math.round((hrsB.byTask[t.id] || 0) * 100) / 100); }
         const rowsB = famsB.map((f) => ({ family: f, steps: BODY_STEPS326.map((st) => { const r = stdB.find((x) => x.family === f && Number(x.step_no) === st.no); const xs = (med[f + "|" + st.no] || []).slice(0, 12); return { no: st.no, name: st.name, hours: r ? Number(r.hours) : (st.no === 1 ? 7 : 3), n: xs.length, median: xs.length >= 2 ? median301(xs) : null }; }) }));
         return json(200, { ok: true, which, html: bodyStdPanelHtml326(rowsB) });
+      }
+      if (which === "wh") {   // Block 327
+        const [stdW, prodsW, tasksW] = await Promise.all([db("wh_standard?select=family,kind,hours&order=family,kind"), db("product?select=part_number,family&order=family"), dbAll252("wh_task?select=id,build_id,kind,state,completed_at&state=eq.complete&order=completed_at.desc,id.asc")]);
+        const famsW = [...new Set([...stdW.map((r) => r.family), ...prodsW.map((p) => p.family).filter(Boolean)])].sort();
+        const bidsW = [...new Set(tasksW.map((t) => t.build_id))].slice(0, 200);
+        const buildsW = bidsW.length ? await db(`build?select=id,part_number&id=in.(${bidsW.join(",")})`) : [];
+        const famOfW = Object.fromEntries(prodsW.map((p) => [String(p.part_number).toUpperCase(), p.family])); const famOfBuildW = Object.fromEntries(buildsW.map((b) => [b.id, famOfW[String(b.part_number || "").toUpperCase()] || ""]));
+        const hrsW = bidsW.length ? await whHours327(bidsW) : { byTask: {} };
+        const medW = {}; for (const t of tasksW) { const f = famOfBuildW[t.build_id]; if (!f) continue; const k = f + "|" + t.kind; (medW[k] = medW[k] || []).push(Math.round((hrsW.byTask[t.id] || 0) * 100) / 100); }
+        const rowsW = famsW.map((f) => { const row = { family: f }; for (const k of ["crate", "stage"]) { const r = stdW.find((x) => x.family === f && x.kind === k); const xs = (medW[f + "|" + k] || []).slice(0, 12); row[k] = { hours: r ? Number(r.hours) : (k === "crate" ? 2 : 1), n: xs.length, median: xs.length >= 2 ? median301(xs) : null }; } return row; });
+        return json(200, { ok: true, which, html: whStdPanelHtml327(rowsW) });
       }
       if (which === "prep") {
         let prepP = [];
@@ -16384,7 +16857,7 @@ self.addEventListener("notificationclick", (e) => {
       if (!up.ok) { console.error("photo store failed:", up.status, await up.text()); return json(500, { ok: false, error: "Could not store the photo" }); }
       // Block 209 (owner, Sat 8/22): kind=progress marks an END-OF-DAY cab
       // progress photo — the feed the customer build reports will draw from.
-      const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : url.searchParams.get("kind") === "prep" && !task_id ? "prep" : (url.searchParams.get("kind") === "body" || url.searchParams.get("kind") === "primer") && !task_id ? url.searchParams.get("kind") : null;   // Block 326: body (internal) · primer (the customer set)   // Block 302: prep = a panel-prep photo (warehouse page)
+      const kindQ209 = url.searchParams.get("kind") === "progress" && !task_id ? "progress" : url.searchParams.get("kind") === "prep" && !task_id ? "prep" : (url.searchParams.get("kind") === "body" || url.searchParams.get("kind") === "primer" || url.searchParams.get("kind") === "crate") && !task_id ? url.searchParams.get("kind") : null;   // Block 326: body (internal) · primer (the customer set) · Block 327: crate (the crated cab, internal)   // Block 302: prep = a panel-prep photo (warehouse page)
       const [row] = await db("build_photo", { method: "POST", body: JSON.stringify({
         build_id, task_id, uploaded_by: empId, storage_path: path, kind: kindQ209 || (task_id ? "task" : "finish") }) });
       logEvent("photo.added", empId, { build_id, task_id, photo_id: row ? row.id : null, bytes: buf.length, kind: kindQ209 || undefined, device: dev317, client: meta317 || undefined });   // Block 317: device + what the browser handed over
