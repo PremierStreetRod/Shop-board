@@ -4115,7 +4115,7 @@ const bodyLane326 = (st, isAdmin) => { if (!st || (!st.total && !st.b.body_done_
     ${b.body_moved_to_build_at ? `<div style="padding:6px 0;border-top:1px solid var(--line)">Moved to the Build department ${escH(phxDate(new Date(b.body_moved_to_build_at).getTime()))}${b.body_build_reason ? ` — ${escH(b.body_build_reason)}` : ""}</div>` : ""}
     <div style="margin-top:6px"><a href="/body/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">open the Body page</a>${isAdmin ? ` · <span style="opacity:.6">steps reopen from the Body page; hours are punches (Time corrections under the Manager console)</span>` : ""}</div>
   </div>`; };
-const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = [], body326 = null, wh327 = null) => {
+const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, flags = [], canHours = false, isAdmin97 = false, fixHrs = 0, emp196 = null, activity230 = null, stepsTpl283 = [], share296 = null, prog316 = null, moveLines318 = [], body326 = null, wh327 = null, pastTool330 = false) => {
   // Block 283 (Daniel 9/28): custom extras land AFTER A STEP, not "on a day" — days are gone (282)
   const stepPick283 = (id) => `<select id="${id}" style="max-width:240px;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><option value="">&mdash; end of the list &mdash;</option>${(stepsTpl283 || []).map((st) => `<option value="${escH(st.display_no)}">${escH(st.display_no)}. ${escH(String(st.name).slice(0, 48))}</option>`).join("")}</select>`;
   // Block 138 (owner-rep, B1): floor roles get the money-scrubbed note; the
@@ -4154,9 +4154,15 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <button class="b" style="margin-left:8px" onclick="moveLine318('${b.id}',this)">Move it</button>
     <div class="msg err" id="mvmsg318" style="margin-top:6px"></div>
   </div>` : ""}
-  ${isAdmin97 && ["upcoming", "on_hold"].includes(String(b.state)) && !b.started_at ? `<div class="lane" id="past329" style="border-color:#ffd60a">
-    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">BUILT OUTSIDE THE BOARD? &rarr; PAST PRODUCTION, BUILD DEPARTMENT</div>
-    <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">For a cab that was already built before the board saw this order (an owner build, a custom done elsewhere). It leaves the line's queue for good and shows on Order Tracking as <b>Build department</b> with no left-production date (the board never saw it built). A later Coyote push can't put it back in the queue. Audited; the reason goes on the record.</div>
+  ${isAdmin97 && pastTool330 && ["upcoming", "on_hold"].includes(String(b.state)) && !b.started_at ? `<div class="lane" id="past329" style="border-color:#ffd60a">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">BUILT OUTSIDE THE BOARD? &rarr; PAST PRODUCTION</div>
+    <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">For a cab that was already built before the board saw this order (an owner build, a custom done elsewhere). It leaves the line's queue for good, with no left-production date (the board never saw it built), and lands in the department you pick. A later Coyote push can't put it back in the queue. Audited; the reason goes on the record. This lane shows only while the Features switch "Move a waiting cab past production" is ON.</div>
+    <select id="pd329" style="font-size:1rem;padding:8px;border-radius:8px;background:#111;color:#fff;border:1px solid var(--line);margin-bottom:6px;max-width:100%">
+      <option value="build">Build department — label only (the Build department works it)</option>
+      <option value="body">At Body Shop — its three Body steps appear on the Body list</option>
+      <option value="crating">Crating &amp; shipping — on the warehouse finish-out list</option>
+      <option value="shipped">Shipped — it already left</option>
+    </select>
     <input id="pr329" maxlength="140" placeholder="Why (required) — e.g. owner build, cab finished before the board" style="width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:#111;color:#fff;margin-bottom:6px">
     <button class="b" onclick="pastProd329('${b.id}',this)">Move it past production</button>
     <div class="msg err" id="prmsg329" style="margin-top:6px"></div>
@@ -4284,14 +4290,14 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     } catch (e) { m.textContent = "Network hiccup — try again"; btn.disabled = false; btn.dataset.armed = ""; }
   }
   async function pastProd329(bid, btn){
-    const m = document.getElementById("prmsg329"); const reason = (document.getElementById("pr329").value || "").trim();
+    const m = document.getElementById("prmsg329"); const reason = (document.getElementById("pr329").value || "").trim(); const sel = document.getElementById("pd329"); const dest = sel.value; const destName = sel.options[sel.selectedIndex].textContent.split(" — ")[0];
     if (!reason) { m.textContent = "Type why — it goes on the record"; return; }
-    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o = btn.textContent; btn.textContent = "Past production, Build department? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o; }, 5000); return; }
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o = btn.textContent; btn.textContent = "Past production → " + destName + "? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o; }, 5000); return; }
     btn.disabled = true; m.textContent = "Moving…";
     try {
-      const r = await fetch("/api/admin/build/past-production", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, reason }) });
+      const r = await fetch("/api/admin/build/past-production", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, reason, dest }) });
       const out = await r.json();
-      if (out.ok) { m.style.color = "#30d158"; m.textContent = "Done — it reads Build department on Order Tracking. Reloading…"; return location.reload(); }
+      if (out.ok) { m.style.color = "#30d158"; m.textContent = "Done — it reads " + destName + " on Order Tracking. Reloading…"; return location.reload(); }
       m.textContent = out.error || "Couldn't move it"; btn.disabled = false; btn.dataset.armed = "";
     } catch (e) { m.textContent = "Network hiccup — try again"; btn.disabled = false; btn.dataset.armed = ""; }
   }
@@ -5775,6 +5781,7 @@ const ROLE_LABEL = { production: "Team Member", manager: "Manager", admin: "Admi
 // Plain-language names for every toggle key (file 22: no jargon on screens).
 const TOGGLE_INFO = {
   tv_board: ["The TV board", "The big board on the shop TV."],
+  past_production_tool: ["Move a waiting cab past production (admin)", "OFF = hidden on every order. ON = the admin order page of a cab that has not started offers 'Built outside the board → past production' into At Body Shop / Crating & shipping / Shipped / Build department. A special case (an owner build pushed from Coyote, 19059) — switch it on when needed, off after (Daniel 10/26 09:07)."],   // Block 330
   body_pace_tv: ["Body pace on the TV", "OFF = Body never shows on the TV board (Daniel 10/25: Body does not run against a clock at launch). ON = a BODY strip under the line tiles — each cab's hours vs allowed, same colors as production."],   // Block 326
   body_pace_notices: ["Body pace notices", "OFF = silence. ON = a bell-only fact to the Body managers when a step runs well past its allowed hours — never a buzz, never to the crew."],   // Block 326
   body_customer_photos_all: ["Customer sees ALL body photos", "OFF = customers see only the in-primer set (work photos stay internal — the filler stigma). ON = every Body photo shows on customer reports and share links."],   // Block 326 (owners' call)
@@ -13006,7 +13013,8 @@ http.createServer(async (req, res) => {
       if (canFull86 && (bO.body_done_at || bO.body_moved_to_build_at || ["production_complete", "complete", "rework", "fix_job"].includes(String(bO.state)))) { try { body326o = (await bodyStatus326([bO]))[0] || null; if (body326o && !body326o.total && !bO.body_done_at && !bO.body_moved_to_build_at) body326o = null; } catch (eB) { body326o = null; } }
       let wh327o = null;
       if (canFull86 && (bO.body_done_at || bO.shipped_at || bO.wh_sent_back_at)) { try { wh327o = (await whStatus327([bO], true))[0] || null; } catch (eW) { wh327o = null; } }   // Block 327: the WAREHOUSE lane once the cab is out of Body
-      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318, body326o, wh327o));
+      let pastTool330 = false; if (isAdmin97r && ["upcoming", "on_hold"].includes(String(bO.state))) { try { const [tg330] = await db("feature_toggle?select=enabled&key=eq.past_production_tool"); pastTool330 = Boolean(tg330 && tg330.enabled); } catch (e) { pastTool330 = false; } }   // Block 330: the switch
+      return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318, body326o, wh327o, pastTool330));
     }
 
     // Block 211: the Progress Reports HUB — admin-only front door.
@@ -16300,17 +16308,29 @@ self.addEventListener("notificationclick", (e) => {
     // the queue; Order Tracking reads Build department with no left-production date; the sync never returns it.
     if (url.pathname === "/api/admin/build/past-production" && req.method === "POST") {
       const [adminP, failP] = await requireAdmin(); if (failP) return failP;
-      const { build_id, reason } = await body(req);
+      const { build_id, reason, dest } = await body(req);
+      const [tgP] = await db("feature_toggle?select=enabled&key=eq.past_production_tool");   // Block 330 (Daniel 10/26 09:07): a switch, OFF — a special case, not every order
+      if (!tgP || !tgP.enabled) return json(400, { ok: false, error: "This tool is switched off — turn on \"Move a waiting cab past production\" under Admin → Features first" });
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
       const rs = String(reason || "").trim().slice(0, 140); if (!rs) return json(400, { ok: false, error: "Type why — it goes on the record" });
-      const [bP] = await db(`build?select=id,order_number,cab_number,line_id,state,started_at,kit_pull_started_at&id=eq.${build_id}`);
+      const dP = String(dest || "build"); if (!["build", "body", "crating", "shipped"].includes(dP)) return json(400, { ok: false, error: "Which department?" });
+      const [bP] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,line_id,state,started_at,kit_pull_started_at&id=eq.${build_id}`);
       if (!bP) return json(404, { ok: false, error: "Cab not found" });
       if (!["upcoming", "on_hold"].includes(String(bP.state)) || bP.started_at) return json(400, { ok: false, error: "Only a cab that is waiting to start can be moved past production this way" });
       const nowP = new Date().toISOString();
-      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete", left_production_at: null, queue_pos: null, queue_pinned: false, kit_pull_started_at: null, kit_pull_started_by: null, body_moved_to_build_at: nowP, body_moved_to_build_by: adminP, body_build_reason: rs }) });
-      logEvent("build.past_production", adminP, { build_id, order_number: bP.order_number, cab_number: bP.cab_number || null, from_state: bP.state, line_id: bP.line_id, reason: rs, pull_cancelled: Boolean(bP.kit_pull_started_at) });
-      logEvent("body.moved_to_build", adminP, { build_id, order_number: bP.order_number, reason: rs, from_queue: true });
-      try { void notify("cab.past_production", [...new Set([...(await warehouseIds()), ...(await adminIds225())])], `Order ${bP.order_number}${bP.cab_number ? ` (Cab #${bP.cab_number})` : ""} left the queue — Build department`, `An admin moved it past production: ${rs}. It is off the line-up and reads Build department on Order Tracking.`, "/order/" + encodeURIComponent(bP.order_number)); } catch (e) {}
+      const patchP = { state: "production_complete", left_production_at: null, queue_pos: null, queue_pinned: false, kit_pull_started_at: null, kit_pull_started_by: null };
+      if (dP === "build") { patchP.body_moved_to_build_at = nowP; patchP.body_moved_to_build_by = adminP; patchP.body_build_reason = rs; }
+      if (dP === "crating") { patchP.body_done_at = nowP; patchP.body_done_by = adminP; patchP.stage = "crating"; patchP.stage_set_at = nowP; patchP.stage_set_by = adminP; patchP.stage_reason = rs; }
+      if (dP === "shipped") { patchP.shipped_at = nowP; patchP.shipped_by = adminP; patchP.stage = "shipped"; patchP.stage_set_at = nowP; patchP.stage_set_by = adminP; patchP.stage_reason = rs; }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchP) });
+      const bAfter = { ...bP, ...patchP };
+      if (dP === "body") { try { await ensureBodyTasks326(bAfter, adminP); } catch (e) { console.error("past-production body entry:", e && e.message); } }
+      if (dP === "crating") { try { await ensureWhTask327(bAfter, adminP); } catch (e) { console.error("past-production wh entry:", e && e.message); } }
+      const label = STAGES323[dP] || dP;
+      logEvent("build.past_production", adminP, { build_id, order_number: bP.order_number, cab_number: bP.cab_number || null, from_state: bP.state, line_id: bP.line_id, dest: dP, dest_label: label, reason: rs, pull_cancelled: Boolean(bP.kit_pull_started_at) });
+      if (dP === "build") logEvent("body.moved_to_build", adminP, { build_id, order_number: bP.order_number, reason: rs, from_queue: true });
+      if (dP === "crating" || dP === "shipped") logEvent("build.stage_moved", adminP, { build_id, order_number: bP.order_number, from: "queue", to: dP, to_label: label, reason: rs });
+      try { void notify("cab.past_production", [...new Set([...(await warehouseIds()), ...(await adminIds225())])], `Order ${bP.order_number}${bP.cab_number ? ` (Cab #${bP.cab_number})` : ""} left the queue — ${label}`, `An admin moved it past production: ${rs}. It is off the line-up and reads ${label} on Order Tracking.`, "/order/" + encodeURIComponent(bP.order_number)); } catch (e) {}
       try { await revertStrandedPull(bP.line_id, adminP); } catch (e) {}
       return json(200, { ok: true });
     }
