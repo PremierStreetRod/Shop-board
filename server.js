@@ -4154,6 +4154,13 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     <button class="b" style="margin-left:8px" onclick="moveLine318('${b.id}',this)">Move it</button>
     <div class="msg err" id="mvmsg318" style="margin-top:6px"></div>
   </div>` : ""}
+  ${isAdmin97 && ["upcoming", "on_hold"].includes(String(b.state)) && !b.started_at ? `<div class="lane" id="past329" style="border-color:#ffd60a">
+    <div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">BUILT OUTSIDE THE BOARD? &rarr; PAST PRODUCTION, BUILD DEPARTMENT</div>
+    <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">For a cab that was already built before the board saw this order (an owner build, a custom done elsewhere). It leaves the line's queue for good and shows on Order Tracking as <b>Build department</b> with no left-production date (the board never saw it built). A later Coyote push can't put it back in the queue. Audited; the reason goes on the record.</div>
+    <input id="pr329" maxlength="140" placeholder="Why (required) — e.g. owner build, cab finished before the board" style="width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:#111;color:#fff;margin-bottom:6px">
+    <button class="b" onclick="pastProd329('${b.id}',this)">Move it past production</button>
+    <div class="msg err" id="prmsg329" style="margin-top:6px"></div>
+  </div>` : ""}
   ${body326 ? bodyLane326(body326, isAdmin97) : ""}
   ${wh327 ? whLane327(wh327, isAdmin97) : ""}
   ${share296 ? shareLane296(b, share296.photoCount, share296.links, share296.myMobile) : ""}
@@ -4273,6 +4280,18 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       const r = await fetch("/api/admin/build/line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, line_id: to }) });
       const out = await r.json();
       if (out.ok) { m.style.color = "#30d158"; m.textContent = "Moved — it is now in " + name + "'s queue. Reloading…"; return location.reload(); }
+      m.textContent = out.error || "Couldn't move it"; btn.disabled = false; btn.dataset.armed = "";
+    } catch (e) { m.textContent = "Network hiccup — try again"; btn.disabled = false; btn.dataset.armed = ""; }
+  }
+  async function pastProd329(bid, btn){
+    const m = document.getElementById("prmsg329"); const reason = (document.getElementById("pr329").value || "").trim();
+    if (!reason) { m.textContent = "Type why — it goes on the record"; return; }
+    if (!btn.dataset.armed) { btn.dataset.armed = "1"; const o = btn.textContent; btn.textContent = "Past production, Build department? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = o; }, 5000); return; }
+    btn.disabled = true; m.textContent = "Moving…";
+    try {
+      const r = await fetch("/api/admin/build/past-production", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, reason }) });
+      const out = await r.json();
+      if (out.ok) { m.style.color = "#30d158"; m.textContent = "Done — it reads Build department on Order Tracking. Reloading…"; return location.reload(); }
       m.textContent = out.error || "Couldn't move it"; btn.disabled = false; btn.dataset.armed = "";
     } catch (e) { m.textContent = "Network hiccup — try again"; btn.disabled = false; btn.dataset.armed = ""; }
   }
@@ -8699,6 +8718,15 @@ async function syncRun(apply, actorId) {
               }
             } catch (eD) { logEvent("option.change_check_error", null, { order_number: t.order_number, error: String((eD && eD.message) || eD) }); }
           }
+        } else if (["production_complete", "complete"].includes(String(b.state))) {
+          // Block 329: a never-started cab an admin sent PAST production (built outside the board — 19059) stays
+          // there on every later push; only the office words follow Coyote, never the state or the line.
+          const patch329 = {};
+          if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch329.invoice_note = t.invoice_note; patch329.note_flagged = t.note_flagged; }
+          if ((b.customer_name || "") !== (t.customer_name || "")) patch329.customer_name = t.customer_name;
+          if ((b.destination || "") !== (t.destination || "")) patch329.destination = t.destination;
+          if (apply && Object.keys(patch329).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch329) });
+          sum.noop++; A(t.order_number, "past production by an admin — state untouched", { past: true });
         } else {
           // Block 120: a NOT-started cab follows Coyote — Hold sets it aside
           // (state on_hold, off the line-up), Queued returns it to upcoming in
@@ -16267,6 +16295,25 @@ self.addEventListener("notificationclick", (e) => {
     // line_override makes it stick against the Coyote sync; moving it back to its family's line
     // clears the override. Audited; the warehouse + production managers get a bell-only note so
     // the kit lands in the right lane. Started cabs are refused — the line freezes at start.
+    // Block 329 (Daniel 10/26 08:33, order 19059 — Rob's own Blazer build, edited in Coyote and pushed to the board though
+    // the cab was built long ago): an admin sends a WAITING cab past production into the Build department. It leaves
+    // the queue; Order Tracking reads Build department with no left-production date; the sync never returns it.
+    if (url.pathname === "/api/admin/build/past-production" && req.method === "POST") {
+      const [adminP, failP] = await requireAdmin(); if (failP) return failP;
+      const { build_id, reason } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const rs = String(reason || "").trim().slice(0, 140); if (!rs) return json(400, { ok: false, error: "Type why — it goes on the record" });
+      const [bP] = await db(`build?select=id,order_number,cab_number,line_id,state,started_at,kit_pull_started_at&id=eq.${build_id}`);
+      if (!bP) return json(404, { ok: false, error: "Cab not found" });
+      if (!["upcoming", "on_hold"].includes(String(bP.state)) || bP.started_at) return json(400, { ok: false, error: "Only a cab that is waiting to start can be moved past production this way" });
+      const nowP = new Date().toISOString();
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ state: "production_complete", left_production_at: null, queue_pos: null, queue_pinned: false, kit_pull_started_at: null, kit_pull_started_by: null, body_moved_to_build_at: nowP, body_moved_to_build_by: adminP, body_build_reason: rs }) });
+      logEvent("build.past_production", adminP, { build_id, order_number: bP.order_number, cab_number: bP.cab_number || null, from_state: bP.state, line_id: bP.line_id, reason: rs, pull_cancelled: Boolean(bP.kit_pull_started_at) });
+      logEvent("body.moved_to_build", adminP, { build_id, order_number: bP.order_number, reason: rs, from_queue: true });
+      try { void notify("cab.past_production", [...new Set([...(await warehouseIds()), ...(await adminIds225())])], `Order ${bP.order_number}${bP.cab_number ? ` (Cab #${bP.cab_number})` : ""} left the queue — Build department`, `An admin moved it past production: ${rs}. It is off the line-up and reads Build department on Order Tracking.`, "/order/" + encodeURIComponent(bP.order_number)); } catch (e) {}
+      try { await revertStrandedPull(bP.line_id, adminP); } catch (e) {}
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/admin/build/line" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const p = await body(req);
