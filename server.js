@@ -765,6 +765,35 @@ async function planHoursPerDay314() {
   PLAN_HPD_314.loadedAt = Date.now(); return PLAN_HPD_314.value;
 }
 const daysFor314 = (hours, people, hpd) => Math.max(1, Math.ceil(Number(hours) / (Math.max(1, Number(people) || 1) * (Number(hpd) || 8)) - 1e-9));
+// Block 332 (Daniel 10/27 17:36: "Line Idle for: TIME … the complete time that line has had no one
+// working a step since it started on the line … make sure it calculates for lunch time so it doesnt
+// track that, one hour per day"): the one idle number the TV tile and the reports share.
+// Walks every OPEN shop day from startMs to endMs; on each day the window is [open, close] clipped
+// to the cab's life; idle = the window minus the union of the line's punches (test accounts out);
+// then ONE HOUR of lunch comes off that day's idle (never below zero), credited only once the clock
+// is past 11 AM (lunch cannot have happened at 9 AM). Nights, weekends and closed days never count.
+// ivs: [{start, end}] line coverage in ms; hrs: {open, close} shop hours; isOpenDay(yyyy-mm-dd).
+// Returns hours to a tenth plus the open days walked. Pure — proven in tests/t332_test.js.
+function idleSinceStart332(ivs, startMs, endMs, hrs, isOpenDay) {
+  const out = { hours: 0, days: 0, rawHours: 0, lunchHours: 0 };
+  if (!(startMs > 0) || !(endMs > startMs)) return out;
+  let idleMs = 0, rawMs = 0, lunchMs = 0;
+  for (let d = new Date(startMs - PHX_OFFSET_MS); ; d = new Date(d.getTime() + 86400000)) {
+    const dayKey = d.toISOString().slice(0, 10);
+    const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + PHX_OFFSET_MS;   // Phoenix midnight in UTC ms
+    if (dayStart > endMs) break;
+    if (!isOpenDay(dayKey)) continue;
+    const a = Math.max(dayStart + hrs.open * 3600000, startMs), z = Math.min(dayStart + hrs.close * 3600000, endMs);
+    if (z <= a) continue;
+    out.days++;
+    const covered = unionMs310(ivs, a, z);
+    const raw = Math.max(0, (z - a) - covered);
+    const lunch = z > dayStart + 11 * 3600000 ? Math.min(3600000, raw) : 0;
+    rawMs += raw; lunchMs += lunch; idleMs += raw - lunch;
+  }
+  out.hours = Math.round(idleMs / 360000) / 10; out.rawHours = Math.round(rawMs / 360000) / 10; out.lunchHours = Math.round(lunchMs / 360000) / 10;
+  return out;
+}
 // Block 316 (Daniel, 10/20 evening — Playbook 68): the board's "% done" credits OPEN steps by the
 // hours poured into them (Block 280 replay), capped at 90% of each step's allowance; the last 10%
 // of a step only comes with its done tap, so 100% means every step is signed off. 23755 read 71%
@@ -3477,6 +3506,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
   .status{font-weight:700;margin-top:6px}
   .s-green{color:#30d158}.s-amber{color:#ffd60a}.s-red{color:#ff453a}.s-none{color:#8e8e93}
   .day{float:right;font-size:1.1rem;opacity:.8;font-weight:700}
+  .idle332{margin-top:10px;display:inline-block;background:#2a2a2e;border:1px solid #3a3a3c;border-radius:10px;padding:6px 12px;font-size:1.05rem;color:#d6d6d9;white-space:nowrap}
   #rail>div:first-child{grid-column:1/-1}
 </style></head>
 <body>
@@ -3608,6 +3638,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             ? \`ON DECK: ORDER \${ol(l.ondeck.order)} · \${l.ondeck.family}\${l.ondeck.customer ? " · " + l.ondeck.customer : ""}\${l.ondeck.dest ? " · " + l.ondeck.dest : ""}\${l.ondeck.prep === "done" ? " · ✓ panels ready" : l.ondeck.prep === "in_progress" ? " · panels in progress" : ""}\`
             : "ON DECK: — nothing queued"}</div>
           <div class="techs" \${l.techs.length ? "" : 'style="opacity:.4"'}>\${l.techs.length ? "On the clock: " + l.techs.join(" · ") : "Nobody on the clock"}</div>
+          \${l.cab && l.cab.idle ? \`<div class="idle332">Line idle for: <b>\${l.cab.idle.hours} hrs</b></div>\` : ""}
         </div>\`).join("");
       // Block 326: the BODY strip — only when the server sends it (the "Body pace on the TV" toggle). One chip per cab, the same colors.
       var bs326 = document.getElementById("bodystrip326");
@@ -7059,9 +7090,9 @@ async function reportData(startMs, endMs) {
   // event log (spec §3); Q86 actor_id on the sign-off event = WHO passed
   // steel; the 10k clock_event read keeps the board engine's windowing caveat.
   const [lines, empsAllR215, builds, compEv, rwEv, fxEv, events, ahSess] = await Promise.all([
-    db(`line?select=id,name&order=id`),
+    db(`line?select=id,name,enabled&order=id`),   // Block 332: +enabled (the line-time lane skips retired lines)
     db(`employee?select=id,first_name,last_name,active,role`),
-    db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason&order=created_at`),
+    db(`build?select=id,order_number,part_number,cab_number,line_id,state,started_at,promised_finish,rework_reason,rework_assigned_at&order=created_at`),   // Block 332: +rework_assigned_at (the line-time lane)
     db(`event_log?select=at,actor_id,payload&event_type=eq.build.production_complete&order=at.asc&limit=2000`),
     db(`event_log?select=at,payload&event_type=eq.build.rework_assigned&order=at.asc&limit=2000`),
     db(`event_log?select=at,payload&event_type=eq.build.fixjob_opened&order=at.asc&limit=2000`),
@@ -7080,8 +7111,8 @@ async function reportData(startMs, endMs) {
   // was out, duties flowed up) can be tagged in the record.
   const nameOf = {}, roleOf = {};
   for (const p of emps) { nameOf[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim(); roleOf[p.id] = p.role; }
-  const doneAt = {}, signerOf = {};
-  for (const e of compEv) if (e.payload && e.payload.build_id) { doneAt[e.payload.build_id] = new Date(e.at).getTime(); signerOf[e.payload.build_id] = { id: e.actor_id, role: (e.payload && e.payload.by_role) || null }; }
+  const doneAt = {}, signerOf = {}; const doneAll332 = {};   // Block 332: EVERY sign-off time per build (a reworked cab is signed off twice)
+  for (const e of compEv) if (e.payload && e.payload.build_id) { (doneAll332[e.payload.build_id] = doneAll332[e.payload.build_id] || []).push(new Date(e.at).getTime()); doneAt[e.payload.build_id] = new Date(e.at).getTime(); signerOf[e.payload.build_id] = { id: e.actor_id, role: (e.payload && e.payload.by_role) || null }; }
   const finished = builds.filter((b) => b.state === "production_complete" && doneAt[b.id] && doneAt[b.id] >= sinceMs && doneAt[b.id] <= winEnd && b.started_at);
   const live = builds.filter((b) => ["active", "rework", "awaiting_inspection"].includes(b.state));
   // Standard hours = the cab's own FROZEN task list (Q97); rework fix tasks
@@ -7277,6 +7308,53 @@ async function reportData(startMs, endMs) {
     row.hrs += hrs; row.n++; dtTotal += hrs; dtCount++;
   }
   const downtime = { total: dtTotal, count: dtCount, byReason: Object.values(dtMap).sort((a, b) => b.hrs - a.hrs) };
+  // Block 332 (Daniel 10/27: "the time where NO cab is on a line should be calculated and used in reports
+  // so the owners can know about this too"): LINE TIME — every production line's open shop hours in the
+  // window split three ways: WORKED (a cab on the line and someone clocked onto it), IDLE (a cab on the
+  // line, nobody on it — the TV's "Line idle for" number, same rule), EMPTY (no cab on the line at all).
+  // A cab is on the line from its start to its sign-off (build.production_complete) — or now, if it is
+  // still there. One lunch hour a day comes off, idle first, then empty (Daniel: one hour per day).
+  // Test-account punches are out (Block 215). Never on the floor board — management reads only.
+  const isOpen332 = openDayFn316(await calendarOverrides());
+  const testIds332 = new Set(empsAllR215.filter((e) => isTestAcct215(e)).map((e) => e.id));
+  const lineTime = [];
+  for (const l of lines) {
+    if (l.enabled === false || l.id === FIX_LINE_ID || l.id === WH_LINE_ID || l.id === 10) continue;
+    // a cab's stints on the line: start → its first sign-off after that (or now if still there); a rework adds a second
+    // stint from the rework start → the next sign-off (or now) — the days it was off the line in between are EMPTY
+    const stints = [];
+    for (const b of builds) {
+      if (b.line_id !== l.id || !b.started_at || ["fix_job", "upcoming", "on_hold", "cancelled"].includes(String(b.state))) continue;
+      const onLineNow = ["active", "awaiting_inspection", "rework"].includes(String(b.state));
+      const dones = (doneAll332[b.id] || []).slice().sort((x, y) => x - y);
+      const endAfter = (t) => { const d = dones.find((x) => x > t); return d || (onLineNow ? nowMs : null); };
+      const s1 = new Date(b.started_at).getTime(), e1 = endAfter(s1);
+      if (e1 && e1 > s1) stints.push({ start: s1, end: e1 });
+      const rw = b.rework_assigned_at ? new Date(b.rework_assigned_at).getTime() : 0;
+      if (rw > s1 && (!e1 || rw > e1)) { const e2 = endAfter(rw); if (e2 && e2 > rw) stints.push({ start: rw, end: e2 }); }
+    }
+    const punches = ivs.filter((iv) => Number(iv.line) === l.id && !testIds332.has(iv.emp));
+    const workedIvs = [];   // punches clipped to the cab stints — time on the line WITH a cab on it
+    for (const pv of punches) for (const st of stints) { const s0 = Math.max(pv.start, st.start), e0 = Math.min(pv.end, st.end); if (e0 > s0) workedIvs.push({ start: s0, end: e0 }); }
+    const row = { id: l.id, name: l.name, shop: 0, worked: 0, idle: 0, empty: 0, days: 0 };
+    for (let d = new Date(sinceMs - PHX_OFFSET_MS); ; d = new Date(d.getTime() + 86400000)) {
+      const dayKey = d.toISOString().slice(0, 10);
+      const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + PHX_OFFSET_MS;
+      if (dayStart >= winEnd) break;
+      if (!isOpen332(dayKey)) continue;
+      const a = Math.max(dayStart + shD.open * 3600000, sinceMs), z = Math.min(dayStart + shD.close * 3600000, winEnd, nowMs);
+      if (z <= a) continue;
+      row.days++;
+      const occupied = unionMs310(stints, a, z), worked = unionMs310(workedIvs, a, z);
+      const idleRaw = Math.max(0, occupied - worked), emptyRaw = Math.max(0, (z - a) - occupied);
+      let credit = z > dayStart + 11 * 3600000 ? 3600000 : 0;
+      const lunchIdle = Math.min(credit, idleRaw); credit -= lunchIdle;
+      const lunchEmpty = Math.min(credit, emptyRaw);
+      row.shop += (z - a) - (lunchIdle + lunchEmpty); row.worked += worked; row.idle += idleRaw - lunchIdle; row.empty += emptyRaw - lunchEmpty;   // shop = worked + idle + empty, always (review fix)
+    }
+    for (const k of ["shop", "worked", "idle", "empty"]) row[k] = Math.round(row[k] / 360000) / 10;
+    lineTime.push(row);
+  }
   // ON-TIME TREND (Q26): the last 6 Phoenix months, INDEPENDENT of the window
   // picker above — throughput (cabs shipped) + on-time % + avg days late per
   // month, so the owner can see if the shop is trending better. Reuses the
@@ -7302,7 +7380,7 @@ async function reportData(startMs, endMs) {
     month: k, label: MON[+k.slice(5, 7)] + " " + k.slice(0, 4), done: r.done, rated: r.rated,
     pct: r.rated ? Math.round(100 * r.onT / r.rated) : null,
     avgLate: lateN ? Math.round(r.lateSum / lateN * 10) / 10 : 0 }; });
-  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime, trend };
+  return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime, lineTime, trend };   // Block 332: +lineTime
 }
 
 // Block 235: hours display keeps QUARTER precision — "8.25"/"7.75" stay
@@ -7419,6 +7497,14 @@ const reportsPage = (d, isAdmin = false, emp196 = null) => `<!doctype html>
       <div style="opacity:.5;font-size:.85rem;margin-top:8px">A "down for today" hold runs until a clock-in resumed the line that day, or the shop's close if it stayed down. This is production time lost to stoppages — where to look first to protect the schedule.</div>`
     : `<div style="opacity:.6">No line-down holds in this period.</div>`}
   </div>
+  <div class="lane">
+    <h3>Line time — worked, idle, empty <a class="csv" href="/reports.csv?which=linetime&${d.qs}">&#11015; CSV</a></h3>
+    ${d.lineTime && d.lineTime.length ? `<table><tr><th>Line</th><th class="num">Shop hrs</th><th class="num">Worked</th><th class="num">Idle (cab, nobody on it)</th><th class="num">Empty (no cab)</th><th class="num">Idle %</th><th class="num">Empty %</th></tr>
+      ${d.lineTime.map((r) => `<tr><td><b>${escH(r.name)}</b></td><td class="num">${h1(r.shop)}</td><td class="num">${h1(r.worked)}</td><td class="num">${h1(r.idle)}</td><td class="num">${h1(r.empty)}</td><td class="num" style="opacity:.6">${r.shop ? Math.round(100 * r.idle / r.shop) : 0}%</td><td class="num" style="opacity:.6">${r.shop ? Math.round(100 * r.empty / r.shop) : 0}%</td></tr>`).join("")}
+      ${(() => { const t = d.lineTime.reduce((acc, r) => ({ shop: acc.shop + r.shop, worked: acc.worked + r.worked, idle: acc.idle + r.idle, empty: acc.empty + r.empty }), { shop: 0, worked: 0, idle: 0, empty: 0 }); return `<tr style="font-weight:700;border-top:2px solid #444"><td>All lines</td><td class="num">${h1(t.shop)}</td><td class="num">${h1(t.worked)}</td><td class="num">${h1(t.idle)}</td><td class="num">${h1(t.empty)}</td><td class="num">${t.shop ? Math.round(100 * t.idle / t.shop) : 0}%</td><td class="num">${t.shop ? Math.round(100 * t.empty / t.shop) : 0}%</td></tr>`; })()}</table>
+      <div style="opacity:.5;font-size:.85rem;margin-top:8px">Open shop days in the period, within shop hours. <b>Worked</b> = a cab on the line with someone clocked onto it. <b>Idle</b> = a cab on the line and nobody on it — the same number the TV tile shows as "Line idle for". <b>Empty</b> = no cab on the line at all. One lunch hour a day comes off (idle first, then empty). A cab is on its line from its start to its sign-off.</div>`
+    : `<div style="opacity:.6">No open shop days in this period.</div>`}
+  </div>
   <!-- Q85 suite 5: SIGN-OFF ESCAPES — cabs that came BACK after manager sign-off
        (Body Shop kickbacks + customer returns). The number the inspection gate
        exists to drive to zero. Management-only, like the rest of reports. -->
@@ -7443,6 +7529,9 @@ function reportCsv(which, d) {
   if (which === "labor")
     return row(["Employee", "Clocked hours", "Days present"]) +
       d.labor.map((r) => row([r.name, h1(r.hrs), r.days])).join("");
+  if (which === "linetime")   // Block 332
+    return row(["Line", "Shop hours", "Worked hours", "Idle hours (cab on line, nobody on it)", "Empty hours (no cab)", "Idle %", "Empty %", "Open days"]) +
+      (d.lineTime || []).map((r) => row([r.name, h1(r.shop), h1(r.worked), h1(r.idle), h1(r.empty), r.shop ? Math.round(100 * r.idle / r.shop) : 0, r.shop ? Math.round(100 * r.empty / r.shop) : 0, r.days])).join("");
   if (which === "timecards")
     return row(["Employee", "Date", "First in", "Last out", "On-clock hours (exact)", "Paid hours (worksheet rounding)", "Shop-time hours", "Fix-work hours", "Notes / flags"]) +
       d.timecards.map((t) => row([t.name, t.date, phxHM(new Date(t.firstIn).toISOString()),
@@ -13160,7 +13249,7 @@ http.createServer(async (req, res) => {
       // the projections — its six independent reads now land in one round trip.
       const [lines, emps, builds, namesTogRows212, prods, hrsB] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason,people_planned&enabled=is.true&order=id`),   // Block 314: +people_planned
-        db(`employee?select=id,first_name&active=is.true`),
+        db(`employee?select=id,first_name,last_name&active=is.true`),   // Block 332 review: +last_name so the "Test Account" half of isTestAcct215 works on the board
         db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state
         // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
         // order #, customer or business name, ship-to state. The Q65 toggle
@@ -13322,6 +13411,10 @@ http.createServer(async (req, res) => {
           techs: fixOn267[b.id] || [],
           line: (lines.find((l2) => l2.id === b.line_id) || {}).name || "" };
       });
+      // Block 332: the "Line idle for" number — the line's punches with test accounts out (like 258),
+      // walked from the cab's start over open shop days, one lunch hour a day off (idleSinceStart332).
+      const testIds332 = new Set(emps.filter((e) => isTestAcct215(e)).map((e) => e.id));
+      const idleIvs332 = {}; for (const iv of pairLineIvs258(events.filter((p) => !testIds332.has(p.employee_id)), now)) (idleIvs332[iv.line] = idleIvs332[iv.line] || []).push(iv);
       const payload298 = { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]), prep: deckOf[l.id].prep_state || "none" } : null;   // Block 301: panels ready / in progress / not yet
@@ -13420,6 +13513,8 @@ http.createServer(async (req, res) => {
             remaining_mh: fixJob ? "0.0" : (a.total - a.done).toFixed(1),
             steps_total: (tcnt230[b.id] || {}).total || 0, steps_done: (tcnt230[b.id] || {}).done || 0, steps_open: (tcnt230[b.id] || {}).open || 0,
             color: rcolor, status: rstatus, badge, day: fixJob ? 0 : day,
+            // Block 332: "Line idle for" — cumulative shop hours since the cab started with nobody clocked onto the line, one lunch hour a day off. A fact, never a color.
+            idle: fixJob ? null : idleSinceStart332(idleIvs332[l.id] || [], b.state === "rework" ? new Date(b.rework_assigned_at || b.started_at).getTime() : startMs, now, hrsB, isOpen316),   // a rework cab counts from the rework start, not the original start
             // Block 314: shop days still needed = hours not yet earned ÷ (plan h/day × people planned on THIS line) — the same rule as the promise
             // Block 316: while ANY step is still open the cab is not finished — at least one shop day remains (an over-allowance open step used to read 0)
             people_planned: Number(l.people_planned) > 0 ? Number(l.people_planned) : 1,
@@ -14067,7 +14162,7 @@ http.createServer(async (req, res) => {
       Object.assign(data, { preset: period.preset, from: period.from, to: period.to,
         qs: period.qs, label: period.label, rangeText: period.rangeText });
       if (url.pathname === "/reports.csv") {
-        const which = ["products", "labor", "cabs", "timecards"].includes(url.searchParams.get("which"))
+        const which = ["products", "labor", "cabs", "timecards", "linetime"].includes(url.searchParams.get("which"))   // Block 332: +linetime
           ? url.searchParams.get("which") : "cabs";
         const tag = period.preset === "custom" ? `${period.from}_to_${period.to}` : period.preset;
         res.writeHead(200, { "content-type": "text/csv; charset=utf-8",
