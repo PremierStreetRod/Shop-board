@@ -735,6 +735,81 @@ function isAfterHoursDept(ms, hrs, dept) {
   return dow === 0 || dow === 6 || mins < openMin || mins >= hrs.close * 60;
 }
 
+// ===== Block 334 (Daniel 10/28 10:11, after the Tuesday-night lesson — Andrew and Christopher switched to Shop
+// time at 4, the clock closed them at 5, and at 9 PM their clock-OUT became an after-hours clock-IN): STAYING LATE.
+// "it should show at 3:30pm. dont need who ok'd it at all. just let them select staying late and keep their time
+// moving. then they will just have a simple clock out when they leave after 5pm as if they were clocking out like
+// normal after hours clock in." One tap on Home from close − 30 min opens the SAME after_hours_session the evening
+// clock-in uses, starting AT CLOSE (3:30–4:00 stays regular time); the sweep reads the open session instead of
+// guessing from the punch time; clock-out is the after-hours clock-out they already know (wrap-up → sign-off).
+// A clock-out before close cancels the session quietly. The RECOVERY card: auto-closed today and back on Home
+// after hours → "were you still working?" — Yes files the evening as after-hours from close to now.
+const STAY_LEAD_MIN_334 = 30;   // the card shows this many minutes before close
+function stayCloseMs334(nowMs, hrs) { return dayEndOf(nowMs, hrs.close); }
+// What the Home should show: none | offer | on | recover (+ the facts the card prints). Pure; proven in t334.
+function stayState334(nowMs, hrs, lastPunch, openSess, isOpenDay) {
+  const closeMs = stayCloseMs334(nowMs, hrs);
+  const clockedIn = Boolean(lastPunch && lastPunch.kind === "clock_in");
+  const today = phxDate(nowMs);
+  if (clockedIn) {
+    if (MKT_LINES_290.has(Number(lastPunch.line_id))) return { card: "none" };   // Marketing hours have no shop day end (Block 290)
+    if (openSess) {
+      const st = new Date(openSess.started_at).getTime();
+      if (openSess.reason === "Staying late" && st < nowMs - 24 * 3600000) return { card: "none", stale: true };   // a stale row from another day never shows (reviewer)
+      return { card: openSess.reason === "Staying late" ? "on" : "none", since: st, started: st <= nowMs };
+    }
+    if (!isOpenDay) return { card: "none" };
+    if (nowMs >= closeMs - STAY_LEAD_MIN_334 * 60000 && nowMs < closeMs + 8 * 3600000) return { card: "offer", closeMs };
+    return { card: "none" };
+  }
+  // not on the clock: the recovery card — auto-closed TODAY at the day-end hard stop, nothing corrected since, and it is after that stamp now
+  if (isOpenDay && lastPunch && lastPunch.kind === "clock_out_auto" && /^Auto — day end/.test(String(lastPunch.reason || "")) && !lastPunch.corrected_by && !lastPunch.added_by
+      && !/Staying late card — No/.test(String(lastPunch.correction_note || ""))
+      && phxDate(new Date(lastPunch.claimed_at).getTime()) === today && nowMs > new Date(lastPunch.claimed_at).getTime())
+    return { card: "recover", autoAt: new Date(lastPunch.claimed_at).getTime(), closeMs, line_id: lastPunch.line_id };
+  return { card: "none" };
+}
+// The per-request read for a Home: the last punch (any kind, with the correction stamps) and the open session.
+async function stayFor334(empId, hrs) {
+  try {
+    const [lastRows, sessRows] = await Promise.all([
+      db(`clock_event?select=kind,line_id,claimed_at,reason,corrected_by,added_by,correction_note&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+      db(`after_hours_session?select=id,started_at,reason&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),
+    ]);
+    const nowMs = Date.now();
+    const st = stayState334(nowMs, hrs, lastRows[0] || null, sessRows[0] || null, await isWorkDay(phxDate(nowMs)));
+    st.openStarted = Boolean(sessRows[0]) && new Date(sessRows[0].started_at).getTime() <= nowMs;   // the wrap-up prompt only once the evening has begun
+    st.openStay = Boolean(sessRows[0]) && sessRows[0].reason === "Staying late" && new Date(sessRows[0].started_at).getTime() >= nowMs - 24 * 3600000;   // back from lunch after close = a plain clock-in, no questionnaire
+    return st;
+  } catch (e) { return { card: "none", openStarted: true, openStay: false }; }
+}
+const stayHM334 = (ms) => { const d = new Date(ms - PHX_OFFSET_MS); let h = d.getUTCHours(); const m = d.getUTCMinutes(); const ap = h < 12 ? "AM" : "PM"; h = h % 12 || 12; return `${h}:${String(m).padStart(2, "0")} ${ap}`; };
+// The card itself — one piece of HTML for all three Homes (floor, warehouse, Body / other departments). The
+// buttons post with stayPost334 (defined beside the card so each page carries it once).
+function stayCard334(st) {
+  if (!st || st.card === "none") return "";
+  const js = `<script>async function stayPost334(url, payload, btn){ var m = document.getElementById("staymsg334"); if (btn) btn.disabled = true; if (m) m.textContent = "";
+    try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload || {})) });
+      var j = await r.json(); if (j && j.ok) { location.reload(); return; } if (m) m.textContent = (j && j.error) || "Didn\u2019t go through \u2014 try again"; if (btn) btn.disabled = false; }
+    catch (e) { if (m) m.textContent = "Network hiccup \u2014 try again"; if (btn) btn.disabled = false; } }</script>`;
+  const btn = (label, onclick, green) => `<button onclick="${onclick}" style="border:1px solid ${green ? "#30d158" : "#3a3a3c"};background:${green ? "#1d5a2d" : "#2c2c2e"};color:#fff;border-radius:12px;padding:14px 22px;font-weight:800;font-size:1rem;cursor:pointer;margin:4px">${label}</button>`;
+  if (st.card === "offer") return `${js}<div id="stay334" style="background:#2a2200;border:2px solid #ffd60a;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
+    <b style="color:#ffd60a;font-size:1.05rem">Working past ${stayHM334(st.closeMs)} today?</b>
+    <div style="opacity:.85;font-size:.95rem;margin:4px 0 10px">The clock closes by itself at ${stayHM334(st.closeMs + 3600000)} unless you tap this. Your time after ${stayHM334(st.closeMs)} goes to the office for sign-off, and clocking out asks for a one-line wrap-up.</div>
+    ${btn("Staying late \u2014 keep my clock running", "stayPost334('/api/afterhours/stay',{},this)", true)}
+    <div id="staymsg334" style="color:#ff6b5e;font-size:.9rem;min-height:1em;margin-top:4px"></div></div>`;
+  if (st.card === "on") return `<div id="stay334" style="background:#1a2a1a;border:2px solid #30d158;border-radius:14px;padding:12px 16px;margin:0 0 14px;text-align:center">
+    <b style="color:#30d158">Staying late ${st.started ? "since" : "from"} ${stayHM334(st.since)}</b>
+    <div style="opacity:.8;font-size:.9rem;margin-top:4px">Your clock keeps running. Clock out asks for a one-line wrap-up; the office signs the hours off.${st.started ? "" : " Leave before then and nothing is held."}</div></div>`;
+  if (st.card === "recover") return `${js}<div id="stay334" style="background:#2a2200;border:2px solid #ffd60a;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
+    <b style="color:#ffd60a;font-size:1.05rem">The clock closed you out at ${stayHM334(st.autoAt)}.</b>
+    <div style="opacity:.85;font-size:.95rem;margin:4px 0 10px">Were you still working?</div>
+    ${btn("Yes \u2014 I worked until now", "stayPost334('/api/afterhours/recover',{yes:true},this)", true)}
+    ${btn("No \u2014 I had left", "stayPost334('/api/afterhours/recover',{yes:false},this)", false)}
+    <div style="opacity:.6;font-size:.85rem;margin-top:8px">\u201cYes\u201d puts ${stayHM334(st.closeMs)} to now on the clock as after-hours \u2014 it waits for the office to sign it off.</div>
+    <div id="staymsg334" style="color:#ff6b5e;font-size:.9rem;min-height:1em;margin-top:4px"></div></div>`;
+  return "";
+}
 // Q91: the SHOP CALENDAR. Default work week is Mon-Fri; a shop_calendar row
 // OVERRIDES one date open or closed (holidays, or a rare worked Saturday).
 // Read through a 5-minute cache so the morning scheduler stays cheap. If the
@@ -1048,6 +1123,13 @@ async function sweepForgottenClockOuts() {
     for (const ev of recent) if (!latest[ev.employee_id]) latest[ev.employee_id] = ev;
     const now = Date.now();
     const hrsS = await shopHours();   // Q113: the sweep follows the CONFIGURED day end
+    // Block 334 (Daniel 10/28, the Tuesday-night lesson): an OPEN evening session is the signal that someone is
+    // working late on purpose — whether they clocked in after close or tapped "Staying late" during the day. The
+    // sweep reads it once here and uses it below in place of the punch-time guess (Andrew switched lines at
+    // 3:59:48; twelve seconds later the old rule would have treated him as an evening stint).
+    // Only STAYING-LATE sessions begun within the last day: an evening or weekend clock-in session keeps the punch-time rule it always had
+    // (reviewer: a Saturday 7 AM stint would otherwise close at 3 PM), and a stale open row from another day can never reach today.
+    const openSess334 = {}; try { for (const s of await db(`after_hours_session?select=employee_id,started_at&ended_at=is.null&reason=eq.Staying%20late&started_at=gte.${new Date(now - 24 * 3600000).toISOString()}&order=started_at.desc&limit=200`)) if (!openSess334[s.employee_id]) openSess334[s.employee_id] = new Date(s.started_at).getTime(); } catch (e334) { /* fall back to the punch-time rule */ }
     for (const ev of Object.values(latest)) {
       if (ev.kind !== "clock_in") continue;
       const inMs = new Date(ev.claimed_at).getTime();
@@ -1073,7 +1155,9 @@ async function sweepForgottenClockOuts() {
       // Daniel's evenings and weekends are normal hours. Leave it alone until
       // 11:59 PM of its own day (the never-cross-midnight rule still holds).
       const mkt290 = MKT_LINES_290.has(Number(ev.line_id));
-      const closeAt = mkt290 ? mid148 : Math.min(inMs >= end ? inMs + 8 * 3600000 : hardStop205, mid148);
+      // Block 334: an open evening session → the evening rule (session start + 8 h, never past 11:59 PM), no 5 PM hard stop
+      const sess334 = openSess334[ev.employee_id];
+      const closeAt = mkt290 ? mid148 : Math.min(sess334 ? Math.max(sess334, inMs) + 8 * 3600000 : inMs >= end ? inMs + 8 * 3600000 : hardStop205, mid148);
       if (now < closeAt + SWEEP_GRACE_MS) continue; // still plausibly working — leave it
       await db("clock_event", { method: "POST", body: JSON.stringify({
         employee_id: ev.employee_id, line_id: ev.line_id, kind: "clock_out_auto",
@@ -1086,7 +1170,7 @@ async function sweepForgottenClockOuts() {
       // Q113 (block-26 nit): a forgotten after-hours punch used to leave its
       // SESSION open forever — close it honestly so the cockpit lane and the
       // timecards tell the truth about forgetful nights.
-      const [ahSweep] = await db(`after_hours_session?select=id,approved_by,started_at,line_id&employee_id=eq.${ev.employee_id}&ended_at=is.null&limit=1`);   // Block 300: +started_at,line_id for the card
+      const [ahSweep] = await db(`after_hours_session?select=id,approved_by,started_at,line_id&employee_id=eq.${ev.employee_id}&ended_at=is.null&order=started_at.desc&limit=1`);   // Block 334: newest first   // Block 300: +started_at,line_id for the card
       if (ahSweep) {
         await db(`after_hours_session?id=eq.${ahSweep.id}`, { method: "PATCH", body: JSON.stringify({
           ended_at: new Date(closeAt).toISOString(), wrap_note: "(auto-closed — no wrap-up left)" }) });
@@ -1683,7 +1767,7 @@ const changePinPage = (first) => `<!doctype html>
 // Q90: your USUAL lines are the big one-tap buttons; other lines sit below.
 // Clock-out asks WHY from the admin-managed reason list (Q77).
 // `state` = { clockedIn: bool, lineName } derived from the latest clock event.
-const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null, fixLane = { open: [] }) => `<!doctype html>
+const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false, approvers: [], reasons: [], open: false }, timeoff = { on: false, reasons: [], mine: [] }, lineStat = null, fixLane = { open: [] }, stay334 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}</head>
@@ -1725,6 +1809,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        "without a line yet" small for the rare case. Same /api/clock/in, one
        punch on the line — what Warehouse, Build and Body already do. -->
   <div id="in" style="display:${state.clockedIn ? "none" : "block"}">
+    ${stay334 && stay334.card === "recover" ? stayCard334(stay334) : ""}
     <p class="msg">Clock in — where are you working?</p>
     <div class="grid">
       ${(usualLines.length ? usualLines : otherLines).map((l) => `<button class="name" data-line="${l.id}" style="background:#1d5a2d;border-color:#30d158;font-size:1.15rem;padding:18px 14px">CLOCK IN<small>${l.name}</small></button>`).join("")}
@@ -1762,6 +1847,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        read as "I can't get back onto my line." The card explains the line's
        state and the screen re-checks itself; the moment a cab lands, the task
        list appears on the next refresh. -->
+  ${stay334 && state.clockedIn && (stay334.card === "offer" || stay334.card === "on") ? stayCard334(stay334) : ""}
   ${lineStat ? `<div style="background:var(--card);border:1px solid #30d158;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
     <b>You're ON ${lineStat.name}.</b> No cab to work right now${lineStat.awaiting ? ` — ORDER ${lineStat.awaiting} is awaiting the manager's inspection` : ""}${lineStat.ondeck ? `. Next up: ORDER ${lineStat.ondeck} — it starts the moment warehouse delivers the kit` : ""}.
     <div style="opacity:.55;font-size:.85rem;margin-top:6px">This screen checks again on its own — when a cab lands on your line, the task list appears here.</div>
@@ -2900,6 +2986,7 @@ ${whCss288}</head>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? `&#9679; ON THE CLOCK — ${curLine326 === 10 ? "Shop time" : "Warehouse"}` : "&#9675; NOT CLOCKED IN"}</div>
   <div class="lane">
+    ${ah.stay ? stayCard334(ah.stay) : ""}
     ${clockedIn
       ? `${curLine326 === 10 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(9,this)">&#8646; Back to Warehouse</button> <span style="opacity:.6;font-size:.85rem">you're on Shop time</span></div>` : curLine326 === 9 ? `<div style="margin:0 0 8px"><button class="b" onclick="switchLine326(10,this)">&#8646; Switch to Shop time</button> <span style="opacity:.6;font-size:.85rem">jig, meetings, in-house work</span></div>` : ""}<span style="opacity:.75;font-size:.9rem;font-weight:600">Clocking out? Pick what kind:</span><br>
          ${ah.open ? `<div id="ahwrapW107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:8px auto 4px;max-width:560px;text-align:left">
@@ -3225,6 +3312,7 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
   ${inspStrip308(insp308)}
   ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${clk.stay ? `<div style="max-width:560px;margin:0 auto">${stayCard334(clk.stay)}</div>` : ""}
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
     ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</div>
        <div id="ahwrapV107" style="display:none;border:1px solid #7a5900;border-radius:12px;padding:12px;margin:0 auto 8px;max-width:560px;text-align:left">
@@ -11175,7 +11263,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved"];   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["afterhours.stay", "touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved"];   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab.") || String(eventType).startsWith("body.") || String(eventType).startsWith("wh."));   // Block 326: Body notices are facts for the bell, never a buzz · Block 327: warehouse finish-out notices the same
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -11707,13 +11795,14 @@ http.createServer(async (req, res) => {
         // rightly called it out. Now it reads his own LAST punch: a clock-out
         // earlier TODAY means he's coming back (lunch named when that was the
         // reason); anything else means this tap starts his day.
+        const stayW334 = await stayFor334(empId, hrsW212);   // Block 334 (above the hint block — the t239 walker slices hint239 → return send)
         let wh327 = null; try { wh327 = await whFinishList327(); } catch (eW) { console.error("warehouse finish list:", eW && eW.message); wh327 = null; }   // Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
         let hint239 = "First punch of the day — this starts your hours.";
         if (lastW && lastW.kind !== "clock_in" && lastW.claimed_at && phxDate(new Date(lastW.claimed_at).getTime()) === phxDate(Date.now()))
           hint239 = /lunch/i.test(lastW.reason || "") ? "Back from lunch — this picks your day back up." : "Welcome back — this picks your day back up.";
         return send(200, "text/html; charset=utf-8",
           warehousePage(emp, clockedInW106, reasonsW, linesW, rowsW, histW97,
-            { now: ahNowW, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW),
+            { now: ahNowW && !stayW334.openStay, reasons: ahReasW.map((r) => r.label), open: Boolean(openAhW) && stayW334.openStarted, stay: stayW334,
               lastReason: (lastAhWRows214[0] && ahReasW.some((r) => r.label === lastAhWRows214[0].reason)) ? lastAhWRows214[0].reason : "" }, hint239, shortOwedW254, prep301, clockedInW106 && lastFull301 ? Number(lastFull301.line_id) : null, wh327));   // Block 326: the line you're on (Warehouse ↔ Shop time switch) — Block 327 fix: lastW never carried line_id, so the switch button never rendered on v304; lastFull301 does
       }
       if (emp.department !== "Production") {
@@ -11758,8 +11847,9 @@ http.createServer(async (req, res) => {
             (ahNow92 && !in92) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
           ]);
           const [openAh92] = openAh92Rows;
-          clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department],
-            ah: { now: ahNow92, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92),
+          const stay92 = await stayFor334(empId, hrs92);   // Block 334
+          clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department], stay: stay92,
+            ah: { now: ahNow92 && !stay92.openStay, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) && stay92.openStarted,
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
         // Block 308 (Daniel, 10/20): inspectors (Body/Build managers + admins) see a yellow strip on their
@@ -11946,11 +12036,12 @@ http.createServer(async (req, res) => {
             ago: isRw && b.rework_assigned_at ? agoWords321(b.rework_assigned_at) : "", on: st.on.map((p) => p.name), hours: st.hours });
         }
       } catch (e321) { console.error("fix box:", e321.message); back321 = []; }
+      const stay334h = await stayFor334(empId, await shopHours());   // Block 334: Staying late / recovery card
       return send(200, "text/html; charset=utf-8",
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
-          { now: ahNow, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh),
+          { now: ahNow && !stay334h.openStay, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) && stay334h.openStarted,
             lastReason: (lastAhRows214[0] && ahReasonRows.some((r) => r.label === lastAhRows214[0].reason)) ? lastAhRows214[0].reason : "" },
-          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126, back321 }));
+          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126, back321 }, stay334h));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
@@ -12118,7 +12209,10 @@ http.createServer(async (req, res) => {
       // recording no clock-in. lnGate.down_today was read above; used again there.
       const inAtMs = new Date(claimed_at || Date.now()).getTime();
       const [meDep195] = meDepRows299;   // Block 299: hrsIn + department read in the wave above
-      if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)) {
+      // Block 334: back from lunch after close with a live Staying-late session → a plain clock-in (the evening is already on the record)
+      const stayOpen334 = isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department)
+        ? (await db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&reason=eq.Staying%20late&started_at=gte.${new Date(inAtMs - 24 * 3600000).toISOString()}&limit=1`)).length > 0 : false;
+      if (isAfterHoursDept(inAtMs, hrsIn, meDep195 && meDep195.department) && !stayOpen334) {
         // Block 214 (Daniel): typed PLAN optional. Block 215 (Daniel, Monday):
         // the "who approved it" question is GONE too — "Ross would and is
         // basically the only authority... admin can just approve or deny on
@@ -12216,6 +12310,72 @@ http.createServer(async (req, res) => {
       return json(200, { ok: true });
     }
 
+    // ===== Block 334: STAYING LATE — one tap from Home (close − 30 min on) opens the evening session from close on
+    // the line you are on; the sweep leaves you alone; clock-out is the after-hours clock-out (wrap-up → sign-off).
+    if (url.pathname === "/api/afterhours/stay" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { claimed_at } = await body(req);
+      const nowS = new Date(claimed_at || Date.now()); if (isNaN(nowS.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const [lastRows, openRows, hrsS334] = await Promise.all([
+        db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`after_hours_session?select=id,started_at,reason&employee_id=eq.${empId}&ended_at=is.null&started_at=gte.${new Date(nowS.getTime() - 24 * 3600000).toISOString()}&limit=1`),
+        shopHours(),
+      ]);
+      const [lastS] = lastRows;
+      if (lastS && lastS.kind === "clock_out_auto") return json(400, { ok: false, error: "The clock already closed you out — reload this page and answer the card" });
+      if (!lastS || lastS.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first — then tap Staying late" });
+      if (openRows.length) return json(400, { ok: false, error: "You're already set up for the evening" });
+      const closeS = stayCloseMs334(nowS.getTime(), hrsS334);
+      if (nowS.getTime() < closeS - (STAY_LEAD_MIN_334 + 5) * 60000) return json(400, { ok: false, error: `Staying late opens at ${stayHM334(closeS - STAY_LEAD_MIN_334 * 60000)}` });
+      if (nowS.getTime() >= closeS + 8 * 3600000) return json(400, { ok: false, error: "Too late for today — clock out and clock in after hours" });
+      if (!(await isWorkDay(phxDate(nowS.getTime())))) return json(400, { ok: false, error: "The shop is closed today — a weekend clock-in already counts as after hours" });
+      const startS = new Date(Math.max(closeS, new Date(lastS.claimed_at).getTime() + 1000)).toISOString();   // from close — or from this stint's start if it began after close
+      const [sess] = await db("after_hours_session", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({
+        employee_id: empId, line_id: lastS.line_id, approved_by: null, reason: "Staying late", plan: "", started_at: startS }) });
+      logEvent("afterhours.stay", empId, { session_id: sess && sess.id, line_id: lastS.line_id, from: startS, tapped_at: nowS.toISOString() });
+      try {
+        const [meS] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
+        const [lnS] = lastS.line_id ? await db(`line?select=name&id=eq.${lastS.line_id}`) : [null];
+        const nmS = meS ? `${meS.first_name} ${((meS.last_name || "")[0] || "")}.`.trim() : "Someone";
+        void notify("afterhours.stay", await adminIds225(), `${nmS} is staying late`,
+          `Tapped Staying late at ${stayHM334(nowS.getTime())} on ${lnS ? lnS.name : lastS.line_id === SHOP_LINE_ID ? "Shop time" : "the clock"}. The hours from ${stayHM334(closeS)} wait for sign-off after the wrap-up, like any after-hours session.`, "/manager#afterhours");
+      } catch (e) { console.error("stay notify:", e && e.message); }
+      return json(200, { ok: true, from: startS });
+    }
+    // Block 334: the RECOVERY — auto-closed today, back on Home after hours. Yes = the auto-out is voided (the stint
+    // reopens) and the evening session runs from close; the person then clocks out the normal after-hours way.
+    // No = nothing changes; the card goes away for today.
+    if (url.pathname === "/api/afterhours/recover" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
+      const { yes, claimed_at } = await body(req);
+      const nowR = new Date(claimed_at || Date.now()); if (isNaN(nowR.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const [lastR] = await db(`clock_event?select=id,kind,line_id,claimed_at,reason,corrected_by,added_by&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);
+      const hrsR = await shopHours();
+      const stR = stayState334(nowR.getTime(), hrsR, lastR, null, await isWorkDay(phxDate(nowR.getTime())));
+      if (stR.card !== "recover") return json(400, { ok: false, error: "Nothing to recover — the clock did not close you out today" });
+      if (yes !== true) {
+        // "No" hides the card for today; the 5:00 stamp stays an unverified guess for the office to trim (reviewer: Block 205 guesses HIGH on purpose)
+        await db(`clock_event?id=eq.${lastR.id}`, { method: "PATCH", body: JSON.stringify({ correction_note: "The person answered the Staying late card — No, had left by day end (time still to be verified by the office)" }) });
+        logEvent("afterhours.recover_no", empId, { punch_id: lastR.id, auto_at: lastR.claimed_at });
+        return json(200, { ok: true, kept: true });
+      }
+      if (nowR.getTime() >= new Date(lastR.claimed_at).getTime() + 8 * 3600000) return json(400, { ok: false, error: "That was more than 8 hours ago — ask the office to correct the time" });
+      await db(`clock_event?id=eq.${lastR.id}`, { method: "PATCH", body: JSON.stringify({ voided: true, corrected_by: empId, corrected_at: nowR.toISOString(), correction_note: "Staying late — was still working (recovered from the day-end auto close)" }) });
+      const [sessR] = await db("after_hours_session", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({
+        employee_id: empId, line_id: lastR.line_id, approved_by: null, reason: "Staying late", plan: "(recovered after the day-end auto close)", started_at: new Date(stR.closeMs).toISOString() }) });
+      logEvent("afterhours.recover_yes", empId, { session_id: sessR && sessR.id, voided_punch_id: lastR.id, auto_at: lastR.claimed_at, from: new Date(stR.closeMs).toISOString() });
+      try {
+        const [meR] = await db(`employee?select=first_name,last_name&id=eq.${empId}`);
+        const nmR = meR ? `${meR.first_name} ${((meR.last_name || "")[0] || "")}.`.trim() : "Someone";
+        void notify("afterhours.stay", await adminIds225(), `${nmR} was still working after the ${stayHM334(new Date(lastR.claimed_at).getTime())} auto close`,
+          `The auto clock-out is voided and the evening runs as after-hours from ${stayHM334(stR.closeMs)} — it waits for sign-off after the wrap-up.`, "/manager#afterhours");
+      } catch (e) { console.error("recover notify:", e && e.message); }
+      return json(200, { ok: true, from: new Date(stR.closeMs).toISOString() });
+    }
     // CLOCK OUT — reason label maps to the event kind (Q77 list drives the UI).
     if (url.pathname === "/api/clock/out" && req.method === "POST") {
       const empId = await liveSession(req);
@@ -12233,7 +12393,7 @@ http.createServer(async (req, res) => {
         db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
         db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
         db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
-        db(`after_hours_session?select=id,started_at,approved_by,line_id&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),   // Block 300: line_id names the card
+        db(`after_hours_session?select=id,started_at,approved_by,line_id,reason&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),   // Block 300: line_id names the card · Block 334: +reason
         db(`employee?select=lines&id=eq.${empId}`),   // Block 315: the person's own lines (People roster)
       ]);
       // Block 315 (Daniel, 10/20 — Chris's End of day never landed): open steps carry overnight on
@@ -12296,7 +12456,17 @@ http.createServer(async (req, res) => {
       // wrap-up. Closing it starts the SIGN-OFF loop — the approver + admins
       // get the wrap note (and photo count), and the session's hours stay
       // HELD off the timecard until a manager/admin signs off in the cockpit.
-      const [openAhOut] = openAhRows299;   // Block 299: read in the wave above
+      let [openAhOut] = openAhRows299;   // Block 299: read in the wave above
+      // Block 334: a "Staying late" session starts at close; clocking out BEFORE that is just leaving on time —
+      // the session is cancelled on the record (ended at its own start, zero hours) and no wrap-up is asked.
+      if (openAhOut && openAhOut.reason === "Staying late" && new Date(claimed_at || Date.now()).getTime() < new Date(openAhOut.started_at).getTime()) {
+        if (reason === "Lunch") openAhOut = null;   // lunch before close keeps the evening plan; the wrap-up is not asked now
+        else {
+          await db(`after_hours_session?id=eq.${openAhOut.id}`, { method: "PATCH", body: JSON.stringify({ ended_at: openAhOut.started_at, wrap_note: "(left before close — nothing to sign off)", declined_by: empId, decline_reason: "left before close — nothing to sign off" }) });   // declined by the person = off every sign-off queue (reviewer)
+          logEvent("afterhours.cancelled", empId, { session_id: openAhOut.id, because: "clocked out before the session started" });
+          openAhOut = null;
+        }
+      }
       if (openAhOut) {
         if (!String(wrap_note || "").trim())
           return json(400, { ok: false, error: "After-hours wrap-up: one line on what got done, then clock out" });
@@ -12402,6 +12572,7 @@ http.createServer(async (req, res) => {
         employee_id: empId, line_id, kind: "clock_in",
         claimed_at: new Date((halfSwitched ? new Date(last.claimed_at).getTime() : when.getTime()) + 1000).toISOString() }) });
       logEvent("clock.switch", empId, { from_line: last.line_id, to_line: line_id });
+      try { await db(`after_hours_session?employee_id=eq.${empId}&ended_at=is.null&reason=eq.Staying%20late&started_at=gte.${new Date(Date.now() - 24 * 3600000).toISOString()}`, { method: "PATCH", body: JSON.stringify({ line_id: Number(line_id) }) }); } catch (eS) { /* the card names the line; never blocks a switch */ }   // Block 334
       // Block 135: switching ONTO a "down for today" line resumes it, exactly
       // like a direct clock-in — the punch above is recorded, so it's safe.
       await resumeDownLine135(line_id, empId);
@@ -14658,6 +14829,9 @@ http.createServer(async (req, res) => {
         employee_id, line_id: lastCk.line_id, kind: "clock_out_auto",
         reason: "Manager clock-out", claimed_at: new Date().toISOString() }) });
       logEvent("clock.force_out", empId, { employee_id, cause: "manager" });
+      // Block 334 (reviewer): the open evening session ends with the punch — it used to stay open forever
+      try { const [ahF] = await db(`after_hours_session?select=id&employee_id=eq.${employee_id}&ended_at=is.null&order=started_at.desc&limit=1`);
+        if (ahF) { await db(`after_hours_session?id=eq.${ahF.id}`, { method: "PATCH", body: JSON.stringify({ ended_at: new Date().toISOString(), wrap_note: "(ended by a manager clock-out — no wrap-up left)" }) }); logEvent("afterhours.auto_end", empId, { session_id: ahF.id, employee_id, cause: "manager" }); } } catch (eF) { console.error("force-out session end:", eF && eF.message); }
       return json(200, { ok: true });
     }
 
