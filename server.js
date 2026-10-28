@@ -9030,6 +9030,7 @@ async function trackingPage323(q, page, famOf) {
   });
   return { items, total, page: pg, pages, per: PER, q: qq };
 }
+const trPopCss331 = `<style>.trpop331{display:none;position:absolute;right:0;top:calc(100% + 4px);z-index:60;min-width:min(520px,88vw);text-align:left;white-space:normal}.trpopin331{background:#1c1c1e;border:1px solid #4a90d9;border-radius:12px;padding:10px 12px;box-shadow:0 10px 26px rgba(0,0,0,.55)}</style>`;
 const stageChip323 = (st) => `<span class="flag" style="${st.key === "shipped" ? "background:#173a2b;color:#5edb84" : st.key === "crating" ? "background:#3a2f10;color:#ffd60a" : st.key === "build" ? "background:#2c2c2e;color:#c7c7cc" : "background:#10233a;color:#5eaeff"}">${String(st.label).replace(/&/g, "&amp;")}</span>`;
 function trackingLaneHtml323(t, admin) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -9044,7 +9045,7 @@ function trackingLaneHtml323(t, admin) {
   ${t.items.map((m) => `<tr id="tr323-${m.id}"><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td>
     <td>${stageChip323(m.stage)}${m.moved && m.stage.hand ? `<div class="muted" style="font-size:.78rem;margin-top:2px">moved here by ${esc(m.moved.by)} ${esc(m.moved.at)}${m.moved.reason ? ` &mdash; ${esc(m.moved.reason)}` : ""}</div>` : ""}${m.paid ? `<div style="font-size:.78rem;margin-top:2px;color:#5edb84;opacity:.85">&#36; ${esc(m.paid)}</div>` : ""}</td>
     <td class="muted">${esc(m.left) || "&mdash;"}</td><td class="muted">${esc(m.shipped) || "&mdash;"}</td>
-    ${admin ? `<td style="white-space:nowrap"><button class="b" onclick="stageMenu323('${m.id}','${m.stage.key}',this)">Move &#9656;</button><div id="trmv323-${m.id}"></div></td>` : ""}
+    ${admin ? `<td style="white-space:nowrap;position:relative"><button class="b" onclick="stageMenu323('${m.id}','${m.stage.key}',this)">Move &#9656;</button><div id="trmv323-${m.id}" class="trpop331"></div></td>` : ""}
   </tr>`).join("")}</table>
   <div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:10px;flex-wrap:wrap">
     ${nav("&laquo; First", 1, t.page > 1)}${nav("&lsaquo; Previous", t.page - 1, t.page > 1)}<span class="muted" style="font-size:.85rem;padding:0 6px">Page ${t.page} of ${t.pages}</span>${nav("Next &rsaquo;", t.page + 1, t.page < t.pages)}${nav("Last &raquo;", t.pages, t.page < t.pages)}
@@ -9119,7 +9120,7 @@ function reconcilePage(d, role, frag323 = false) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board — Order Queue</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Order Queue</title>${style}${trPopCss331}
 <style>
   @media (max-width:640px){.wrap{padding-left:8px;padding-right:8px} .wrap table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}}
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
@@ -9154,7 +9155,7 @@ function reconcilePage(d, role, frag323 = false) {
   <div id="freshnote" style="display:none">The queue just changed on another screen — this page will refresh as soon as you're done typing.</div>
   <div id="queue323">${reconcileQueueHtml323(d, admin, kpi, groups)}</div>
   ${admin ? laneShell323("warehouse", "Warehouse activity", null, "On-deck kits by line with their kit status, parts still owed in production, and the last 20 kit actions &mdash; who did what, when. Admin view only.", "#5ac8fa") : ""}
-  ${laneShell323("tracking", "Order Tracking <span class=\"muted\" style=\"font-weight:400;font-size:.8em\">&mdash; past production</span>", d.trackingCount || 0, "Every cab that has left the lines &mdash; where it is now (At Body Shop &rarr; Crating &amp; shipping &rarr; Shipped), when it left, when it shipped, and whether the final payment has landed in Coyote. Search by order #, cab #, or customer; 25 per page.", "#2d5a46")}
+  ${laneShell323("tracking", "Order Tracking <span class=\"muted\" style=\"font-weight:400;font-size:.8em\">&mdash; past production</span>", d.trackingCount || 0, "Every cab that has left the lines &mdash; where it is now (At Body Shop &rarr; Crating &amp; shipping &rarr; Shipped, or the Build department), when it left, when it shipped, and whether the final payment has landed in Coyote. Search by order #, cab #, or customer; 25 per page.", "#2d5a46")}
   ${laneShell323("aside", "Set aside", (d.setAside || []).length, "Cabs pulled from the line-up by a Coyote hold or cancel before they started &mdash; kept here so they're noted. Each drops back into its line's queue on its own if Coyote returns it to Queued.", "#5a2a3a")}
   <p class="muted" style="font-size:.8rem;text-align:center">Oldest-first by default; the order you set here (or the warehouse sets for kit-readiness) drives what's on deck. Every move is logged. Cab numbers are never shared or reused.</p>
   <script>
@@ -9177,8 +9178,12 @@ function reconcilePage(d, role, frag323 = false) {
   function laneGo323(w,p){var q=document.getElementById('trq323');laneLoad323(w,'&page='+p+'&q='+encodeURIComponent(q?q.value:''));}
   function laneSearch323(){var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():''));}
   // Block 323: MOVE a past-production cab between stages (admin) — a chooser with a required reason, two taps, audited.
-  var STAGES323=[['body','At Body Shop'],['crating','Crating &amp; shipping'],['shipped','Shipped']];
-  function stageMenu323(id,cur,btn){var box=document.getElementById('trmv323-'+id);if(!box)return;if(box.innerHTML){box.innerHTML='';return;}var opts=STAGES323.filter(function(s){return s[0]!==cur;}).map(function(s){return '<option value="'+s[0]+'">'+s[1]+'</option>';}).join('');box.innerHTML='<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="stsel323-'+id+'" style="padding:6px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff">'+opts+'</select><input id="strs323-'+id+'" placeholder="Reason (required)" maxlength="140" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;min-width:160px"><button class="b" onclick="stageMove323(\\''+id+'\\',this)">Move it</button><span class="msg" id="stmsg323-'+id+'"></span></div>';}
+  // Block 331 (Daniel 10/27 16:50): every department in the chooser (At Body Shop / Crating & shipping / Shipped / Build
+  // department) and the chooser is a POPOVER pinned to the Move button — the row never grows, nothing to scroll for.
+  var STAGES323=[['body','At Body Shop'],['crating','Crating &amp; shipping'],['shipped','Shipped'],['build','Build department']];
+  function stageMenuClose331(){var o=document.querySelectorAll('.trpop331');for(var i=0;i<o.length;i++){o[i].innerHTML='';o[i].style.display='none';}}
+  function stageMenu323(id,cur,btn){var box=document.getElementById('trmv323-'+id);if(!box)return;if(box.innerHTML){stageMenuClose331();return;}stageMenuClose331();var opts=STAGES323.filter(function(s){return s[0]!==cur;}).map(function(s){return '<option value="'+s[0]+'">'+s[1]+'</option>';}).join('');box.innerHTML='<div class="trpopin331"><div style="font-size:.8rem;opacity:.65;margin-bottom:4px">Move this cab to</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="stsel323-'+id+'" style="padding:7px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff">'+opts+'</select><input id="strs323-'+id+'" placeholder="Reason (required)" maxlength="140" style="padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;flex:1 1 120px;min-width:120px"><button class="b" onclick="stageMove323(\\''+id+'\\',this)">Move it</button><button class="b" style="opacity:.7" onclick="stageMenuClose331()">Cancel</button></div><span class="msg" id="stmsg323-'+id+'" style="display:block;margin-top:4px"></span></div>';box.style.display='block';var rs=document.getElementById('strs323-'+id);if(rs)rs.focus();}
+  document.addEventListener('pointerdown',function(e){var b=e.target.closest('button');if(!e.target.closest('.trpop331')&&!(b&&/Move/.test(b.textContent)))stageMenuClose331();});
   function stageMove323(id,btn){var sel=document.getElementById('stsel323-'+id),rs=document.getElementById('strs323-'+id),m=document.getElementById('stmsg323-'+id);var to=sel.value,reason=rs.value.trim(),name=sel.options[sel.selectedIndex].textContent;if(!reason){m.innerHTML='<span style="color:#ff6b5e">Type a reason</span>';rs.focus();return;}if(!btn.dataset.armed){btn.dataset.armed='1';var o=btn.textContent;btn.textContent='Move to '+name+'? Tap again';setTimeout(function(){btn.dataset.armed='';btn.textContent=o;},5000);return;}btn.disabled=true;m.textContent='Moving…';fetch('/api/admin/build/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,stage:to,reason:reason})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){m.innerHTML='<span style="color:#5edb84">Moved</span>';var pg=(LANE323.tracking&&LANE323.tracking.page)||1;var q=document.getElementById('trq323');laneLoad323('tracking','&page='+pg+'&q='+encodeURIComponent(q?q.value:''));}else{m.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'Could not move it')+'</span>';btn.disabled=false;btn.dataset.armed='';}}).catch(function(){m.innerHTML='<span style="color:#ff6b5e">Network hiccup — try again</span>';btn.disabled=false;btn.dataset.armed='';});}
   (function(){laneOpenSet323().forEach(function(w){if(document.getElementById('lanebody323-'+w))laneToggle323(w);});})();
   </script>
@@ -16372,21 +16377,33 @@ self.addEventListener("notificationclick", (e) => {
       const p = await body(req);
       const build_id = String(p.build_id || ""); const to = String(p.stage || ""); const reason = String(p.reason || "").trim().slice(0, 140);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      if (!STAGES323[to] || to === "build") return json(400, { ok: false, error: to === "build" ? "The Build department label is set from the cab's Body page" : "Pick a stage" });
+      if (!STAGES323[to]) return json(400, { ok: false, error: "Pick a stage" });   // Block 331: build joins the chooser
       if (!reason) return json(400, { ok: false, error: "Type a reason — every move is on the record" });
-      const [b] = await db(`build?select=id,order_number,coyote_root,cab_number,state,stage,stage_set_at,shipped_at,left_production_at,body_done_at,body_moved_to_build_at&id=eq.${build_id}`);
+      const [b] = await db(`build?select=id,order_number,coyote_root,cab_number,part_number,state,stage,stage_set_at,shipped_at,shipped_by,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,body_build_reason&id=eq.${build_id}`);
       if (!b) return json(404, { ok: false, error: "Cab not found" });
       if (!["production_complete", "complete"].includes(String(b.state))) return json(400, { ok: false, error: "Only a cab that has left production can move between these stages — this one is " + String(b.state).replace(/_/g, " ") });
       const coy = await coyoteStatusFor323([rootOf323(b)]);
       const was = stageOf323(b);
       if (was.key === to) return json(400, { ok: false, error: "It is already " + STAGES323[to] });
       const now = new Date().toISOString();
-      const patch = { stage: to, stage_set_at: now, stage_set_by: adminId, stage_reason: reason };
-      if (to === "shipped") patch.shipped_at = b.shipped_at || now;   // the ship date = the first time someone here said shipped (the warehouse's ship tap will set it too, when built)
-      if (to !== "shipped" && b.shipped_at) patch.shipped_at = null;   // moved back = it hadn't shipped after all
-      if (!b.left_production_at) patch.left_production_at = now;
+      // Block 331 (Daniel 10/27: "we should have full control over where we move these cabs to from here"): the Move lands
+      // the cab in the DEPARTMENT, not just on a chip — Body gets its steps (ensureBodyTasks326), Crating & shipping gets
+      // body_done_at + the crating step (ensureWhTask327, on the warehouse list), Shipped stamps shipped_at, Build department
+      // sets the label; whatever the cab was before is released so the ladder reads one thing.
+      const patch = { stage: (to === "build" || to === "body") ? null : to, stage_set_at: now, stage_set_by: adminId, stage_reason: reason };   // body/build = the natural state (the Body list reads stage null)
+      if (to === "shipped") { patch.shipped_at = b.shipped_at || now; patch.shipped_by = b.shipped_by || adminId; }   // the ship date = the first time someone here said shipped
+      if (to !== "shipped" && b.shipped_at) { patch.shipped_at = null; patch.shipped_by = null; }   // moved back = it hadn't shipped after all
+      if (to === "build") { patch.body_moved_to_build_at = now; patch.body_moved_to_build_by = adminId; patch.body_build_reason = reason; }
+      else if (b.body_moved_to_build_at) { patch.body_moved_to_build_at = null; patch.body_moved_to_build_by = null; patch.body_build_reason = null; }
+      if (to === "body") { patch.body_done_at = null; patch.body_done_by = null; }   // back in Body = not done in primer any more (the audit row keeps the old date)
+      if ((to === "crating" || to === "shipped") && !b.body_done_at) { patch.body_done_at = now; patch.body_done_by = adminId; }
+      if (!b.left_production_at && to !== "build") patch.left_production_at = now;
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patch) });
-      logEvent("build.stage_moved", adminId, { build_id, order_number: b.order_number, cab_number: b.cab_number || null, from: was.key, to, from_label: was.label, to_label: STAGES323[to], reason, coyote_status: (coy[rootOf323(b)] || {}).status || null });
+      const bAfter331 = { ...b, ...patch };
+      if (to === "body") { try { await ensureBodyTasks326(bAfter331, adminId); } catch (e) { console.error("stage move body entry:", e && e.message); } }
+      if (to === "crating") { try { await ensureWhTask327(bAfter331, adminId); } catch (e) { console.error("stage move wh entry:", e && e.message); } }
+      logEvent("build.stage_moved", adminId, { build_id, order_number: b.order_number, cab_number: b.cab_number || null, from: was.key, to, from_label: was.label, to_label: STAGES323[to], reason, coyote_status: (coy[rootOf323(b)] || {}).status || null, was_done_in_primer_at: b.body_done_at || null, was_shipped_at: b.shipped_at || null });
+      if (to === "build") logEvent("body.moved_to_build", adminId, { build_id, order_number: b.order_number, reason, from_tracking: true });
       return json(200, { ok: true, stage: to, label: STAGES323[to] });
     }
     // Block 324: one heavy admin box, rendered when it is opened (the page carries only its shell).
