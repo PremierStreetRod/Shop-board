@@ -1026,7 +1026,7 @@ async function week40Check221(empId, outIso) {
     const wk = Math.floor((phxDayStart(ds) - pStart) / (7 * 86400000));
     const wStart = pStart + wk * 7 * 86400000;
     const wEnd = Math.min(wStart + 7 * 86400000, phxDayStart(cur.t) + 86400000);
-    const evs = await db(`clock_event?select=kind,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(wStart).toISOString()}&claimed_at=lt.${new Date(wEnd).toISOString()}&order=claimed_at.asc`);
+    const evs = await db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(wStart).toISOString()}&claimed_at=lt.${new Date(wEnd).toISOString()}&order=claimed_at.asc`);
     // Block 249 (Daniel, 9/2 — after the notice burst): count the PAID hours,
     // through the very same payRules248 + quarter-rounding the Pay Worksheet
     // pays on — not raw minutes. The 9/1 burst flagged five men on exact
@@ -7293,6 +7293,7 @@ async function reportData(startMs, endMs) {
     const k = iv.emp + "|" + phxDate(Math.max(iv.start, sinceMs));
     const row = tcMap[k]; if (!row) continue;
     row.pay287 = (row.pay287 || 0) + overlapHrs(iv, sinceMs, winEnd);
+    if (MKT_LINES_290.has(Number(iv.line))) row.mkt335 = true;   // Block 335: Daniel's day is shown exact, not on the quarter
   }
   for (const ev of events) {
     // Q111 pt 2: corrected/added punches STAMP the day — no silent fixes.
@@ -7347,7 +7348,7 @@ async function reportData(startMs, endMs) {
       }
     }
   }
-  const timecards = Object.values(tcMap).map((r) => ({ ...r, pay: roundQ(r.pay287 || 0), flags: [...r.flags].join(" · ") }))   // Block 287: pay = worksheet rounding (quarter-hour)
+  const timecards = Object.values(tcMap).map((r) => ({ ...r, pay: r.mkt335 ? Math.round((r.pay287 || 0) * 100) / 100 : roundQ(r.pay287 || 0), flags: [...r.flags].join(" · ") }))   // Block 287: pay = worksheet rounding (quarter-hour) · Block 335: a Marketing day (Daniel) stays exact, to the hundredth
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name.localeCompare(b.name)));
   // ON-TIME DELIVERY (Q26): of the cabs signed off in the window, how many
   // finished on or before their PROMISED date. promised_finish is a Phoenix
@@ -9404,14 +9405,16 @@ function roundPunch235(iso) {
 //     bird at 6:00 sharp keeps 6:00; punches outside these two windows keep
 //     the normal rule (7:04 still rounds to 7:00, 6:20 to 6:15).
 //  2) LUNCH LENGTH (duration, so an 11:24 lunch works the same as an 11:00
-//     one): an unpaid gap of 45–60 minutes docks 45 when it ran 45–48 min,
-//     the full hour from 49 min on (47 stays a 45-min lunch, 51 docks the
-//     hour). Gaps under 45 or over 60 minutes behave exactly as before.
+//     one): a same-day gap is docked by how long it ran — Block 335 (owner,
+//     10/28): 15–37 min docks 30, 38–66 docks the hour, 67–120 rounds to the
+//     quarter; under 15 or over 2 hours is not a lunch (each punch rounds on
+//     its own). Marketing lines (Daniel) are exact — no rounding, no dock.
 // Backdated by design: no effective date — Kailey can re-pull ANY period
 // (incl. 8/11–8/25) and compare against the physical punch-clock sheet.
 function payRules248(events) {
   const out = []; const prevOut248 = {};   // exact last clock-out per person
   const lastR287 = {};   // Block 287: the last ROUNDED punch per person — the pay clock never runs backwards
+  const openLine335 = {};   // Block 335: per person, is the OPEN clock-in on a Marketing line (so its line-less clock-out stays exact too)
   // Block 287: a rule can move a punch later than the NEXT punch's own rounding
   // (lunch return pushed to 12:15, then a quick out/in at 12:05 rounds to 12:00;
   // or a 6:50 clock-in snapped to 7:00 followed by an out that rounds to 6:45).
@@ -9427,6 +9430,16 @@ function payRules248(events) {
   };
   for (const ev of events) {
     const t = new Date(ev.claimed_at).getTime();
+    // Block 335 (Daniel, 10/28): the Marketing lines (17/18) are Daniel's own
+    // come-and-go log — "keep my time exact". No quarter rounding, no lunch
+    // dock, no open-snap: the punch is the punch. (He is salary; payroll never
+    // paid on these — this is the Timecards / My time view of his own day.)
+    // A floor / mtime clock-out row carries no line_id (auto-outs and corrections
+    // do) — so an OUT also follows the line of the clock-in it closes
+    // (openLine335), which makes the backdating real for his old days.
+    const mkt335 = ev.kind === "clock_in" ? MKT_LINES_290.has(Number(ev.line_id)) : MKT_LINES_290.has(Number(ev.line_id)) || !!openLine335[ev.employee_id];
+    openLine335[ev.employee_id] = ev.kind === "clock_in" ? MKT_LINES_290.has(Number(ev.line_id)) : false;
+    if (mkt335) { push287(ev, new Date(t).toISOString()); if (ev.kind !== "clock_in") prevOut248[ev.employee_id] = t; continue; }
     if (ev.kind !== "clock_in") { push287(ev, roundPunch235(ev.claimed_at)); prevOut248[ev.employee_id] = t; continue; }
     let adj = null;
     const po = prevOut248[ev.employee_id];
@@ -9435,15 +9448,22 @@ function payRules248(events) {
       // Block 287 (Kailey's cross-check, 9/30): the rule no longer stops at 60.
       // A 62-minute lunch used to fall through to two independent roundings
       // (out 11:03 -> 11:00, in 12:05 -> 12:15) and cost 75 minutes; ten of her
-      // thirteen circled days were exactly that. Now ANY same-day gap of 45+
-      // minutes is docked by its LENGTH, rounded like a punch: 45-48 -> 45,
-      // 49-66 -> 60, then 6-down/7-up on the quarter (67-81 -> 75, 82-96 -> 90 ...).
-      // Anchored on the rounded clock-out, so where :07 falls can't matter.
-      if (gap >= 45 * 60000) {
-        const gm = Math.floor(gap / 60000);   // whole minutes, seconds ignored — exactly how a punch is read
-        const dock287 = gm <= 48 ? 45 : gm <= 66 ? 60 : (gm % 15 <= 6 ? Math.floor(gm / 15) * 15 : Math.floor(gm / 15) * 15 + 15);
-        adj = Date.parse(roundPunch235(new Date(po).toISOString())) + dock287 * 60000;
-      }
+      // thirteen circled days were exactly that. Now a same-day gap is docked
+      // by its LENGTH, anchored on the rounded clock-out, so where :07 falls
+      // can't matter.
+      // Block 335 (owner ruling, 10/28 — backdated to the 10/11 period start,
+      // no effective-date gate, same as 248/287): a full day's lunch is an
+      // hour unless the person asked for a half hour —
+      //   under 15 min  → not a lunch, two normal punches (a switch, a quick errand)
+      //   15–37 min     → 30 docked   (the half-hour lunch they asked for)
+      //   38–66 min     → 60 docked   (the hour; 66 so a 62-min lunch stays an hour)
+      //   67–120 min    → the length, 6-down/7-up on the quarter (75, 90, 105, 120)
+      //   over 2 hours  → not a lunch — each punch rounds on its own again
+      //                   (Andrew 10/24: a 6 h 22 m absence is two half-days,
+      //                   not a "lunch" that pushed his 14:48 return to 15:00)
+      const gm = Math.floor(gap / 60000);   // whole minutes, seconds ignored — exactly how a punch is read
+      const dock335 = gm < 15 ? null : gm <= 37 ? 30 : gm <= 66 ? 60 : gm <= 120 ? (gm % 15 <= 6 ? Math.floor(gm / 15) * 15 : Math.floor(gm / 15) * 15 + 15) : null;
+      if (dock335 !== null) adj = Date.parse(roundPunch235(new Date(po).toISOString())) + dock335 * 60000;
     }
     if (adj === null) {
       const p = new Date(t - PHX_OFFSET_MS);
@@ -9501,7 +9521,7 @@ async function payrollData(startMs, endMs) {
   // Block 235: each punch rounds to the quarter hour (6-down/7-up) BEFORE
   // pairing into work intervals — so every day naturally lands on .0/.25/.5/.75.
   // Block 248: the boundary rules ride the same spot — shop-open snap windows
-  // (5:45–6:00 / 6:45–7:00) and the 45–60-minute lunch dock; everything else
+  // (5:45–6:00 / 6:45–7:00) and the lunch-length dock (Block 335 brackets); everything else
   // still goes through roundPunch235 unchanged.
   const ivs = workIntervals(payRules248(events), nowMs);
   const workday = {}; for (const d of dates) workday[d] = await isWorkDay(d);
@@ -9618,7 +9638,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${navBar95(isAdmin189, false, isAdmin189 ? true : "time")}
   <h2>Pay Worksheet</h2>
-  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Two shop rules ride on top: a morning clock-in during the <b>5:45&ndash;6:00 or 6:45&ndash;7:00 windows</b> pays from :45 only through :48 — from :49 it pays from the hour; and a <b>lunch of 45 minutes or more</b> counts by its length, not by where each punch happens to fall — 45&ndash;48 minutes docks 45, 49&ndash;66 docks the hour, and longer lunches round to the quarter the same way a punch does (67&ndash;81 → 75, 82&ndash;96 → 90). A rule never moves a punch past the one after it, so a quick out/in right after a rule-moved punch is simply zero time. Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
+  <p class="muted" style="margin-top:-8px">Payroll hours from real clock-in/out — every punch lands on the quarter hour (minute 0&ndash;6 rounds down, 7&ndash;14 rounds up; the federal 7-minute rule — the exact-to-the-minute punches stay untouched in the timecards). Two shop rules ride on top: a morning clock-in during the <b>5:45&ndash;6:00 or 6:45&ndash;7:00 windows</b> pays from :45 only through :48 — from :49 it pays from the hour; and a <b>lunch counts by its length</b>, not by where each punch happens to fall &mdash; 15&ndash;37 minutes docks the half hour, 38&ndash;66 docks the hour, and longer lunches round to the quarter the same way a punch does (67&ndash;81 → 75, 82&ndash;96 → 90, up to 2 hours). A gap under 15 minutes or over 2 hours is not a lunch; each punch rounds on its own. Marketing (Daniel) is salaried and off this sheet; his Timecards show exact time &mdash; no rounding, no lunch dock. A rule never moves a punch past the one after it, so a quick out/in right after a rule-moved punch is simply zero time. Overtime is hours worked <b>beyond 40 in a week</b> (the Arizona / federal rule; weeks run 7 days from the period's first day), plus Sick, Vacation, and Unpaid from recorded time off. Paid leave never counts toward the 40. Download the Excel file and email it to payroll. Hours only — no wage rates or pay are stored in the app.</p>
   <div class="lane per" style="line-height:2.1">
     <span style="opacity:.55">Pay period:</span>
     <a href="/payroll?preset=this" class="${d.preset === "this" ? "on" : ""}">Current</a>
@@ -12284,7 +12304,7 @@ http.createServer(async (req, res) => {
       const noteM = String(note || "").trim().slice(0, 2000);
       if (noteM) await upsertWorkLog290(empId, lastM.id, noteM);   // optional — a blank recap never blocks the clock-out
       const atIso = claimed_at && !Number.isNaN(Date.parse(claimed_at)) ? new Date(claimed_at).toISOString() : new Date().toISOString();
-      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: empId, kind: "clock_out_shift", reason: "End of day", claimed_at: atIso }) });
+      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: empId, line_id: lastM.line_id, kind: "clock_out_shift", reason: "End of day", claimed_at: atIso }) });   // Block 335: the out carries its line (17/18 → exact in the pay engine)
       logEvent("clock.out", empId, { reason: "End of day", kind: "clock_out_shift" });
       logEvent("mtime.out", empId, { line_id: lastM.line_id, clock_in_id: lastM.id, note_chars: noteM.length });
       return json(200, { ok: true });
