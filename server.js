@@ -9273,7 +9273,7 @@ function reconcilePage(d, role, frag323 = false) {
   function stageMenuClose331(){var o=document.querySelectorAll('.trpop331');for(var i=0;i<o.length;i++){o[i].innerHTML='';o[i].style.display='none';}}
   function stageMenu323(id,cur,btn){var box=document.getElementById('trmv323-'+id);if(!box)return;if(box.innerHTML){stageMenuClose331();return;}stageMenuClose331();var opts=STAGES323.filter(function(s){return s[0]!==cur;}).map(function(s){return '<option value="'+s[0]+'">'+s[1]+'</option>';}).join('');box.innerHTML='<div class="trpopin331"><div style="font-size:.8rem;opacity:.65;margin-bottom:4px">Move this cab to</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="stsel323-'+id+'" style="padding:7px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff">'+opts+'</select><input id="strs323-'+id+'" placeholder="Reason (required)" maxlength="140" style="padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff;flex:1 1 120px;min-width:120px"><button class="b" onclick="stageMove323(\\''+id+'\\',this)">Move it</button><button class="b" style="opacity:.7" onclick="stageMenuClose331()">Cancel</button></div><span class="msg" id="stmsg323-'+id+'" style="display:block;margin-top:4px"></span></div>';box.style.display='block';var rs=document.getElementById('strs323-'+id);if(rs)rs.focus();}
   document.addEventListener('pointerdown',function(e){var b=e.target.closest('button');if(!e.target.closest('.trpop331')&&!(b&&/Move/.test(b.textContent)))stageMenuClose331();});
-  function stageMove323(id,btn){var sel=document.getElementById('stsel323-'+id),rs=document.getElementById('strs323-'+id),m=document.getElementById('stmsg323-'+id);var to=sel.value,reason=rs.value.trim(),name=sel.options[sel.selectedIndex].textContent;if(!reason){m.innerHTML='<span style="color:#ff6b5e">Type a reason</span>';rs.focus();return;}if(!btn.dataset.armed){btn.dataset.armed='1';var o=btn.textContent;btn.textContent='Move to '+name+'? Tap again';setTimeout(function(){btn.dataset.armed='';btn.textContent=o;},5000);return;}btn.disabled=true;m.textContent='Moving…';fetch('/api/admin/build/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,stage:to,reason:reason})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){m.innerHTML='<span style="color:#5edb84">Moved</span>';var pg=(LANE323.tracking&&LANE323.tracking.page)||1;var q=document.getElementById('trq323');laneLoad323('tracking','&page='+pg+'&q='+encodeURIComponent(q?q.value:''));}else{m.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'Could not move it')+'</span>';btn.disabled=false;btn.dataset.armed='';}}).catch(function(){m.innerHTML='<span style="color:#ff6b5e">Network hiccup — try again</span>';btn.disabled=false;btn.dataset.armed='';});}
+  function stageMove323(id,btn){var sel=document.getElementById('stsel323-'+id),rs=document.getElementById('strs323-'+id),m=document.getElementById('stmsg323-'+id);var to=sel.value,reason=rs.value.trim(),name=sel.options[sel.selectedIndex].textContent;if(!reason){m.innerHTML='<span style="color:#ff6b5e">Type a reason</span>';rs.focus();return;}btn.disabled=true;m.textContent='Moving to '+name+'…';fetch('/api/admin/build/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:id,stage:to,reason:reason})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok){m.innerHTML='<span style="color:#5edb84">Moved</span>';var pg=(LANE323.tracking&&LANE323.tracking.page)||1;var q=document.getElementById('trq323');laneLoad323('tracking','&page='+pg+'&q='+encodeURIComponent(q?q.value:''));}else{m.innerHTML='<span style="color:#ff6b5e">'+((j&&j.error)||'Could not move it')+'</span>';btn.disabled=false;}}).catch(function(){m.innerHTML='<span style="color:#ff6b5e">Network hiccup — try again</span>';btn.disabled=false;});}
   (function(){laneOpenSet323().forEach(function(w){if(document.getElementById('lanebody323-'+w))laneToggle323(w);});})();
   </script>
 </div></body></html>`;
@@ -10303,7 +10303,7 @@ async function cabRecap310(b) {
   const allowedOpts = steps.filter((s) => s.isOpt).reduce((s, x) => s + x.std, 0);
   const allowedFix = tasks.filter((t) => !t.is_background && (t.source === "rework" || t.source === "fix")).reduce((s, x) => s + (Number(x.man_hours) || 0), 0);
   const allowed = allowedSteps + allowedOpts;
-  // ---- idle: shop-open hours on the line with nobody clocked onto it (lunch gap removed) ----
+  // ---- idle: shop-open hours on the line with nobody clocked onto it (one lunch hour a day off — Block 333, the 332 rule) ----
   const closedDays = new Set((cal || []).filter((c) => c.is_open === false).map((c) => c.cal_date));
   const openDays = new Set((cal || []).filter((c) => c.is_open === true).map((c) => c.cal_date));
   const idleDays = []; let shopMs = 0, idleMs = 0, lunchMs = 0, shopDays = 0;
@@ -10319,19 +10319,12 @@ async function cabRecap310(b) {
       if (z <= a) continue;
       shopDays++;
       const covered = unionMs310(lineIvs, a, z);
-      // Block 313 (Daniel: "is LUNCH causing a false read?" — yes): lunch = THIS LINE's own longest gap
-      // between 11:00 and 14:30 with nobody on the line, capped at 60 min (lines stagger lunches, so the
-      // whole-shop rule almost never fired). Taken out of that day's shop hours, so neither "line empty"
-      // nor "people on the line" counts the crew's lunch against them. Ignored under 15 min (a punch edge).
-      const la = Math.max(a, dayStart + 11 * 3600000), lz = Math.min(z, dayStart + 14.5 * 3600000);
-      let bestGap = 0;
-      if (lz > la) { const cuts = [...new Set(lineIvs.flatMap((iv) => [iv.start, iv.end]).filter((t) => t > la && t < lz)), la, lz].sort((p, q) => p - q);
-        // a lunch gap is one the line comes BACK from: somebody on the line before it and somebody after it that same day
-        for (let i = 0; i + 1 < cuts.length; i++) { const s = cuts[i], e = cuts[i + 1]; if (e <= s) continue; const busy = lineIvs.some((iv) => iv.start <= s && iv.end >= e); if (busy) continue;
-          const before = lineIvs.some((iv) => iv.end <= s + 1 && iv.end >= a), after = lineIvs.some((iv) => iv.start >= e - 1 && iv.start <= z); if (before && after) bestGap = Math.max(bestGap, e - s); } }
-      const lunch = bestGap >= 900000 ? Math.min(bestGap, 3600000) : 0;
-      const lineIdleInLunch = Math.min(lunch, Math.max(0, (z - a) - covered));
-      const dayShop = (z - a) - lineIdleInLunch, dayIdle = Math.max(0, (z - a) - covered - lineIdleInLunch);
+      // Block 333 (Daniel 10/27 18:01: "put the recap on the same rule"): the SAME lunch rule as the TV tile and the
+      // reports lane (idleSinceStart332) — ONE lunch hour a day off the line-empty time, never below zero, credited only
+      // once the clock is past 11 AM. (Block 313's longest-gap rule retired here so recap = tile = reports.)
+      const rawIdle = Math.max(0, (z - a) - covered);
+      const lineIdleInLunch = z > dayStart + 11 * 3600000 ? Math.min(3600000, rawIdle) : 0;
+      const dayShop = (z - a) - lineIdleInLunch, dayIdle = rawIdle - lineIdleInLunch;
       shopMs += dayShop; idleMs += dayIdle; lunchMs += lineIdleInLunch;
       if (dayIdle >= 1800000) idleDays.push({ day: phxDay310(new Date(dayStart - PHX_OFFSET_MS + 12 * 3600000).toISOString()), idleH: dayIdle / 3600000, shopH: dayShop / 3600000 });
     }
@@ -10576,7 +10569,7 @@ const recapPage310 = (R, emp196 = null) => {
   <div class="sec">Photos &mdash; ${R.photoTotal}${R.photoTotal ? ` (${Object.entries(R.photoCounts).map(([k, n]) => `${n} ${k === "progress" ? "end-of-day" : k}`).join(", ")})` : ""}</div>
   <div class="strip">${R.strip.map((id) => `<a href="/photo-view/${id}" target="_blank"><img src="/pthumb/${id}" loading="lazy"></a>`).join("")}</div>
   <a class="noprint" href="/order/${encodeURIComponent(R.order)}#photos" style="color:#8ec2f0;font-size:.85rem">All photos &rarr;</a>
-  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, the line&#39;s own lunch removed. People on the line = crew hours &divide; those shop hours. Promised days = allowed hours &divide; (${R.planHpd || 8} h &times; people planned on the line)${R.promisedUnderOldRule ? " &mdash; this cab was promised under the earlier per-family day count" : ""}.</p>
+  <p class="mut" style="font-size:.76rem;margin-top:10px">Production phase only &mdash; Body Shop is added when that department is on the board. Crew hours = every punch on ${e(R.line) || "the line"} from the cab&#39;s start to the crew&#39;s finish tap. Line empty = shop hours ${R.idle.open}:00&ndash;${R.idle.close}:00 on open days with nobody clocked onto the line, one lunch hour a day taken off (the same rule as the TV tile&#39;s Line idle for and the reports Line time lane). People on the line = crew hours &divide; those shop hours. Promised days = allowed hours &divide; (${R.planHpd || 8} h &times; people planned on the line)${R.promisedUnderOldRule ? " &mdash; this cab was promised under the earlier per-family day count" : ""}.</p>
 </div></body></html>`;
 };
 
