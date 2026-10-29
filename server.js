@@ -9534,53 +9534,118 @@ const paidNote323 = (coy) => coy && coy.status === "Processed" ? `Final payment 
 async function coyoteStatusFor323(roots) {
   const want = [...new Set(roots.filter(Boolean).map(String))];
   if (!want.length) return {};
-  const rows = await db(`coyote_intake?select=order_number,received_at,st:payload->order->>status,st2:payload->>status&order_number=in.(${want.map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
   const out = {};
-  for (const r of rows) {   // newest first: the first row seen is the current status; the LAST Processed row seen is the first time it was Processed
-    const st = String(r.st || r.st2 || "").trim();
-    if (!out[r.order_number]) out[r.order_number] = { status: st, paidAt: null };
-    if (st === "Processed") out[r.order_number].paidAt = r.received_at;
+  for (let i = 0; i < want.length; i += 40) {   // Block 343: chunked (40 roots a call keeps each reply well under the 1000-row cap) — the tracking lane now asks for EVERY tracked cab at once (the sort runs over the whole set)
+    const rows = await db(`coyote_intake?select=order_number,received_at,st:payload->order->>status,st2:payload->>status,cr:payload->order->>created&order_number=in.(${want.slice(i, i + 40).map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
+    for (const r of rows) {   // newest first: the first row seen is the current status; the LAST Processed row seen is the first time it was Processed
+      const st = String(r.st || r.st2 || "").trim();
+      if (!out[r.order_number]) out[r.order_number] = { status: st, paidAt: null, createdMs: coyoteCreatedMs343(r.cr) };   // Block 343: the order-entered date rides along (Daniel 10/29: "newest orders to oldest")
+      if (st === "Processed") out[r.order_number].paidAt = r.received_at;
+    }
   }
   return out;
 }
+// ===== Block 343 (Daniel 10/29 08:41: "i would like it to defalt to newest orders to oldest orders. but i would like to be
+// able to arrange here by clicking on the header rows … order number, cab number, customer, family, stage, left
+// productio and shipped. then maybe some sort of by order date button that will return it to newest to oldest" ·
+// 08:49 "1, yes. 2, yes. 3, first name is find. 4, no, leave as is for now."): Order Tracking sorts the WHOLE tracked
+// set server-side before the 25-row page; an "Ordered" column (the order-entered date, read from Coyote's latest push
+// — no column, no backfill, Coyote stays the read-only source of truth); clickable headers; "Newest orders first".
+// Coyote's `created` text is FileMaker-garbled ("2026-060-1T10:51:00", "2026-05-20T080:9:30") — stripping every
+// non-digit leaves YYYYMMDDHHMMSS on every push seen; anything else is "unknown" (sorts last).
+function coyoteCreatedMs343(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  if (d.length !== 14) return null;
+  const y = +d.slice(0, 4), mo = +d.slice(4, 6), da = +d.slice(6, 8), h = +d.slice(8, 10), mi = +d.slice(10, 12), se = +d.slice(12, 14);
+  if (y < 2000 || mo < 1 || mo > 12 || da < 1 || da > 31 || h > 23 || mi > 59 || se > 59) return null;
+  const ms = Date.UTC(y, mo - 1, da, h, mi, se) + PHX_OFFSET_MS;   // Phoenix wall clock → UTC ms
+  return Number.isFinite(ms) ? ms : null;
+}
+const TR_SORTS_343 = ["ordered", "order", "cab", "customer", "family", "stage", "left", "shipped"];
+const TR_STAGE_RANK_343 = { body: 0, crating: 1, shipped: 2, build: 3 };   // Daniel 08:49 "2, yes": shop order, not A→Z
+// natural key for an order / cab number: digit runs compare as numbers, letters after plain numbers ("10F" < "146B" < "245.5T"; 23305 < 23305.2 < 23400; "W115117" after the numerics)
+function natKey343(v) {
+  const sv = String(v == null ? "" : v).trim().toUpperCase();
+  if (!sv) return null;
+  const parts = sv.match(/\d+(?:\.\d+)?|[^\d]+/g) || [];
+  return { lead: /^\d/.test(sv) ? 0 : 1, parts: parts.map((x) => /^\d/.test(x) ? { n: parseFloat(x) } : { s: x }), raw: sv };
+}
+function natCmp343(a, b) {
+  if (a.lead !== b.lead) return a.lead - b.lead;
+  for (let i = 0; i < Math.max(a.parts.length, b.parts.length); i++) {
+    const x = a.parts[i], y = b.parts[i];
+    if (!x) return -1; if (!y) return 1;
+    if (x.n != null && y.n != null) { if (x.n !== y.n) return x.n - y.n; continue; }
+    if (x.n != null) return -1; if (y.n != null) return 1;
+    if (x.s !== y.s) return x.s < y.s ? -1 : 1;
+  }
+  return a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0;
+}
+// the comparator: blanks last in BOTH directions; ties → newest order date, then order number
+function trackingCmp343(sort, dir) {
+  const sgn = dir === "asc" ? 1 : -1;
+  const key = (it) => sort === "order" ? natKey343(it.order) : sort === "cab" ? natKey343(it.cab) : sort === "customer" ? (String(it.customer || "").trim().toLowerCase() || null)
+    : sort === "family" ? (String(it.family || "").trim().toLowerCase() || null) : sort === "stage" ? (TR_STAGE_RANK_343[it.stage.key] ?? 9)
+    : sort === "left" ? (it.leftMs || null) : sort === "shipped" ? (it.shippedMs || null) : (it.orderedMs || null);
+  const tie = (a, b) => ((b.orderedMs || 0) - (a.orderedMs || 0)) || natCmp343(natKey343(a.order) || { lead: 2, parts: [], raw: "" }, natKey343(b.order) || { lead: 2, parts: [], raw: "" });
+  return (a, b) => {
+    const ka = key(a), kb = key(b);
+    if (ka == null && kb == null) return tie(a, b);
+    if (ka == null) return 1; if (kb == null) return -1;   // blanks last, whichever direction
+    let c = typeof ka === "object" ? natCmp343(ka, kb) : typeof ka === "number" ? ka - kb : (ka < kb ? -1 : ka > kb ? 1 : 0);
+    return c ? c * sgn : tie(a, b);
+  };
+}
+const trSortLabel343 = (sort, dir) => ({ ordered: "Ordered", order: "Order #", cab: "Cab #", customer: "Customer", family: "Family", stage: "Stage", left: "Left production", shipped: "Shipped" }[sort] || "Ordered") + " " + (["ordered", "left", "shipped"].includes(sort) ? (dir === "asc" ? "oldest first" : "newest first") : sort === "stage" ? (dir === "asc" ? "Body → Shipped" : "Shipped → Body") : ["order", "cab"].includes(sort) ? (dir === "asc" ? "low→high" : "high→low") : (dir === "asc" ? "A→Z" : "Z→A"));
 const rootOf323 = (b) => String(b.coyote_root || String(b.order_number || "").split(".")[0] || "");
 // one page of the tracking lane: search (order # / cab # / customer), 25 rows, newest-left first
-async function trackingPage323(q, page, famOf) {
+async function trackingPage323(q, page, famOf, sortIn, dirIn) {
   const PER = 25;
+  const sort = TR_SORTS_343.includes(String(sortIn || "")) ? String(sortIn) : "ordered";   // Block 343: a bad key = the default
+  const natural = ["ordered", "left", "shipped"].includes(sort) ? "desc" : "asc";
+  const dir = dirIn === "asc" || dirIn === "desc" ? dirIn : natural;
   const qq = String(q || "").trim().replace(/[,()*\\%]/g, "").slice(0, 40);
   const filt = qq ? `&or=(order_number.ilike.*${encodeURIComponent(qq)}*,cab_number.ilike.*${encodeURIComponent(qq)}*,customer_name.ilike.*${encodeURIComponent(qq)}*)` : "";
   const base = `build?select=id,order_number,coyote_root,part_number,cab_number,state,customer_name,created_at,left_production_at,stage,stage_set_at,stage_set_by,stage_reason,shipped_at,ship_mode,body_done_at,body_moved_to_build_at,wh_sent_back_at,wh_sent_back_reason&state=in.(production_complete,complete)${filt}`;   // Block 339: +sent back   // Block 326: the Body columns drive the ladder · Block 327: ship_mode (Shipped vs Picked up)
-  const ids = await dbAll252(`build?select=id&state=in.(production_complete,complete)${filt}&order=id.asc`);
-  const total = ids.length, pages = Math.max(1, Math.ceil(total / PER));
+  // Block 343: read EVERY tracked row, sort the whole set, then cut the page — page 2 continues page 1
+  const all = await dbAll252(`${base}&order=id.asc`);
+  const total = all.length, pages = Math.max(1, Math.ceil(total / PER));
   const pg = Math.min(pages, Math.max(1, Number(page) || 1));
-  const rows = total ? await db(`${base}&order=left_production_at.desc.nullslast,created_at.desc,id.asc&limit=${PER}&offset=${(pg - 1) * PER}`) : [];
-  const coy = await coyoteStatusFor323(rows.map(rootOf323));
-  const setters = [...new Set(rows.map((b) => b.stage_set_by).filter(Boolean))];
+  const coy = await coyoteStatusFor323(all.map(rootOf323));
+  const setters = [...new Set(all.map((b) => b.stage_set_by).filter(Boolean))];
   const emps = setters.length ? await db(`employee?select=id,first_name,last_name&id=in.(${setters.join(",")})`) : [];
   const nm = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${((e.last_name || "")[0] || "")}.`]));
-  const items = rows.map((b) => {
-    const st = stageOf323(b);
+  const itemsAll = all.map((b) => {
+    const st = stageOf323(b); const cy = coy[rootOf323(b)] || {};
     return { id: b.id, order: b.order_number || "—", family: (famOf && famOf[String(b.part_number || "").toUpperCase()]) || b.part_number || "", cab: b.cab_number || "", customer: b.customer_name || "",
-      stage: st, paid: paidNote323(coy[rootOf323(b)]), left: b.left_production_at ? phxDate(new Date(b.left_production_at).getTime()) : "",
-      shipped: st.key === "shipped" && b.shipped_at ? phxDate(new Date(b.shipped_at).getTime()) : "",
+      stage: st, paid: paidNote323(cy), left: b.left_production_at ? phxDate(new Date(b.left_production_at).getTime()) : "", leftMs: b.left_production_at ? new Date(b.left_production_at).getTime() : null,
+      ordered: cy.createdMs ? phxDate(cy.createdMs) : "", orderedMs: cy.createdMs || null,   // Block 343: the order-entered date from Coyote's latest push
+      shipped: st.key === "shipped" && b.shipped_at ? phxDate(new Date(b.shipped_at).getTime()) : "", shippedMs: st.key === "shipped" && b.shipped_at ? new Date(b.shipped_at).getTime() : null,
       moved: b.stage && b.stage_set_at ? { by: nm[b.stage_set_by] || "an admin", at: phxDate(new Date(b.stage_set_at).getTime()), reason: b.stage_reason || "", to: STAGES323[b.stage] || b.stage } : null,
       back: b.wh_sent_back_at && !b.body_done_at && st.key === "body" ? { at: phxDate(new Date(b.wh_sent_back_at).getTime()), reason: b.wh_sent_back_reason || "" } : null };   // Block 339 (F1)
   });
-  return { items, total, page: pg, pages, per: PER, q: qq };
+  itemsAll.sort(trackingCmp343(sort, dir));
+  const items = itemsAll.slice((pg - 1) * PER, pg * PER);
+  return { items, total, page: pg, pages, per: PER, q: qq, sort, dir, natural };
 }
 const trPopCss331 = `<style>.trpop331{display:none;position:absolute;right:0;top:calc(100% + 4px);z-index:60;min-width:min(520px,88vw);text-align:left;white-space:normal}.trpopin331{background:#1c1c1e;border:1px solid #4a90d9;border-radius:12px;padding:10px 12px;box-shadow:0 10px 26px rgba(0,0,0,.55)}</style>`;
 const stageChip323 = (st) => `<span class="flag" style="${st.key === "shipped" ? "background:#173a2b;color:#5edb84" : st.key === "crating" ? "background:#3a2f10;color:#ffd60a" : st.key === "build" ? "background:#2c2c2e;color:#c7c7cc" : "background:#10233a;color:#5eaeff"}">${String(st.label).replace(/&/g, "&amp;")}</span>`;
 function trackingLaneHtml323(t, admin) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const nav = (lbl, p, on) => on ? `<button class="b" onclick="laneGo323('tracking',${p})">${lbl}</button>` : `<span class="b" style="opacity:.3;cursor:default">${lbl}</span>`;
+  // Block 343: clickable headers — the active column shows ▲/▼, the others a faint ⇅; first click = the natural direction, second flips
+  const isDefault = (t.sort || "ordered") === "ordered" && (t.dir || "desc") === "desc";
+  const th = (key, label) => { const on = t.sort === key; const next = on ? (t.dir === "asc" ? "desc" : "asc") : (["ordered", "left", "shipped"].includes(key) ? "desc" : "asc");
+    return `<th style="cursor:pointer;white-space:nowrap;user-select:none" data-sort="${key}" onclick="trSort343('${key}','${next}')" title="Sort by ${label}">${label} <span style="font-size:.75em;opacity:${on ? 1 : .35}">${on ? (t.dir === "asc" ? "&#9650;" : "&#9660;") : "&#8645;"}</span></th>`; };
   const first = t.total ? (t.page - 1) * t.per + 1 : 0, last = Math.min(t.total, t.page * t.per);
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px">
     <input id="trq323" value="${esc(t.q)}" placeholder="Search order #, cab #, or customer" autocomplete="off" style="flex:1;min-width:200px;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:#1c1c1e;color:#fff;font-size:.95rem" onkeydown="if(event.key==='Enter'){laneSearch323();}">
     <button class="b" onclick="laneSearch323()">Search</button>${t.q ? `<button class="b" onclick="document.getElementById('trq323').value='';laneSearch323()">Clear</button>` : ""}
-    <span class="muted" style="font-size:.85rem">${t.total ? `${first}–${last} of ${t.total}` : "no matches"}${t.q ? ` for "${esc(t.q)}"` : ""}</span>
+    <button class="b" id="trreset343" ${isDefault ? 'style="opacity:.45" title="Already newest orders first"' : ""} onclick="trSort343('ordered','desc')">Newest orders first</button>
+    <span class="muted" style="font-size:.85rem">${t.total ? `${first}–${last} of ${t.total}` : "no matches"}${t.q ? ` for "${esc(t.q)}"` : ""} · sorted by ${esc(trSortLabel343(t.sort, t.dir))}</span>
   </div>
-  ${t.items.length ? `<table><tr><th>Order #</th><th>Cab #</th><th>Customer</th><th>Family</th><th>Stage</th><th>Left production</th><th>Shipped</th>${admin ? "<th></th>" : ""}</tr>
-  ${t.items.map((m) => `<tr id="tr323-${m.id}"><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td>
+  ${t.items.length ? `<table><tr>${th("order", "Order #")}${th("cab", "Cab #")}${th("customer", "Customer")}${th("ordered", "Ordered")}${th("family", "Family")}${th("stage", "Stage")}${th("left", "Left production")}${th("shipped", "Shipped")}${admin ? "<th></th>" : ""}</tr>
+  ${t.items.map((m) => `<tr id="tr323-${m.id}"><td><b><a href="/order/${encodeURIComponent(m.order)}" style="color:inherit">${esc(m.order)}</a></b></td><td>${esc(m.cab) || "&mdash;"}</td><td class="muted">${esc(m.customer) || "&mdash;"}</td><td class="muted">${esc(m.ordered) || "&mdash;"}</td><td>${esc(m.family) || "?"}</td>
     <td>${stageChip323(m.stage)}${m.back ? `<div style="font-size:.78rem;margin-top:2px;color:#ffb3ad">&#10226; sent back from crating ${esc(m.back.at)}${m.back.reason ? ` &mdash; ${esc(m.back.reason)}` : ""}</div>` : ""}${m.moved && m.stage.hand ? `<div class="muted" style="font-size:.78rem;margin-top:2px">moved here by ${esc(m.moved.by)} ${esc(m.moved.at)}${m.moved.reason ? ` &mdash; ${esc(m.moved.reason)}` : ""}</div>` : ""}${m.paid ? `<div style="font-size:.78rem;margin-top:2px;color:#5edb84;opacity:.85">&#36; ${esc(m.paid)}</div>` : ""}</td>
     <td class="muted">${esc(m.left) || "&mdash;"}</td><td class="muted">${esc(m.shipped) || "&mdash;"}</td>
     ${admin ? `<td style="white-space:nowrap;position:relative"><button class="b" onclick="stageMenu323('${m.id}','${m.stage.key}',this)">Move &#9656;</button><div id="trmv323-${m.id}" class="trpop331"></div></td>` : ""}
@@ -9734,8 +9799,11 @@ function reconcilePage(d, role, frag323 = false) {
   function laneRemember323(w,open){try{var a=laneOpenSet323().filter(function(x){return x!==w;});if(open)a.push(w);localStorage.setItem('oq_open_323',JSON.stringify(a));}catch(e){}}
   function laneLoad323(w,extra){var body=document.getElementById('lanebody323-'+w);if(!body)return;body.innerHTML='<div class="muted">Loading…</div>';var u='/api/queue/lane?which='+w+(extra||'');fetch(u,{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.ok){body.innerHTML='<div class="muted">'+((j&&j.error)||'Could not load this lane')+'</div>';return;}body.innerHTML=j.html;LANE323[w]=j;}).catch(function(){body.innerHTML='<div class="muted">Network hiccup — tap Open again</div>';});}
   function laneToggle323(w){var body=document.getElementById('lanebody323-'+w),btn=document.getElementById('lanebtn323-'+w);if(!body)return;var open=body.style.display==='none';if(open){body.style.display='';btn.innerHTML='&#9662; Close';if(!LANE323[w])laneLoad323(w,'');}else{body.style.display='none';btn.innerHTML='&#9656; Open';}laneRemember323(w,open);}
-  function laneGo323(w,p){var q=document.getElementById('trq323');laneLoad323(w,'&page='+p+'&q='+encodeURIComponent(q?q.value:''));}
-  function laneSearch323(){var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():''));}
+  window.trSort323 = window.trSort323 || { sort: 'ordered', dir: 'desc' };
+  function trSortQs343(){return '&sort='+encodeURIComponent(window.trSort323.sort)+'&dir='+encodeURIComponent(window.trSort323.dir);}
+  function trSort343(s,d){window.trSort323={sort:s,dir:d};var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():'')+trSortQs343());}
+  function laneGo323(w,p){var q=document.getElementById('trq323');laneLoad323(w,'&page='+p+'&q='+encodeURIComponent(q?q.value:'')+(w==='tracking'?trSortQs343():''));}
+  function laneSearch323(){var q=document.getElementById('trq323');laneLoad323('tracking','&page=1&q='+encodeURIComponent(q?q.value.trim():'')+trSortQs343());}
   // Block 323: MOVE a past-production cab between stages (admin) — a chooser with a required reason, two taps, audited.
   // Block 331 (Daniel 10/27 16:50): every department in the chooser (At Body Shop / Crating & shipping / Shipped / Build
   // department) and the chooser is a POPOVER pinned to the Move button — the row never grows, nothing to scroll for.
@@ -15100,8 +15168,8 @@ http.createServer(async (req, res) => {
       if (which === "tracking") {
         const prods323 = await db("product?select=part_number,family");
         const famOf323 = {}; for (const p of prods323) famOf323[String(p.part_number).toUpperCase()] = p.family;
-        const t = await trackingPage323(url.searchParams.get("q"), url.searchParams.get("page"), famOf323);
-        return json(200, { ok: true, which, html: trackingLaneHtml323(t, me.role === "admin"), page: t.page, pages: t.pages, total: t.total, q: t.q });
+        const t = await trackingPage323(url.searchParams.get("q"), url.searchParams.get("page"), famOf323, url.searchParams.get("sort"), url.searchParams.get("dir"));   // Block 343: +sort/dir
+        return json(200, { ok: true, which, html: trackingLaneHtml323(t, me.role === "admin"), page: t.page, pages: t.pages, total: t.total, q: t.q, sort: t.sort, dir: t.dir });
       }
       if (which === "aside") {
         const d = await reconcileData();
