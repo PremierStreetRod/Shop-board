@@ -2812,6 +2812,24 @@ const whOwedCard328 = (s) => `<a class="bcard" href="/warehouse/${encodeURICompo
     <div><span class="o">Order ${whEsc288(s.order_number)}</span> <span class="m">${s.cab_number ? `Cab #${whEsc288(s.cab_number)} · ` : ""}${whEsc288(s.lineName || "")} · ${whEsc288(String(s.state || "").replace(/_/g, " "))}</span> <span style="float:right"><span class="chip short">Parts owed</span></span></div>
     <div class="s" style="color:#ff9f0a">Missing: ${whEsc288(s.kit_note || "no note left")}</div>
   </a>`;
+// Block 344 (Daniel 10/30 08:19 + 08:53 "yes on b1, keep it quiet for b2"): missing parts land a FEW at a time. The owed
+// list is still the one kit_note text — kitParts344 reads it as parts (commas / semicolons / new lines; blanks dropped), so
+// each part gets its own Arrived tap and the list can be fixed after the cab started. The last part = the old "kit complete".
+// reviewer: every change to a cab's owed list runs one-at-a-time per cab (two quick ticks never undo each other). Railway
+// runs ONE replica — if that ever changes, this lock no longer covers every tap.
+const kitLock344 = new Map();
+function withKitLock344(id, fn) { const prev = kitLock344.get(id) || Promise.resolve(); const run = prev.then(fn, fn); const tail = run.catch(() => {}); kitLock344.set(id, tail); tail.then(() => { if (kitLock344.get(id) === tail) kitLock344.delete(id); }); return run; }
+function kitParts344(note) { return String(note == null ? "" : note).split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean); }
+// The owed lane on the warehouse cab page: Missing line (unchanged), one row per part with its own Arrived tap (the part's
+// text rides in data-part, never inside the onclick), All arrived (unchanged route), Edit the list (the kit-note route).
+function whOwedLane344(b, owed, canAct) {
+  const parts = kitParts344(owed.kit_note);
+  const rows = parts.map((pt) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #2c2c2e"><span style="font-weight:600">${whEsc288(pt)}</span>${canAct ? `<button class="b grn" data-part="${whEsc288(pt)}"${parts.length === 1 ? ' data-last="1"' : ""} onclick="partArrived344(this,'${b.id}')">&#10003; Arrived</button>` : ""}</div>`).join("");
+  return `<div class="lane" style="border-color:#ff9f0a"><b>Started short &mdash; parts still owed</b><div style="color:#ff9f0a;font-weight:700;margin:4px 0">Missing: ${whEsc288(owed.kit_note || "no note left")}</div>
+    ${parts.length ? `<div style="opacity:.6;font-size:.85rem;margin:6px 0 2px">${parts.length === 1 ? "Tap Arrived when it comes in &mdash; that closes the loop." : `${parts.length} parts still owed &mdash; tap Arrived on each one as it comes in. The last one closes the loop.`}</div><div style="margin-bottom:8px;border-bottom:1px solid #2c2c2e">${rows}</div>` : ""}
+    <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">Everything came in at once? Tap All arrived.</div>${canAct ? `<button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${b.id}'},this))">All arrived — kit complete &#10003;</button> <button class="b mv" onclick="openOwed344('${b.id}')">Edit the list</button>
+    <div class="np" id="ko344-${b.id}" style="display:none;margin-top:10px"><div style="font-size:.85rem;opacity:.75">Fix a typo, add a part that turned up missing, or take one off. Separate parts with commas.</div><input id="kn344-${b.id}" maxlength="400" value="${whEsc288(owed.kit_note || "")}" data-was="${whEsc288(owed.kit_note || "")}"><button class="b grn" onclick="saveOwed344(this,'${b.id}')">Save the list</button> <button class="b mv" onclick="closeOwed344('${b.id}')">Cancel</button></div>` : `<span style="opacity:.6">Clock in to tap Arrived.</span>`}<div class="msg err" id="err"></div></div>`;
+}
 // Block 328: the cab ON THE LINE, on its own page — the panel-prep strip with its buttons (the Home shows the chip only)
 const whOnLineLane328 = (q, canPrep, clockedIn) => `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${whEsc288(q.order_number)}</b>${q.cab_number ? ` &middot; Cab #${whEsc288(q.cab_number)}` : ""}${q.family ? ` &middot; ${whEsc288(q.family)}` : ""}${q.prep && q.prep.state !== "done" ? prepStrip301(q, canPrep, clockedIn) : `<div class="prep301"><span class="chip ok">&#10003; Panels ready${q.prep && q.prep.hrs ? ` &middot; ${q.prep.hrs}h` : ""}${q.prep && q.prep.by ? ` &middot; ${whEsc288(q.prep.by)}` : ""}</span></div>`}</div>`;
 // Block 328: the warehouse queue data — one assembly shared by the Home (cards) and the cab page (the actions).
@@ -2933,6 +2951,11 @@ const whPageScript328 = (ah) => `${netJs}
     const n = p.querySelector(".npn"); if (n) n.textContent = asShort ? "Save note only" : "Save note";
     const i = document.getElementById("kn-" + id); if (i) i.focus(); }
   function closeNote288(id){ const p = document.getElementById("np-" + id); if (p) p.style.display = "none"; }
+  /* Block 344: one part of a short kit came in. The last part asks twice (it closes the kit). */
+  function partArrived344(btn, id){ const go = function(){ document.querySelectorAll("button[data-part]").forEach(function(x){ x.disabled = true; }); post("/api/kit/part-arrived", { build_id: id, part: btn.dataset.part || "" }, btn); }; if (btn.dataset.last) arm(btn, go); else go(); }
+  function saveOwed344(btn, id){ const i = document.getElementById("kn344-" + id); post("/api/kit/note", { build_id: id, note: i ? i.value.trim() : "", was: i ? (i.dataset.was || "") : "" }, btn); }
+  function openOwed344(id){ const p = document.getElementById("ko344-" + id); if (!p) return; p.style.display = "block"; const i = document.getElementById("kn344-" + id); if (i) i.focus(); }
+  function closeOwed344(id){ const p = document.getElementById("ko344-" + id); if (p) p.style.display = "none"; }
   function noteOpen288(){ return [...document.querySelectorAll(".np")].some(function(p){ return p.style.display !== "none"; }); }
   function armMv288(btn, msg, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const o = btn.innerHTML; btn.textContent = msg; btn.style.borderColor = "#ffd60a"; btn.style.color = "#ffd60a"; setTimeout(function(){ btn.dataset.armed = ""; btn.innerHTML = o; btn.style.borderColor = ""; btn.style.color = ""; }, 5000); } }
   function arm(btn, fn){ if (btn.dataset.armed) { fn(); } else { btn.dataset.armed = "1"; const orig97 = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = orig97; }, 4000); } }
@@ -2964,6 +2987,7 @@ const whPageScript328 = (ah) => `${netJs}
       // is stale — reload so it shows the real state, not a silent reject under
       // a still-green "ON THE CLOCK" chip.
       if (/on the clock|clock in first/i.test(out.error || "")) { location.reload(); return; }
+      if (out.stale) { showErr97(btn, out.error || "This changed — reloading"); setTimeout(function(){ location.reload(); }, 1500); return; }   /* Block 344: the list changed under you, show the truth */
       showErr97(btn, out.error || "Something went wrong");
     } catch (e) {
       if (tm304) clearTimeout(tm304);
@@ -3169,7 +3193,7 @@ ${whCss288}</head>
   </div>`).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
     <h3>Started short — parts still owed</h3>
-    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When the missing pieces arrive and go out to the cab, open the cab and tap Parts arrived — that closes the loop and clears it off this list.</div>
+    <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When missing pieces arrive, open the cab and tap Arrived on each part (or All arrived) — the last one clears it off this list.</div>
     ${(shortOwed254 || []).map(whOwedCard328).join("")}
   </div>` : ""}
   <div class="lane">
@@ -7341,7 +7365,7 @@ const whCabPage327 = (emp, st, opts) => {
   ${whereBanner339(o.where || whereNow339(b, { wh: st, names: st.names, lineName: o.kit ? { [b.line_id]: o.kit.lineName } : null }), { idle: o.idle || "" })}
   <div style="opacity:.7;margin-bottom:8px">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(st.family || b.part_number || "")}${b.customer_name ? ` · ${esc(b.customer_name)}` : ""} · <a href="/order/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">order page</a></div>
   ${o.kit ? `<div class="lane" style="border-color:#3d6ea8;padding:12px"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">&#128230; KIT &mdash; ${esc(o.kit.lineName)}</div><div style="opacity:.7;font-size:.9rem;margin-bottom:8px">${o.kit.context}</div>${o.kit.html}<div class="msg err" id="err"></div></div>` : ""}
-  ${o.owed ? `<div class="lane" style="border-color:#ff9f0a"><b>Started short &mdash; parts still owed</b><div style="color:#ff9f0a;font-weight:700;margin:4px 0">Missing: ${esc(o.owed.kit_note || "no note left")}</div><div style="opacity:.6;font-size:.85rem;margin-bottom:8px">When the missing pieces arrive and go out to the cab, tap the button &mdash; that closes the loop.</div>${o.canAct ? `<button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${b.id}'},this))">Parts arrived — kit complete &#10003;</button>` : `<span style="opacity:.6">Clock in to tap Parts arrived.</span>`}<div class="msg err" id="err"></div></div>` : ""}
+  ${o.owed ? whOwedLane344(b, o.owed, o.canAct) : ""}
   ${o.kit && !b.body_done_at ? "" : `<div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
   ${!o.clockedIn && !st.gone ? `<div class="lane" style="opacity:.8">Clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen first — then the buttons wake up.</div>` : ""}
   ${st.back ? `<div class="lane" style="border-color:#ff8fa3"><b>Sent back to Body</b> ${b.wh_sent_back_at ? esc(phxDate(new Date(b.wh_sent_back_at).getTime())) : ""}${b.wh_sent_back_reason ? ` — ${esc(b.wh_sent_back_reason)}` : ""} · the cab comes back here when Body taps Done in primer again.</div>` : ""}
@@ -9394,7 +9418,7 @@ async function whActivity230() {
   let wh230 = null;
       const [deck230, ev230, emps230, lines230, owed254] = await Promise.all([
         db(`build?select=id,order_number,cab_number,line_id,kit_status,kit_note,kit_verified_at,kit_verified_by,created_at,queue_pos&state=eq.upcoming&order=queue_pos.asc.nullslast,created_at.asc&limit=200`),
-        db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(kit.status,kit.pull_started,kit.pull_undone,kit.pull_reverted,kit.delivered,kit.delivered_held,kit.note,kit.short_cleared)&order=at.desc&limit=20`),
+        db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(kit.status,kit.pull_started,kit.pull_undone,kit.pull_reverted,kit.delivered,kit.delivered_held,kit.note,kit.short_cleared,kit.part_arrived)&order=at.desc&limit=20`),
         db(`employee?select=id,first_name,last_name`),
         db(`line?select=id,name&enabled=is.true&order=id`),
         db(`build?select=order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),   // Block 254: still owed
@@ -9409,7 +9433,8 @@ async function whActivity230() {
           vat: b2.kit_verified_at ? phxDate(new Date(b2.kit_verified_at).getTime()) : "", age: ageD }; });
       const phrase230 = { "kit.status": (p2) => p2.status === "verified" ? "verified the kit" : p2.status === "short" ? `marked the kit SHORT${p2.note ? ` — "${String(p2.note).slice(0, 60)}"` : ""}` : "set the kit back to unverified",
         "kit.pull_started": () => "started pulling the kit", "kit.pull_undone": () => "un-pulled the kit", "kit.pull_reverted": () => "pull auto-reverted (no longer on deck)",
-        "kit.delivered": (p2) => `delivered the kit${p2.short ? " SHORT — parts still owed" : ""}${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": (p2) => `delivered the kit${p2.short ? " SHORT" : ""} (line still held)`, "kit.note": () => "left a kit note",
+        "kit.delivered": (p2) => `delivered the kit${p2.short ? " SHORT — parts still owed" : ""}${p2.pull_minutes ? ` (${p2.pull_minutes} min pull)` : ""}`, "kit.delivered_held": (p2) => `delivered the kit${p2.short ? " SHORT" : ""} (line still held)`, "kit.note": (p2) => p2.after_start ? "edited the missing-parts list" : "left a kit note",
+        "kit.part_arrived": (p2) => `checked off a missing part — "${String(p2.part || "").slice(0, 40)}"${p2.last ? " (the last one — kit complete)" : p2.left ? ` (${p2.left} still owed)` : ""}`,
         "kit.short_cleared": (p2) => p2.at_signoff ? `signed the cab off with the kit still marked SHORT${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit cleared at sign-off (Block 308)` : `confirmed the missing parts arrived${p2.was_missing ? ` — "${String(p2.was_missing).slice(0, 60)}"` : ""} — kit complete` };   // Block 254 · Block 308
       const feed230 = ev230.map((e2) => ({ who: e2.actor_id ? (nm230b[e2.actor_id] || "someone") : "system",
         what: (phrase230[e2.event_type] || (() => e2.event_type))(e2.payload || {}),
@@ -10890,14 +10915,14 @@ async function cabRecap310(b) {
   const kitStatusEvs = ev("kit.status");
   const shortBeforeStart = kitStatusEvs.some((e) => e.payload && e.payload.to === "short" && (!startMs || new Date(e.at).getTime() <= startMs)) || Boolean(ev("build.manager_started").some((e) => e.payload && e.payload.short)) || Boolean(ev("kit.delivered").some((e) => e.payload && e.payload.short));
   const shortNote = (kitStatusEvs.filter((e) => e.payload && e.payload.to === "short").slice(-1)[0] || {}).payload || {};
-  const noteEv = ev("kit.note").slice(-1)[0];
+  const noteEv = ev("kit.note").filter((e) => !(e.payload && e.payload.after_start)).slice(-1)[0];   // Block 344: an edit after the start is not what was missing AT the start
   const clearedEv = ev("kit.short_cleared").slice(-1)[0] || null;
   const mgrStart = ev("build.manager_started")[0] || null;
   const kit = {
     verifiedAt: b.kit_verified_at, verifiedBy: name(b.kit_verified_by),
     pullMin: b.kit_pull_started_at && b.kit_delivered_at ? Math.round((new Date(b.kit_delivered_at) - new Date(b.kit_pull_started_at)) / 60000) : null,
     deliveredAt: b.kit_delivered_at, deliveredBy: name(b.kit_delivered_by), startedByManager: mgrStart ? name(mgrStart.actor_id) : null,
-    shortAtStart: shortBeforeStart, missing: shortNote.note || (noteEv && noteEv.payload ? noteEv.payload.note : "") || b.kit_note || "",
+    shortAtStart: shortBeforeStart, missing: ((ev("kit.delivered").concat(ev("kit.delivered_held")).filter((e) => e.payload && e.payload.short && (!startMs || new Date(e.at).getTime() <= startMs)).sort((x, y) => new Date(x.at) - new Date(y.at)).slice(-1)[0] || {}).payload || {}).missing || ((mgrStart || {}).payload || {}).missing || shortNote.note || (noteEv && noteEv.payload ? noteEv.payload.note : "") || ((clearedEv || {}).payload || {}).was_missing || b.kit_note || "",   // Block 344 (reviewer): what was recorded AT the start — part ticks / list edits change the live column later
     clearedAt: clearedEv ? clearedEv.at : null, clearedBy: clearedEv ? name(clearedEv.actor_id) : "", clearedAtSignoff: Boolean(clearedEv && clearedEv.payload && clearedEv.payload.at_signoff),
   };
   // ---- options ----
@@ -15211,7 +15236,7 @@ http.createServer(async (req, res) => {
       }
       const { build_id, note, claimed_at, photo_pass } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);   // Block 255: root feeds the option gate
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root,kit_status,kit_note&id=eq.${build_id}`);   // Block 255: root feeds the option gate · Block 344: kit rides along (the self-pass clears a stale SHORT)
       // Accepts ACTIVE (first finish), REWORK (resubmit after fixes, file 18),
       // and FIX_JOB (Q85: a returned/kicked-back cab resubmitting for re-inspection).
       if (!b || (b.state !== "active" && b.state !== "rework" && b.state !== "fix_job"))
@@ -15289,6 +15314,20 @@ http.createServer(async (req, res) => {
           state: "production_complete", final_note: note || null,
           rework_reason: null, rework_hours: null, rework_note: null, rework_assigned_at: null,
           inspection_claimed_by: null, inspection_claimed_at: null, left_production_at: claimed_at || new Date().toISOString() }) });   // Block 323
+        // Block 344: a SHORT kit clears at the self-pass too (the Block 308 rule — a cab sent back at inspection never runs the
+        // main sign-off). Reviewer 2: its own write, one-at-a-time with the warehouse's part taps, guarded, logged only if it landed.
+        if (b.kit_status === "short") {
+          try { await withKitLock344(build_id, async () => {
+            const [kS] = await db(`build?select=kit_status,kit_note&id=eq.${build_id}`);
+            if (!kS || kS.kit_status !== "short") return;
+            const wonS = await db(`build?id=eq.${build_id}&kit_status=eq.short`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ kit_status: "verified", kit_note: null, kit_verified_by: empId, kit_verified_at: new Date().toISOString() }) });
+            if (!wonS || !wonS.length) return;
+            logEvent("kit.short_cleared", empId, { build_id, order_number: b.order_number, was_missing: kS.kit_note || "", at_signoff: true, self_pass: true });
+            const whS = await warehouseIds().catch(() => []);
+            void notify("kit.cleared_at_signoff", whS, `Order ${b.order_number} went to Body — kit was still marked SHORT`,
+              `The crew finished the rework and sent the cab on, so the parts arrived. The kit is now marked complete for you.${kS.kit_note ? ` (Was listed: ${String(kS.kit_note).slice(0, 80)})` : ""}`, "/home");
+          }); } catch (eK344) { console.error("self-pass kit clear:", eK344 && eK344.message); }
+        }
         try { await ensureBodyTasks326(b, empId); } catch (eB326) { console.error("body entry failed:", eB326 && eB326.message); }   // Block 326: a self-pass from rework lands the cab back in Body (steps already there from the first sign-off)
         logEvent("build.self_passed", empId, { build_id, order_number: b.order_number, note: note || "", at: claimed_at });
         logEvent("build.production_complete", empId, { build_id, order_number: b.order_number, from_state: "rework", self_pass: true, signed_off_at: claimed_at, line_id: b.line_id });   // Block 342: +line_id
@@ -15690,7 +15729,7 @@ http.createServer(async (req, res) => {
         logEvent("kit.short_cleared", empId, { build_id, order_number: b.order_number, was_missing: b.kit_note || "", at_signoff: true });
         void notify("kit.cleared_at_signoff", await warehouseIds(),
           `Order ${b.order_number} signed off — kit was still marked SHORT`,
-          `Production finished and the cab passed inspection, so the parts arrived. The kit is now marked complete for you. Next time tap "Parts arrived — kit complete" when they land, so the owed-parts lane stays true.${b.kit_note ? ` (Was listed: ${String(b.kit_note).slice(0, 80)})` : ""}`, "/home");
+          `Production finished and the cab passed inspection, so the parts arrived. The kit is now marked complete for you. Next time tick the parts off on the cab's warehouse page as they land (or tap All arrived), so the owed-parts lane stays true.${b.kit_note ? ` (Was listed: ${String(b.kit_note).slice(0, 80)})` : ""}`, "/home");
       }
       // Block 255: the verification itself, on the record — one audited row per
       // confirmed selection (gate-aware: 'body' now, 'ship' wakes with the
@@ -15838,14 +15877,66 @@ http.createServer(async (req, res) => {
     // warehouse screen (the cab card only shows kit info while a cab waits).
     if (url.pathname === "/api/kit/note" && req.method === "POST") {
       const [whoN97, wnFail] = await requireWarehouse(true); if (wnFail) return wnFail;
-      const { build_id, note } = await body(req);
+      const { build_id, note, was } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [bN97] = await db(`build?select=id,order_number,state,kit_status,kit_note&id=eq.${build_id}`);
+      // Block 344: a cab started SHORT keeps an editable list until the parts are in (Daniel 10/30: "he wasnt able to edit the missing parts list")
+      const owedN344 = Boolean(bN97 && bN97.kit_status === "short" && bN97.state !== "upcoming" && bN97.state !== "cancelled");
+      if (owedN344) return await withKitLock344(build_id, async () => {
+        const noteE344 = String(note || "").trim().slice(0, 400);
+        const [cur] = await db(`build?select=kit_status,kit_note&id=eq.${build_id}`);
+        if (!cur || cur.kit_status !== "short") return json(409, { ok: false, stale: true, error: "The parts already came in — reloading" });
+        if (typeof was !== "string" || String(cur.kit_note || "") !== was) return json(409, { ok: false, stale: true, error: "Someone changed the list since you opened it — reloading" });   // reviewer 2: no was = a page from before the cab started → stale
+        if (!kitParts344(noteE344).length) return json(400, { ok: false, error: "The list can't be empty — if everything came in, tap All arrived — kit complete" });
+        const wroteE = await db(`build?id=eq.${build_id}&kit_status=eq.short`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ kit_note: noteE344 }) });
+        if (!wroteE || !wroteE.length) return json(409, { ok: false, stale: true, error: "The parts already came in — reloading" });
+        logEvent("kit.note", whoN97, { build_id, order_number: bN97.order_number, note: noteE344, after_start: true, was: cur.kit_note || "" });   // after_start keeps the cab recap's "missing at start" honest
+        return json(200, { ok: true });
+      });
       const noteN97 = String(note || "").trim().slice(0, 200);
-      const [bN97] = await db(`build?select=id,order_number,state&id=eq.${build_id}`);
       if (!bN97 || bN97.state !== "upcoming") return json(400, { ok: false, error: "Cab is not waiting to start" });
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ kit_note: noteN97 || null }) });
       logEvent("kit.note", whoN97, { build_id, order_number: bN97.order_number, note: noteN97 });
       return json(200, { ok: true });
+    }
+
+    // Block 344 (Daniel 10/30 08:53 "yes on b1, keep it quiet for b2"): ONE part of a short kit arrived. It comes off the
+    // list (the rest keep their spelling); nobody is belled. The LAST part does exactly what "All arrived" does — kit
+    // verified, kit.short_cleared, the admins' bell.
+    if (url.pathname === "/api/kit/part-arrived" && req.method === "POST") {
+      const [whoP344, wpFail344] = await requireWarehouse(true); if (wpFail344) return wpFail344;
+      const { build_id, part } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const partP344 = String(part || "").trim();
+      if (!partP344) return json(400, { ok: false, error: "Which part?" });
+      return await withKitLock344(build_id, async () => {   // reviewer: one change at a time per cab
+      const [bP344] = await db(`build?select=id,order_number,cab_number,state,kit_status,kit_note&id=eq.${build_id}`);
+      if (!bP344) return json(404, { ok: false, error: "Cab not found" });
+      if (bP344.state === "upcoming") return json(400, { ok: false, error: "This cab hasn't started — fix the list up in the queue instead" });
+      if (bP344.state === "cancelled") return json(400, { ok: false, error: "This order was cancelled" });
+      if (bP344.kit_status !== "short") return json(409, { ok: false, stale: true, error: "This cab isn't owed any parts anymore — reloading" });
+      const listP344 = kitParts344(bP344.kit_note);
+      const iP344 = listP344.findIndex((x) => x.toLowerCase() === partP344.toLowerCase());
+      if (iP344 < 0) return json(409, { ok: false, stale: true, error: "That part isn't on the list anymore — reloading" });
+      const restP344 = listP344.filter((x, k) => k !== iP344);
+      if (!restP344.length) {
+        const wonP = await db(`build?id=eq.${build_id}&kit_status=eq.short`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({
+          kit_status: "verified", kit_note: null, kit_verified_by: whoP344, kit_verified_at: new Date().toISOString() }) });
+        if (!wonP || !wonP.length) return json(409, { ok: false, stale: true, error: "The kit was just marked complete — reloading" });   // reviewer: All arrived got there first — no second log, no second bell
+        logEvent("kit.part_arrived", whoP344, { build_id, order_number: bP344.order_number, part: listP344[iP344], still_missing: "", last: true });
+        logEvent("kit.short_cleared", whoP344, { build_id, order_number: bP344.order_number, was_missing: bP344.kit_note || "", by_parts: true });
+        const adminsP344 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+        void notify("kit.short_cleared", adminsP344.map((a) => a.id),
+          `Missing parts arrived — order ${bP344.order_number}`,
+          `Warehouse checked off the last missing part (${String(listP344[iP344]).slice(0, 60)}) — nothing owed on this cab anymore.`,
+          "/reconcile");
+        return json(200, { ok: true, complete: true });
+      }
+      const wroteP = await db(`build?id=eq.${build_id}&kit_status=eq.short`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ kit_note: restP344.join(", ") }) });
+      if (!wroteP || !wroteP.length) return json(409, { ok: false, stale: true, error: "The kit was just marked complete — reloading" });
+      logEvent("kit.part_arrived", whoP344, { build_id, order_number: bP344.order_number, part: listP344[iP344], still_missing: restP344.join(", "), left: restP344.length });
+      return json(200, { ok: true, left: restP344.length });
+      });
     }
 
     // Block 97 (owner-rep): back up a step — un-does "Pull started" (harmless;
