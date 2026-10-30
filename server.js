@@ -3092,8 +3092,8 @@ const whPageScript328 = (ah) => `${netJs}
 // still owed" tag if it started short), then the waiting cabs in build order (the line's own order — queue_pos, then oldest).
 // Panel prep: only what Eric can physically strip — the cab holding the line, and the on-deck cab ONCE ITS KIT PULL HAS STARTED
 // ("he will never be able to do any panel prepping until he has completed pulling the parts") — with its status: Not started ·
-// In progress · Paused · Done. At most 2 per line; the tab number = how many are not done. A card opens on its own when it has
-// something to tap; Eric's open/close is remembered on his phone (D1). The cab at inspection / back for a fix holds its line (D2).
+// In progress · Paused · Done. At most 2 per line; the tab number = how many are not done. Block 348: every card starts
+// CLOSED with a one-line summary (D1 retired 10/30 12:27); Eric's open/close is remembered on his phone. The cab at inspection / back for a fix holds its line (D2).
 // the cab holding a line: building, at inspection, or back for a fix
 const whLineHolder347 = (r) => r.active || r.awaiting[0] || r.rework[0] || null;
 // the kits on ONE line that need a tap (the Block 337 rule, per line): not checked yet · next up and not pulled · pulled with the line clear
@@ -3121,12 +3121,34 @@ const whTabCounts337 = (rows, builds, wh327, canPrep) => {
   return { kits, prep, fin };
 };
 // the open/close line card shared by both tabs. The toggle is a self-contained attribute (survives any in-place redraw) and
-// remembers the choice per phone ("whline347:<tab>:<line>"); the page script re-applies remembered choices on load.
-const LINE_TOGGLE_JS347 = "var c=this.parentNode,b=c.querySelector('.lbody347'),o=b.style.display==='none';b.style.display=o?'':'none';this.querySelector('.car347').textContent=o?'▾':'▸';try{localStorage.setItem('whline347:'+c.getAttribute('data-line347'),o?'1':'0')}catch(e){}";
-const whLineCard347 = (key, title, count, countWord, body) => `<div class="lane line347" data-line347="${whEsc288(key)}" style="padding:0;overflow:hidden">
-    <div class="lhead347" onclick="${LINE_TOGGLE_JS347}" style="display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:pointer;user-select:none"><span class="car347" style="width:14px;opacity:.8">${count ? "▾" : "▸"}</span><b style="flex:1">${whEsc288(title)}</b>${count ? `<span class="chip" style="background:#0a3a66;color:#cfe6ff">${count} ${whEsc288(countWord)}</span>` : `<span style="opacity:.5;font-size:.85rem">nothing to do</span>`}</div>
-    <div class="lbody347" style="padding:0 14px 12px${count ? "" : ";display:none"}">${body}</div>
+// remembers the choice per phone ("whline348:<tab>:<line> — Block 348"); the page script re-applies remembered choices on load.
+// Block 348 (Daniel 10/30 12:15 + 12:27): every card STARTS CLOSED (D1 retired — every line had unchecked kits, so every card
+// opened and the tab read as one flat list); the closed header says what's inside in one line. New storage key "whline348:"
+// so the old D1-era choices don't carry over; Eric's own open/close is still remembered per phone.
+const LINE_TOGGLE_JS347 = "var c=this.parentNode,b=c.querySelector('.lbody347'),o=b.style.display==='none';b.style.display=o?'':'none';this.querySelector('.car347').textContent=o?'▾':'▸';this.setAttribute('aria-expanded',o?'true':'false');try{localStorage.setItem('whline348:'+c.getAttribute('data-line347'),o?'1':'0')}catch(e){}";
+const whLineCard347 = (key, title, count, countWord, body, summary) => `<div class="lane line347" data-line347="${whEsc288(key)}" style="padding:0;overflow:hidden;border-width:2px">
+    <div class="lhead347" role="button" aria-expanded="false" onclick="${LINE_TOGGLE_JS347}" style="display:flex;align-items:center;gap:10px;padding:12px 14px;min-height:56px;cursor:pointer;user-select:none;outline:none;-webkit-tap-highlight-color:rgba(255,255,255,.08)"><span class="car347" style="font-size:1.5rem;line-height:1;width:22px;text-align:center;color:#5eaeff">▸</span><div style="flex:1;min-width:0"><b style="font-size:1.08rem">${whEsc288(title)}</b>${summary ? `<div class="lsum348" style="font-size:.88rem;opacity:.8;margin-top:2px">${summary}</div>` : ""}</div>${count ? `<span class="chip" style="background:#0a3a66;color:#cfe6ff;white-space:nowrap">${count} ${whEsc288(countWord)}</span>` : `<span style="opacity:.5;font-size:.85rem;white-space:nowrap">nothing to do</span>`}</div>
+    <div class="lbody347" style="padding:0 14px 12px;display:none">${body}</div>
   </div>`;
+// Block 348: the one-line header summary — Kits: what Eric does next on this line (the same pull target as the cards inside)
+const whKitSummary348 = (r) => { const esc = whEsc288, h = whLineHolder347(r);
+  const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
+  const od = r.queue[pullIdx < 0 ? 0 : pullIdx] || null;
+  const owedN = h && h.kit_status === "short" ? kitParts344(h.kit_note).length : 0;
+  const owed = h && h.kit_status === "short" ? ` <span class="chip short" style="font-size:.78rem">&#9888; ${owedN ? `${owedN} part${owedN === 1 ? "" : "s"}` : "parts"} owed on the line</span>` : "";
+  const next = !od ? "Nothing waiting"
+    : od.kit_pull_started_at ? (h ? `Order ${esc(od.order_number)} pulled &middot; waiting for the line` : `<b>Next: Order ${esc(od.order_number)} &mdash; deliver</b>`)
+    : `<b>Next: Order ${esc(od.order_number)} &mdash; ${od.kit_status === "verified" ? "pull the kit" : od.kit_status === "short" ? "short, pull what we have" : "check the kit"}</b>`;
+  const toCheck = r.queue.filter((q) => q !== od && q.kit_status !== "verified" && q.kit_status !== "short").length;   // the other kits still to check on this line
+  return `${next}${toCheck ? ` &middot; ${toCheck} more kit${toCheck === 1 ? "" : "s"} to check` : ""}${owed}`; };
+// Block 348: Panel prep header — the first cab not done and its status, else the on-deck note
+const whPrepSummary348 = (P) => { const esc = whEsc288;
+  const first = P.items.find((x) => !(x.b.prep && x.b.prep.state === "done"));
+  if (first) { const p = first.b.prep || { state: "none" };
+    const st = p.state === "in_progress" ? (p.mine ? "in progress — you" : p.active ? "in progress" : "paused") : "not started";
+    return `<b>Order ${esc(first.b.order_number)} &mdash; ${esc(st)}</b> &middot; ${esc(first.where.toLowerCase())}`; }
+  if (P.next) return `On deck: Order ${esc(P.next.order_number)} &mdash; pull the kit first`;
+  return P.items.length ? "Panels ready" : "Nothing to prep"; };
 const whPrepChip347 = (b) => { const p = b.prep || { state: "none" }; return p.state === "done" ? `<span class="chip ok">&#10003; Done${p.by ? " — " + whEsc288(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; In progress — you" : p.active ? "&#9881; In progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
 const whPrepTab347 = (rows) => {
   const card = (x) => `<a class="bcard${x.b.prep && x.b.prep.mine ? " next328" : ""}" href="/warehouse/${encodeURIComponent(x.b.order_number)}">
@@ -3135,7 +3157,7 @@ const whPrepTab347 = (rows) => {
     </a>`;
   const cards = rows.map((r) => { const P = whLinePrep347(r);
     const body = `${P.items.map(card).join("")}${P.next ? `<div style="opacity:.55;font-size:.88rem;margin-top:8px">On deck: Order ${whEsc288(P.next.order_number)} — pull the kit first.</div>` : ""}${!P.items.length && !P.next ? `<div style="opacity:.5;margin-top:4px">Nothing to prep on this line.</div>` : ""}`;
-    return whLineCard347("prep:" + r.line.id, r.line.name, P.open, "to do", body); }).join("");
+    return whLineCard347("prep:" + r.line.id, r.line.name, P.open, "to do", body, whPrepSummary348(P)); }).join("");
   return `<div style="opacity:.6;font-size:.85rem;margin:2px 4px 8px">Panels to strip: the cab on each line, and the next one once its kit is pulled. Tap a cab for Start / Pause / Finish.</div>${cards}`;
 };
 const whKitLineBody347 = (r) => { const h = whLineHolder347(r);
@@ -3233,7 +3255,7 @@ ${whCss288}</head>
     const tab = (k, icon, name, n, d) => `<div class="tab337" data-tab="${k}" onclick="whTab337('${k}')">${icon} ${name}<span class="n">${n}</span><span class="d">${d}</span></div>`;
     return `<div class="tabs337${T.canPrep ? "" : " two"}">${tab("kits", "&#128230;", "Kits", T.kits, "verify · pull · deliver")}${T.canPrep ? tab("prep", "&#128293;", "Panel prep", T.prep, "not done yet") : ""}${tab("fin", "&#128666;", "Finish-out", T.fin, "in from Body")}</div>`; })()}
   <div class="pane337" data-pane="kits">
-  ${rows.map((r) => whLineCard347("kits:" + r.line.id, r.line.name, whLineKitCount347(r), "to do", whKitLineBody347(r))).join("")}
+  ${rows.map((r) => whLineCard347("kits:" + r.line.id, r.line.name, whLineKitCount347(r), "to do", whKitLineBody347(r), whKitSummary348(r))).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
     <h3>Started short — parts still owed</h3>
     <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When missing pieces arrive, open the cab and tap Arrived on each part (or All arrived) — the last one clears it off this list.</div>
@@ -3260,7 +3282,7 @@ ${whCss288}</head>
   /* Block 347: one restore — the remembered tab + the line cards Eric opened or closed. Runs on load and again after every
      in-place redraw (swapIn292 calls it; scripts inside a redrawn region never run on their own — review 1) */
   function whRestore347(){ var k = "kits"; try { k = localStorage.getItem("whtab337") || "kits"; } catch (e) {} var h = (location.hash || "").replace("#", ""); if (/^(kits|prep|fin)$/.test(h)) k = h; whTab337(k);
-    document.querySelectorAll("[data-line347]").forEach(function(c){ var v = null; try { v = localStorage.getItem("whline347:" + c.getAttribute("data-line347")); } catch (e) {} if (v !== "1" && v !== "0") return; var b = c.querySelector(".lbody347"), a = c.querySelector(".car347"); if (b) b.style.display = v === "1" ? "" : "none"; if (a) a.textContent = v === "1" ? "▾" : "▸"; }); }
+    document.querySelectorAll("[data-line347]").forEach(function(c){ var v = null; try { v = localStorage.getItem("whline348:" + c.getAttribute("data-line347")); } catch (e) {} if (v !== "1" && v !== "0") return; var b = c.querySelector(".lbody347"), a = c.querySelector(".car347"), hd = c.querySelector(".lhead347"); if (b) b.style.display = v === "1" ? "" : "none"; if (a) a.textContent = v === "1" ? "▾" : "▸"; if (hd) hd.setAttribute("aria-expanded", v === "1" ? "true" : "false"); }); }
   whRestore347();
   </script>
   <div class="msg err" id="err"></div>
