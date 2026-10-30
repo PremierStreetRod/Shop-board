@@ -938,6 +938,12 @@ async function loadCabLife342(builds, hrs, isOpenDay, nowMs, testIds) {
   for (const p of punchB.concat(...punchAs)) { if (skip.has(p.employee_id)) continue; const k = p.employee_id + "|" + p.claimed_at + "|" + p.kind; if (seen.has(k)) continue; seen.add(k); punches.push(p); }
   punches.sort((a, z) => a.claimed_at < z.claimed_at ? -1 : a.claimed_at > z.claimed_at ? 1 : 0);
   const ivs = workIntervals(punches, nowMs);
+  // Block 345: Body work is an open row, not a stamp — a cab is being worked in Body while anyone with an open row on it is
+  // clocked in on line 13: synthesize {line 13, fix: cab} intervals = (the person's plain line-13 clock) ∩ (their row)
+  try { const rows345 = (await Promise.all(chunks.map((c) => dbAll252(`body_step_open?select=employee_id,build_id,opened_at,closed_at&build_id=in.(${c.join(",")})&order=opened_at.asc,id.asc`).catch(() => [])))).flat();
+    const plain13 = ivs.filter((iv) => Number(iv.line) === BODY_LINE_ID && !iv.fix);
+    for (const r of rows345) { if (skip.has(r.employee_id)) continue; const s = new Date(r.opened_at).getTime(), e = r.closed_at ? new Date(r.closed_at).getTime() : nowMs;
+      for (const iv of plain13) { if (iv.emp !== r.employee_id) continue; const a = Math.max(iv.start, s), b = Math.min(iv.end, e); if (b > a) ivs.push({ emp: r.employee_id, line: BODY_LINE_ID, fix: r.build_id, start: a, end: b }); } } } catch (e345) { console.error("cab life body rows:", e345 && e345.message); }
   const evBy = {}; for (const e of evs) { const id = e.payload && e.payload.build_id; if (id) (evBy[id] = evBy[id] || []).push(e); }
   for (const b of builds) out[b.id] = cabLife342(b, evBy[b.id] || [], ivs, hrs, isOpenDay, nowMs);
   return out;
@@ -1921,7 +1927,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
        state and the screen re-checks itself; the moment a cab lands, the task
        list appears on the next refresh. -->
   ${stay334 && state.clockedIn && (stay334.card === "offer" || stay334.card === "on") ? stayCard334(stay334) : ""}
-  ${help338 && state.clockedIn ? stepCard338(help338) : ""}
+  ${help338 && (state.clockedIn || help338.open345) ? stepCard338(help338) : ""}
   ${lineStat ? `<div style="background:var(--card);border:1px solid #30d158;border-radius:14px;padding:14px 16px;margin:0 0 14px;text-align:center">
     <b>You're ON ${lineStat.name}.</b> No cab to work right now${lineStat.awaiting ? ` — ORDER ${lineStat.awaiting} is awaiting the manager's inspection` : ""}${lineStat.ondeck ? `. Next up: ORDER ${lineStat.ondeck} — it starts the moment warehouse delivers the kit` : ""}.
     <div style="opacity:.55;font-size:.85rem;margin-top:6px">This screen checks again on its own — when a cab lands on your line, the task list appears here.</div>
@@ -3147,8 +3153,8 @@ ${whCss288}</head>
 <body><div class="wrap">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
-  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? `&#9679; ON THE CLOCK — ${tabs337 && tabs337.help ? tabs337.help.label : curLine326 === 10 ? "Shop time" : "Warehouse"}` : "&#9675; NOT CLOCKED IN"}</div>
-  ${tabs337 && tabs337.help && clockedIn ? stepCard338(tabs337.help) : ""}
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? `&#9679; ON THE CLOCK — ${tabs337 && tabs337.help && tabs337.help.label ? tabs337.help.label : curLine326 === 10 ? "Shop time" : "Warehouse"}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${tabs337 && tabs337.help && (clockedIn || tabs337.help.open345) ? stepCard338(tabs337.help) : ""}
   <div class="lane">
     ${ah.stay ? stayCard334(ah.stay) : ""}
     ${clockedIn
@@ -3493,8 +3499,8 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
   <h2>Welcome, ${emp.first_name}.</h2>
   ${inspStrip308(insp308)}
   ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
-  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${clk.help ? clk.help.label : emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
-  ${clk.help && clk.clockedIn ? stepCard338(clk.help) : ""}
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${clk.help && clk.help.label ? clk.help.label : emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${clk.help && (clk.clockedIn || clk.help.open345) ? stepCard338(clk.help) : ""}
   ${clk.stay ? `<div style="max-width:560px;margin:0 auto">${stayCard334(clk.stay)}</div>` : ""}
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
     ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</div>
@@ -6855,18 +6861,41 @@ const BODY_KINDS326 = ["body", "primer"];
 const BODY_PHOTO_MIN326 = 1;   // Daniel 10/25 16:17: "set the photo minimum to 1" — the in-primer set before Done in primer (independent of the product's production photo minimum)   // photo kinds: body = before primer (internal-only by default) · primer = the Done-in-primer set (customer-facing)
 // Hours per cab and per step from Body Shop time punches (the Block 301 replay, keyed by cab AND step), plus who is on
 // which step right now. One pass over the people who ever punched onto these cabs.
-function bodyBucket326(evs) {
-  const open = {}, byBuild = {}, byTask = {}, onNow = {}, lastOff = {}, now = Date.now();   // Block 338: lastOff[task] = who stepped off it last (the "Resume" vs "Pick it up" word)
-  const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === BODY_LINE_ID && o.fix) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (t - o.start); if (o.task) { byTask[o.task] = (byTask[o.task] || 0) + (t - o.start); lastOff[o.task] = emp; } } open[emp] = null; } };
-  for (const e of evs) {
+function bodyBucket326(evs, rows) {
+  // Block 345 (Daniel 10/30 08:19 "like production, they can have two open tasks going at once and the math correctly figures
+  // out how long each task actually took" · 08:53 "yes on a1, no limit on a2"): a step in hand is an OPEN ROW (body_step_open),
+  // the clock is plain Body time, and every open row of a clocked-in person shares that time evenly — 1/k, production's rule
+  // (Playbook 60). Nothing accrues while clocked out (lunch, overnight); the rows wait. Legacy: a line-13 punch stamped with a
+  // step (v314–v316 wrote those) still counts as an implied row for that stint, full rate — the old rule falls out of the new one.
+  const byBuild = {}, byTask = {}, onNow = {}, lastOff = {}, now = Date.now();
+  const clk = {}, open = {}, per = {};
+  const addRow = (emp, task, build, s, e, isOpen, legacy) => (per[emp] = per[emp] || []).push({ task: task || null, build, s, e, open: isOpen, legacy: Boolean(legacy) });
+  const closeStint = (emp, t) => { const o = open[emp]; if (!o) return; if (Number(o.line) === BODY_LINE_ID) { (clk[emp] = clk[emp] || []).push({ start: o.start, end: t }); if (o.fix) addRow(emp, o.task, o.fix, o.start, t, t === now && o.live, true); } open[emp] = null; };
+  for (const e of evs || []) {
     const t = new Date(e.claimed_at).getTime();
-    if (e.kind === "clock_in") { close(e.employee_id, t); open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id, task: e.body_task_id }; }
-    else close(e.employee_id, t);
+    closeStint(e.employee_id, t);
+    if (e.kind === "clock_in") open[e.employee_id] = { start: t, line: e.line_id, fix: e.fix_build_id, task: e.body_task_id };
   }
-  for (const emp in open) { const o = open[emp]; if (o && o.line === BODY_LINE_ID && o.fix) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (now - o.start); if (o.task) { byTask[o.task] = (byTask[o.task] || 0) + (now - o.start); onNow[o.task] = (onNow[o.task] || []).concat([{ emp, since: new Date(o.start).toISOString(), build: o.fix }]); } } }
+  for (const emp in open) { if (open[emp]) { open[emp].live = true; closeStint(emp, now); } }
+  for (const r of rows || []) { const s = new Date(r.opened_at).getTime(), e = r.closed_at ? new Date(r.closed_at).getTime() : Math.max(now, s); if (Number.isFinite(s) && e >= s) addRow(r.employee_id, r.body_task_id, r.build_id, s, e, !r.closed_at, false); }   // an open row stamped a second ahead (the +1 s punch guard) is still "on it" right now
+  for (const emp in per) {
+    const R = per[emp], C = clk[emp] || [];
+    const cuts = new Set(); for (const r of R) { cuts.add(r.s); cuts.add(r.e); } for (const c of C) { cuts.add(c.start); cuts.add(c.end); }
+    const pts = [...cuts].sort((a, b) => a - b);
+    for (let i = 0; i + 1 < pts.length; i++) { const a = pts[i], b = pts[i + 1];
+      if (!C.some((c) => c.start <= a && c.end >= b)) continue;   // not clocked in on Body → nothing accrues
+      const K = R.filter((r) => r.s <= a && r.e >= b); if (!K.length) continue;
+      const share = (b - a) / K.length;   // the 1/k split
+      for (const r of K) { byBuild[r.build] = (byBuild[r.build] || 0) + share; if (r.task) byTask[r.task] = (byTask[r.task] || 0) + share; } }
+    const clockedNow = C.some((c) => c.start <= now && c.end >= now);
+    for (const r of R) if (r.open && r.task) (onNow[r.task] = onNow[r.task] || []).push({ emp, since: new Date(r.s).toISOString(), build: r.build, clocked: clockedNow });
+  }
+  const lastClose = {};
+  for (const emp in per) for (const r of per[emp]) if (!r.open && r.task && (lastClose[r.task] == null || r.e > lastClose[r.task])) { lastClose[r.task] = r.e; lastOff[r.task] = emp; }
   const h = (m) => { const out = {}; for (const k in m) out[k] = m[k] / 3600000; return out; };
-  return { byBuild: h(byBuild), byTask: h(byTask), onNow, lastOff };   // Block 338
+  return { byBuild: h(byBuild), byTask: h(byTask), onNow, lastOff };   // Block 338 shape, Block 345 rule
 }
+
 // Block 328: the punch window for a department's hours engine — the day before the OLDEST cab in the set entered the
 // department (its own column), never more than 180 days; a cab with no date falls back to the 180 days.
 async function punchWindow328(buildIds, col) {
@@ -6878,15 +6907,19 @@ async function punchWindow328(buildIds, col) {
 }
 async function bodyHours326(buildIds) {
   if (!buildIds.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
-  const seed = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${BODY_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&kind=eq.clock_in&limit=4000`);
-  if (!seed.length) return { byBuild: {}, byTask: {}, onNow: {}, names: {} };
-  const emps = [...new Set(seed.map((x) => x.employee_id))];
+  const [seed, seedR] = await Promise.all([
+    db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${BODY_LINE_ID}&fix_build_id=in.(${buildIds.join(",")})&kind=eq.clock_in&limit=4000`),
+    db(`body_step_open?select=employee_id&build_id=in.(${buildIds.join(",")})&limit=4000`).catch(() => []),   // Block 345
+  ]);
+  const emps = [...new Set(seed.concat(seedR).map((x) => x.employee_id))];
+  if (!emps.length) return { byBuild: {}, byTask: {}, onNow: {}, lastOff: {}, names: {} };
   const since = await punchWindow328(buildIds, "left_production_at");   // Block 328 (reviewer): read punches only from the day before the oldest cab entered, not 180 days
-  const [evs, people] = await Promise.all([
+  const [evs, rows, people] = await Promise.all([
     dbAll252(`clock_event?select=employee_id,line_id,kind,fix_build_id,body_task_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${since}&order=claimed_at.asc,id.asc`),
+    dbAll252(`body_step_open?select=id,employee_id,body_task_id,build_id,opened_at,closed_at&employee_id=in.(${emps.join(",")})&or=(closed_at.is.null,closed_at.gte.${since})&order=opened_at.asc,id.asc`).catch(() => []),   // Block 345: EVERY row of these people (k counts all their cabs, not only the page's)
     db(`employee?select=id,first_name,last_name&id=in.(${emps.join(",")})`),
   ]);
-  const out = bodyBucket326(evs);
+  const out = bodyBucket326(evs, rows);
   out.names = Object.fromEntries(people.map((p) => [p.id, `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim()]));
   return out;
 }
@@ -6961,7 +6994,7 @@ async function bodyLineAfter326(empId, me) {
   return me && me.department === "Warehouse" ? 9 : me && me.department === "Build" ? 12 : SHOP_LINE_ID;
 }
 const bodyChip326 = (st) => st.b.body_moved_to_build_at ? `<span class="chip" style="background:#3a2f10;color:#ffd60a">Build department</span>` : st.b.body_done_at ? `<span class="chip ok">&#10003; Done in primer</span>` : st.inFix ? `<span class="chip" style="background:#3a1520;color:#ff8fa3">Back in production</span>` : st.done === st.total && st.total ? `<span class="chip" style="background:#173a2b;color:#5edb84">Steps done</span>` : st.steps.some((t) => t.state === "in_progress" && t.on.length) ? `<span class="chip" style="background:#10233a;color:#5eaeff">&#9881; In progress</span>` : st.done || st.steps.some((t) => t.state === "in_progress") ? `<span class="chip" style="background:#2c2c2e;color:#c7c7cc">&#9208; Paused</span>` : `<span class="chip unv">Waiting</span>`;
-const bodyCss326 = `<style>
+const bodyCss326 = `<style>.bstep:target{outline:2px solid #30d158;box-shadow:0 0 0 4px rgba(48,209,88,.25)}
   .bcard{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:8px 0}
   .bcard:active{filter:brightness(1.2)}
   .bcard .o{font-size:1.15rem;font-weight:800}.bcard .m{opacity:.65;font-size:.9rem}.bcard .s{margin-top:4px;font-size:.95rem}
@@ -7022,7 +7055,7 @@ const bodyCabPage326 = (emp, st, opts) => {
       : mineOn(t)
         ? `<button class="b grn big" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Step done</button> <button class="b" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('bpf-${t.id}').click()">&#128247; Photo</button> ${noteBox340("/api/body/note", b.id, t.id)}<input type="file" id="bpf-${t.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="bodyPhoto326('${b.id}','body',this,'bpm-${t.id}')"><span id="bpm-${t.id}" class="msg"></span>`
         : prevDone(i) ? `<button class="b grn" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : t.lastOff === emp.id ? "Resume" : "Pick it up") : "&#9654; Start"}</button>` : "";   // Block 338 (H3): Resume is yours; a step someone else paused reads Pick it up
-    return `<div class="bstep${on ? " on" : t.state === "complete" ? " done" : ""}"><h3>${t.step_no}. ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${label}</div><div>${btns}</div>${noteList340((o.notes || []).filter((n) => n.body_task_id === t.id))}</div>`;   // Block 340: the step's notes
+    return `<div class="bstep${on ? " on" : t.state === "complete" ? " done" : ""}" id="step-${t.id}"><h3>${t.step_no}. ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${label}</div><div>${btns}</div>${noteList340((o.notes || []).filter((n) => n.body_task_id === t.id))}</div>`;   // Block 340: the step's notes
   }).join("");
   const allDone = st.total && st.done === st.total;
   const photosB = (o.photos || []).filter((p) => p.kind === "body"), photosP = (o.photos || []).filter((p) => p.kind === "primer");
@@ -7240,9 +7273,95 @@ async function onStep338(empId, last, me) {
   let backName = "";
   try { const backId = line === BODY_LINE_ID ? await bodyLineAfter326(empId, me) : line === WH_LINE_ID ? await whLineAfter327(empId, me) : (me && me.department === "Warehouse" ? WH_LINE_ID : me && me.department === "Build" ? 12 : me && me.department === "Body Shop" ? BODY_LINE_ID : 14); const [ln] = await db(`line?select=name&id=eq.${backId}`).catch(() => []); backName = ln ? ln.name : backId === SHOP_LINE_ID ? "Shop time" : backId === WH_LINE_ID ? "Warehouse" : backId === BODY_LINE_ID ? "Body Shop" : "your line"; } catch (e) { backName = "your line"; }
   const since = last.claimed_at ? Math.round((Date.now() - new Date(last.claimed_at).getTime()) / 360000) / 10 : 0;
-  return { dept, step, order: b.order_number, cab: b.cab_number || "", href, pause, backName, since, label: `${dept} · Order ${b.order_number}` };
+  return { dept, step, order: b.order_number, cab: b.cab_number || "", href, pause, backName, since, label: `${dept} · Order ${b.order_number}`, line };   // Block 345: +line (mergeHelp345)
 }
-const stepCard338 = (h) => !h ? "" : `<div class="lane" style="border-color:#30d158;text-align:center">
+// Block 345 (Opus review fix 1): after a person's Body row(s) close, the clock moves ONLY when that was their last open row,
+// only if they are actually clocked in on Body right now, and only for a non-Body-Shop helper (a Body Shop person stays on
+// Body time). Shared by /api/body/step and the three routes that end a cab's Body work (Done in primer, Move to Build, fix job).
+async function settleBodyClock345(emp, me2, when, why) {
+  const left = await db(`body_step_open?select=id&employee_id=eq.${emp}&closed_at=is.null&limit=1`);
+  if (left.length) return null;
+  const [lp] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`);
+  if (!lp || lp.kind !== "clock_in" || Number(lp.line_id) !== BODY_LINE_ID) return null;   // at lunch / home / on another line → nothing to move
+  const back = await bodyLineAfter326(emp, me2); if (Number(back) === BODY_LINE_ID && !lp.fix_build_id) return null;
+  const w = new Date(Math.max(when.getTime(), new Date(lp.claimed_at).getTime() + 1000));
+  await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: why, claimed_at: w.toISOString(), ...(lp.fix_build_id ? { fix_build_id: lp.fix_build_id } : {}) }) });
+  await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: emp, line_id: back, kind: "clock_in", claimed_at: new Date(w.getTime() + 1000).toISOString() }) });
+  return back;
+}
+// Every open Body row on a cab closes ('cancelled') when the cab's Body work ends from outside the step taps; a legacy
+// stamped stint on the cab (v314–v316) is closed the old way. Each person's clock is then settled — never touched for
+// someone at lunch / clocked out / on another line (the reviewer's phantom-time case). Returns how many people it released.
+async function releaseBodyCab345(buildId, when, why) {
+  const people = new Set();
+  const rows = await db(`body_step_open?select=id,employee_id&build_id=eq.${buildId}&closed_at=is.null`).catch(() => []);
+  if (rows.length) { await db(`body_step_open?build_id=eq.${buildId}&closed_at=is.null`, { method: "PATCH", body: JSON.stringify({ closed_at: when.toISOString(), closed_reason: "cancelled" }) }); rows.forEach((r) => people.add(r.employee_id)); }
+  const stamped = await db(`clock_event?select=employee_id&voided=is.false&line_id=eq.${BODY_LINE_ID}&kind=eq.clock_in&fix_build_id=eq.${buildId}&claimed_at=gte.${new Date(when.getTime() - 3 * 86400000).toISOString()}&limit=200`).catch(() => []);
+  for (const r of stamped) { const [lp] = await db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${r.employee_id}&order=claimed_at.desc&limit=1`).catch(() => []); if (lp && lp.kind === "clock_in" && Number(lp.line_id) === BODY_LINE_ID && lp.fix_build_id === buildId) people.add(r.employee_id); }
+  let n = 0;
+  for (const emp of people) { try { const [m] = await db(`employee?select=id,department&id=eq.${emp}`);
+      const [lp] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`);
+      if (lp && lp.kind === "clock_in" && Number(lp.line_id) === BODY_LINE_ID && lp.fix_build_id === buildId) {   // legacy stamped stint on this cab: it ends here
+        const left = await db(`body_step_open?select=id&employee_id=eq.${emp}&closed_at=is.null&limit=1`);
+        const back = left.length ? BODY_LINE_ID : await bodyLineAfter326(emp, m); const w = new Date(Math.max(when.getTime(), new Date(lp.claimed_at).getTime() + 1000));
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: why, fix_build_id: buildId, claimed_at: w.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: emp, line_id: back, kind: "clock_in", claimed_at: new Date(w.getTime() + 1000).toISOString() }) });
+      } else await settleBodyClock345(emp, m, when, why);
+      n++; } catch (eR) { console.error("body release:", eR && eR.message); } }
+  return n;
+}
+// Block 345 (Daniel 10/30 08:53 "a banner on his home screen that shows him all of his open steps, and he can one click those
+// cards to take him back into that step in the corresponding order"): YOUR OPEN STEPS — one card per open row (running + hours
+// while clocked in on Body; "waiting" with a ▶ Back on Body tap after lunch / when the clock is on another line) and, muted,
+// PAUSED BY YOU (hand-paused steps still open on the cab, so one is never forgotten). Each card IS the link to the step.
+async function openSteps345(empId, last, me) {
+  const rows = await db(`body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${empId}&closed_at=is.null&order=opened_at.asc`).catch(() => []);
+  const paused = await db(`body_step_open?select=body_task_id,build_id,closed_at&employee_id=eq.${empId}&closed_reason=eq.paused&closed_at=gte.${new Date(Date.now() - 7 * 86400000).toISOString()}&order=closed_at.desc&limit=20`).catch(() => []);
+  if (!rows.length && !paused.length) return null;
+  const openT = new Set(rows.map((r) => r.body_task_id)), seenP = new Set(); const pz = [];
+  for (const p of paused) { if (openT.has(p.body_task_id) || seenP.has(p.body_task_id)) continue; seenP.add(p.body_task_id); pz.push(p); }
+  const all = rows.concat(pz); const taskIds = [...new Set(all.map((r) => r.body_task_id))], buildIds = [...new Set(all.map((r) => r.build_id))];
+  const [tasks, builds, hrs] = await Promise.all([
+    db(`body_task?select=id,step_no,name,state&id=in.(${taskIds.join(",")})`).catch(() => []), db(`build?select=id,order_number,cab_number,state,body_done_at,body_moved_to_build_at&id=in.(${buildIds.join(",")})`).catch(() => []),
+    rows.length ? bodyHours326(buildIds).catch(() => ({ byTask: {} })) : { byTask: {} }]);
+  const tk = Object.fromEntries(tasks.map((t) => [t.id, t])), bk = Object.fromEntries(builds.map((b) => [b.id, b]));
+  const inBody345 = (b) => ["production_complete", "complete"].includes(String(b.state)) && !b.body_done_at && !b.body_moved_to_build_at;   // review 2: a paused card never outlives the cab's Body work
+  const card = (r, kind) => { const t = tk[r.body_task_id], b = bk[r.build_id]; if (!t || !b || (kind === "paused" && (t.state === "complete" || !inBody345(b)))) return null;
+    return { kind, order: b.order_number, cab: b.cab_number || "", step: `${t.step_no}. ${t.name}`, hours: Math.round((hrs.byTask[t.id] || 0) * 10) / 10, href: `/body/${encodeURIComponent(b.order_number)}#step-${t.id}`, buildId: b.id, taskId: t.id }; };
+  const open = rows.map((r) => card(r, "open")).filter(Boolean), pausedC = pz.map((p) => card(p, "paused")).filter(Boolean);
+  if (!open.length && !pausedC.length) return null;
+  const clockedIn = Boolean(last && last.kind === "clock_in"), onBody = clockedIn && Number(last.line_id) === BODY_LINE_ID;
+  // the Home header's "ON THE CLOCK — …" words (the Block 338 label): on Body = the step(s); on another line = that line's name
+  const dept = me && me.department === "Body Shop" ? "Body Shop" : "Helping in Body";
+  let label = "";
+  if (onBody && open.length) label = open.length === 1 ? `${dept} · Order ${open[0].order}` : `${dept} · ${open.length} steps open`;
+  return { open345: open, paused345: pausedC, clockedIn, onBody, label: label || null };   // Opus review fix 2: a label only when the clock really is on these steps — else the page's own words
+}
+// Opus review fix 2: the Body banner never hides a crating / panel-prep / legacy card — both render; the header words come
+// from whichever card describes where the clock actually is (the stamped stint first).
+function mergeHelp345(ob, os) {
+  if (!ob) return os || null;
+  if (!os) return ob;
+  if (Number(os.line) === BODY_LINE_ID) return ob.label ? ob : { ...ob, label: os.label };   // a legacy stamped Body stint — the banner covers it
+  return { ...ob, legacy338: os, label: os.label };
+}
+// Opus review fix 4: the banner sits inside regions the Homes redraw in place (swapIn292) — <script> tags inserted that way never
+// run, so the taps are self-contained onclick attributes (they survive any redraw). Fix 3: a production helper's "Leave anyway?"
+// nudge is answered with a confirm; after hours, the plain clock-in screen (it asks what it's for) is the way back.
+const PAUSE_JS345 = "var b=this,m=document.getElementById('pmsg345');b.disabled=true;fetch('/api/body/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:b.dataset.b345,task_id:b.dataset.t345,action:'pause',claimed_at:new Date().toISOString()})}).then(function(r){return r.json()}).then(function(o){if(o.ok){location.reload();return}b.disabled=false;if(m)m.textContent=o.error||'Something went wrong'}).catch(function(){b.disabled=false;if(m)m.textContent='Network hiccup - try again'})";
+const BACK_JS345 = "var b=this,m=document.getElementById('bbmsg345');b.disabled=true;var go=function(x){return fetch(b.dataset.u345,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({line_id:13,claimed_at:new Date().toISOString()},x||{}))}).then(function(r){return r.json()})};go().then(function(o){if(o&&o.nudge163)return window.confirm(o.error)?go({confirm163:true}):{ok:false,error:'Still on your line - nothing changed.'};return o}).then(function(o){if(o&&o.ok){location.reload();return}b.disabled=false;if(m)m.textContent=o&&/after hours/i.test(o.error||'')?'After hours - clock in on Body Shop from the clock-in screen (it asks what it is for); your steps run again then.':(o&&o.error)||'Something went wrong'}).catch(function(){b.disabled=false;if(m)m.textContent='Network hiccup - try again'})";
+const stepCard345 = (h) => { const esc = escH; const a = (c, muted) => `<div style="display:flex;align-items:stretch;gap:6px;margin-top:8px"><a href="${esc(c.href)}" style="flex:1;display:block;text-decoration:none;color:inherit;background:${muted ? "#1c1c1e" : "#10261a"};border:1px solid ${muted ? "#3a3a3c" : "#30d158"};border-radius:10px;padding:10px 12px;text-align:left${muted ? ";opacity:.75" : ""}">
+      <div style="font-weight:800">${esc(c.step)} <span style="opacity:.75;font-weight:600">· Order ${esc(c.order)}${c.cab ? ` · Cab #${esc(c.cab)}` : ""}</span></div>
+      <div style="font-size:.88rem;opacity:.8;margin-top:2px">${muted ? "paused by you — tap to pick it back up" : h.onBody ? `running · ${c.hours} h so far` : `waiting · ${c.hours} h so far`}</div></a>${muted ? "" : `<button class="b" style="margin:0;white-space:nowrap" data-b345="${c.buildId}" data-t345="${c.taskId}" onclick="${PAUSE_JS345}">&#9208; Pause</button>`}</div>`;
+  return `<div class="lane" style="border-color:${h.onBody || !h.open345.length ? "#30d158" : "#ffd60a"}">
+    ${h.open345.length ? `<div style="font-weight:800;letter-spacing:.03em">YOUR OPEN STEPS <span class="muted" style="font-weight:600">(${h.open345.length})</span></div>` : ""}
+    ${h.open345.length && !h.onBody ? `<div style="color:#ffd60a;font-size:.9rem;margin-top:4px">${h.clockedIn ? "Your clock is on another line — these wait until you're back on Body." : "You're clocked out — these wait for you."}</div>
+      <button class="b grn" style="margin-top:8px;padding:12px 18px;font-size:1.02rem" data-u345="${h.clockedIn ? "/api/clock/switch" : "/api/clock/in"}" onclick="${BACK_JS345}">&#9654; Back on Body — ${h.open345.length} step${h.open345.length === 1 ? "" : "s"} open</button><div id="bbmsg345" class="msg err"></div>` : ""}
+    ${h.open345.map((c) => a(c, false)).join("")}
+    ${h.paused345.length ? `<div style="font-weight:800;letter-spacing:.03em;margin-top:${h.open345.length ? 14 : 0}px;opacity:.8">PAUSED BY YOU <span class="muted" style="font-weight:600">(${h.paused345.length})</span></div>${h.paused345.map((c) => a(c, true)).join("")}` : ""}
+    <div id="pmsg345" class="msg err" style="margin-top:6px"></div>
+  </div>`; };
+const stepCard338 = (h) => !h ? "" : h.open345 ? (h.legacy338 ? stepCard338(h.legacy338) : "") + stepCard345(h) : `<div class="lane" style="border-color:#30d158;text-align:center">
     <div style="font-weight:800;font-size:1.05rem">${escH(h.dept)} — Order ${escH(h.order)}${h.cab ? ` · Cab #${escH(h.cab)}` : ""}</div>
     <div style="opacity:.8;margin-top:2px">${escH(h.step)} · ${h.since} h on it so far</div>
     <div style="margin-top:10px"><a class="b grn" href="${h.href}" style="display:inline-block;text-decoration:none;padding:12px 22px;font-size:1.05rem">Open the cab</a>
@@ -12289,7 +12408,7 @@ http.createServer(async (req, res) => {
         // rightly called it out. Now it reads his own LAST punch: a clock-out
         // earlier TODAY means he's coming back (lunch named when that was the
         // reason); anything else means this tap starts his day.
-        const helpW338 = clockedInW106 ? await onStep338(empId, lastFull301, emp).catch(() => null) : null;   // Block 338 (H1)
+        const helpW338 = mergeHelp345(await openSteps345(empId, lastFull301, emp).catch(() => null), clockedInW106 ? await onStep338(empId, lastFull301, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
         const stayW334 = await stayFor334(empId, hrsW212);   // Block 334 (above the hint block — the t239 walker slices hint239 → return send)
         let wh327 = null; try { wh327 = await whFinishList327(); } catch (eW) { console.error("warehouse finish list:", eW && eW.message); wh327 = null; }   // Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
         const lnName337 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));   // Block 337 (above the hint block — the t239 walker slices hint239 → return send)
@@ -12346,7 +12465,7 @@ http.createServer(async (req, res) => {
           ]);
           const [openAh92] = openAh92Rows;
           const stay92 = await stayFor334(empId, hrs92);   // Block 334
-          const help92 = in92 ? await onStep338(empId, lastC92, emp).catch(() => null) : null;   // Block 338 (H1)
+          const help92 = mergeHelp345(await openSteps345(empId, lastC92, emp).catch(() => null), in92 ? await onStep338(empId, lastC92, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
           clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department], stay: stay92, help: help92,
             ah: { now: ahNow92 && !stay92.openStay, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) && stay92.openStarted,
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
@@ -12378,8 +12497,8 @@ http.createServer(async (req, res) => {
       const clockedIn = last && last.kind === "clock_in";
       // Q111: Shop time (line 10) is disabled so it never appears in
       // allLines — name it by hand for the on-the-clock header.
-      const help338 = clockedIn ? await onStep338(empId, last, emp).catch(() => null) : null;   // Block 338 (H1): the clock is on a Body / crating / prep step
-      const lineName = clockedIn ? (help338 ? help338.label : last.line_id === SHOP_LINE_ID ? "Shop time"
+      const help338 = mergeHelp345(await openSteps345(empId, last, emp).catch(() => null), clockedIn ? await onStep338(empId, last, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1): the clock is on a Body / crating / prep step
+      const lineName = clockedIn ? (help338 && help338.label ? help338.label : last.line_id === SHOP_LINE_ID ? "Shop time"
         : last.line_id === FIX_LINE_ID ? "Fix work"
         : last.line_id === 14 ? "no line yet — tap one below"
         : last.line_id === BODY_LINE_ID ? "Body Shop" : last.line_id === WH_LINE_ID ? "Warehouse" : last.line_id === PREP_LINE_ID ? "Panel prep"
@@ -12499,7 +12618,7 @@ http.createServer(async (req, res) => {
       // Block 98c: clocked ONTO a real line that has no workable cab — tell the
       // tech where the line stands instead of a bare clock-out screen.
       let lineStat98 = null;
-      if (clockedIn && last && !help338 && last.line_id !== SHOP_LINE_ID && last.line_id !== FIX_LINE_ID && last.line_id !== 14) {
+      if (clockedIn && last && !(help338 && help338.label) && last.line_id !== SHOP_LINE_ID && last.line_id !== FIX_LINE_ID && last.line_id !== 14) {
         const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(active,rework,awaiting_inspection,upcoming)&order=created_at&limit=30`);
         // Block 124 (logic audit M5): only the "no cab to work" card when the
         // line has NO cab being worked. If an active/rework cab is on it, the
@@ -13114,6 +13233,15 @@ http.createServer(async (req, res) => {
       if (!["start", "pause", "done", "reopen"].includes(action)) return json(400, { ok: false, error: "Which tap?" });
       const [bS] = await db(`build?select=id,order_number,cab_number,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`);
       if (!bS) return json(404, { ok: false, error: "Cab not found" });
+      if (action === "pause") {   // Block 345 (Opus review fix 1): a step I still hold can always be paused — even if the cab moved on (a fix, Build, a new round)
+        const [own] = await db(`body_step_open?select=id,build_id&employee_id=eq.${eS}&body_task_id=eq.${task_id}&build_id=eq.${build_id}&closed_at=is.null&limit=1`).catch(() => []);
+        if (own) { const [lpP] = await db(`clock_event?select=claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`).catch(() => []);
+          const wP0 = new Date(p.claimed_at || Date.now()); const wP = new Date(Math.max(isNaN(wP0.getTime()) ? Date.now() : wP0.getTime(), lpP ? new Date(lpP.claimed_at).getTime() + 1000 : 0));
+          await db(`body_step_open?id=eq.${own.id}`, { method: "PATCH", body: JSON.stringify({ closed_at: wP.toISOString(), closed_reason: "paused" }) });
+          const backE = await settleBodyClock345(eS, meS, wP, "Body: paused");
+          const [tP] = await db(`body_task?select=step_no&id=eq.${task_id}`).catch(() => []);
+          logEvent("body.step_paused", eS, { build_id, order_number: bS.order_number, task_id, step_no: tP ? tP.step_no : null, back_to: backE, by_hand: true });
+          return json(200, { ok: true }); } }
       if (bS.body_done_at) return json(400, { ok: false, error: "This cab is already done in primer" });
       if (bS.body_moved_to_build_at) return json(400, { ok: false, error: "This cab moved to the Build department" });
       if (bS.state === "rework" || bS.state === "fix_job") return json(400, { ok: false, error: "This cab is back in production for a fix — its Body steps wait until the fix passes" });
@@ -13133,37 +13261,57 @@ http.createServer(async (req, res) => {
         logEvent("body.step_reopened", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name });
         return json(200, { ok: true });
       }
+      // Block 345 (Daniel 10/30 08:19 + 08:53): a step in hand = an OPEN ROW in body_step_open; the clock is plain Body time (line 13)
+      // shared 1/k by every open row (bodyBucket326). Nothing auto-pauses any more; lunch / clock-out only stop the clock and the
+      // rows wait (they run again the moment the person is back on Body — "automatically log him back into his paused steps");
+      // only a hand Pause closes a row ("UNLESS he paused them himself"). No limit on open steps ("no limit on a2").
+      const myOpen345 = await db(`body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${eS}&closed_at=is.null&order=opened_at.asc`);
+      const onBody345 = Boolean(lastS && lastS.kind === "clock_in" && Number(lastS.line_id) === BODY_LINE_ID);
+      // a v314–v316 stint stamped with this very step (started before Block 345 went live) still counts as being on it
+      const legacyOn345 = onBody345 && lastS.fix_build_id === build_id && lastS.body_task_id === task_id;
+      // after a pause / done the clock moves ONLY when the person's last open row closed, and only off Body (a helper goes home to
+      // their line; a Body Shop person stays on Body time) — Daniel A4 "yes": helpers may hold several steps too
+      const settleClock345 = settleBodyClock345;   // Opus review: one shared rule (module level)
       if (action === "start") {
         if (!lastS || lastS.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first, then start the step" });
         if (t.state === "complete") return json(400, { ok: false, error: "That step is done — a Body manager can reopen it" });
         const prev = tasks.filter((x) => x.step_no < t.step_no);
         if (prev.some((x) => x.state !== "complete")) return json(400, { ok: false, error: `Finish step ${prev.find((x) => x.state !== "complete").step_no} first` });
-        if (onThis) return json(400, { ok: false, error: "You're already on this step" });
-        // the one-in-hand rule: whatever stint is open closes (another Body step on another cab = that step pauses by itself)
-        const fromBody = lastS.line_id === BODY_LINE_ID && lastS.fix_build_id && lastS.fix_build_id !== build_id;
-        const priorMine = await db(`clock_event?select=id&voided=is.false&employee_id=eq.${eS}&body_task_id=eq.${task_id}&kind=eq.clock_in&limit=1`);   // read BEFORE the new stint lands
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: lastS.line_id, kind: "clock_out_early", reason: fromBody ? `Body: switched to order ${bS.order_number}` : lastS.line_id === BODY_LINE_ID ? `Body: started order ${bS.order_number}` : `Switched to Body — order ${bS.order_number}`, claimed_at: whenS.toISOString(), ...(lastS.fix_build_id ? { fix_build_id: lastS.fix_build_id, body_task_id: lastS.body_task_id || null, wh_task_id: lastS.wh_task_id || null } : {}) }) });
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_in", fix_build_id: build_id, body_task_id: task_id, claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
-        if (fromBody && lastS.body_task_id) logEvent("body.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.body_task_id, because: build_id, order_number: bS.order_number });
-        if (lastS.line_id === WH_LINE_ID && lastS.wh_task_id) logEvent("wh.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.wh_task_id, because: build_id, order_number: bS.order_number, body: true });   // Block 327: a crating stint pauses the same way when a Body step starts
+        if (legacyOn345 || myOpen345.some((r) => r.body_task_id === task_id)) return json(400, { ok: false, error: "You're already on this step" });
+        const priorMine = await db(`body_step_open?select=id&employee_id=eq.${eS}&body_task_id=eq.${task_id}&limit=1`);   // read BEFORE the new row lands
+        let openedAt = whenS;
+        if (!onBody345) {   // the clock moves to plain Body time (no stamp); a crating stint still pauses — crating stays one-in-hand (Block 327)
+          await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: lastS.line_id, kind: "clock_out_early", reason: `Switched to Body — order ${bS.order_number}`, claimed_at: whenS.toISOString(), ...(lastS.fix_build_id ? { fix_build_id: lastS.fix_build_id } : {}), ...(lastS.wh_task_id ? { wh_task_id: lastS.wh_task_id } : {}) }) });
+          openedAt = new Date(whenS.getTime() + 1000);
+          await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_in", claimed_at: openedAt.toISOString() }) });
+          if (lastS.line_id === WH_LINE_ID && lastS.wh_task_id) logEvent("wh.auto_paused", eS, { build_id: lastS.fix_build_id, task_id: lastS.wh_task_id, because: build_id, order_number: bS.order_number, body: true });   // Block 327
+        }
+        try { await db("body_step_open", { method: "POST", body: JSON.stringify({ employee_id: eS, body_task_id: task_id, build_id, opened_at: openedAt.toISOString() }) }); }
+        catch (eIns) { if (/23505|duplicate key|409/.test(String(eIns && eIns.message))) return json(400, { ok: false, error: "You're already on this step" }); throw eIns; }   // Opus review: a double-tap Start
         const patchT = { state: "in_progress" }; if (!t.started_at) { patchT.started_by = eS; patchT.started_at = whenS.toISOString(); }
         await db(`body_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patchT) });
-        logEvent(priorMine.length ? "body.step_resumed" : "body.step_started", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name, from_line: lastS.line_id, helper: meS.department !== "Body Shop", joined: t.state === "in_progress" && !priorMine.length });
-        return json(200, { ok: true });
+        logEvent(priorMine.length ? "body.step_resumed" : "body.step_started", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name, from_line: lastS.line_id, helper: meS.department !== "Body Shop", joined: t.state === "in_progress" && !priorMine.length, open_steps: myOpen345.length + 1 });
+        return json(200, { ok: true, open_steps: myOpen345.length + 1 });
       }
-      if (!onThis) return json(400, { ok: false, error: "You're not on this step right now" });
-      const back = await backLine();
-      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: action === "done" ? `Body: ${t.name} done` : "Body: paused", fix_build_id: build_id, body_task_id: task_id, claimed_at: whenS.toISOString() }) });
-      await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: back, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
+      const mine345 = myOpen345.find((r) => r.body_task_id === task_id);
+      if (!mine345 && !legacyOn345) return json(400, { ok: false, error: "You're not on this step right now" });
+      const closeMine345 = async (reason) => {   // my hold on the step ends: the row closes, or the old stamped stint is re-punched as plain Body time
+        if (mine345) return db(`body_step_open?id=eq.${mine345.id}`, { method: "PATCH", body: JSON.stringify({ closed_at: whenS.toISOString(), closed_reason: reason }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: reason === "done" ? `Body: ${t.name} done` : "Body: paused", fix_build_id: build_id, body_task_id: task_id, claimed_at: whenS.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
+      };
       if (action === "done") {
+        // every open row on the step closes: mine 'done', a joiner's 'released' (their clock goes home only if it was their last open step)
+        const others345 = await db(`body_step_open?select=id,employee_id&body_task_id=eq.${task_id}&closed_at=is.null&employee_id=neq.${eS}`);
+        await closeMine345("done");
+        if (others345.length) await db(`body_step_open?body_task_id=eq.${task_id}&closed_at=is.null`, { method: "PATCH", body: JSON.stringify({ closed_at: new Date(whenS.getTime() + 2000).toISOString(), closed_reason: "released" }) });
         await db(`body_task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify({ state: "complete", completed_by: eS, completed_at: whenS.toISOString() }) });
-        // Block 328 (reviewer): anyone who JOINED this step is released with it — their clock goes back where they came from
-        try { const onJ = (await bodyHours326([build_id])).onNow[task_id] || [];
-          for (const o of onJ) { if (o.emp === eS) continue; const [mJ] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backJ = await bodyLineAfter326(o.emp, mJ);
-            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: `Body: ${t.name} done (by ${meS.first_name})`, fix_build_id: build_id, body_task_id: task_id, claimed_at: new Date(whenS.getTime() + 2000).toISOString() }) });
-            await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backJ, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 3000).toISOString() }) });
-            logEvent("body.helper_released", eS, { build_id, order_number: bS.order_number, task_id, employee_id: o.emp, back_to: backJ });
-            try { const lnJ = await db(`line?select=name&id=eq.${backJ}`); void notify("help.released", [o.emp], `${meS.first_name} finished ${t.name} on ${bS.order_number}`, `You're back on ${lnJ[0] ? lnJ[0].name : backJ === SHOP_LINE_ID ? "Shop time" : "your own line"}.`, "/home"); } catch (eN) {} } /* Block 338 (H4): the release is no longer silent — bell-only */ } catch (eJ) { console.error("body helper release:", eJ && eJ.message); }
+        const back = await settleClock345(eS, meS, whenS, `Body: ${t.name} done`);
+        for (const o of others345) { try { const [mJ] = await db(`employee?select=id,department&id=eq.${o.employee_id}`);
+            const backJ = await settleClock345(o.employee_id, mJ, new Date(whenS.getTime() + 2000), `Body: ${t.name} done (by ${meS.first_name})`);
+            logEvent("body.helper_released", eS, { build_id, order_number: bS.order_number, task_id, employee_id: o.employee_id, back_to: backJ });
+            try { const lnJ = backJ ? await db(`line?select=name&id=eq.${backJ}`) : []; const leftJ = backJ ? [] : await db(`body_step_open?select=id&employee_id=eq.${o.employee_id}&closed_at=is.null&limit=1`).catch(() => []); const [lpJ] = leftJ.length ? await db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${o.employee_id}&order=claimed_at.desc&limit=1`).catch(() => []) : []; const runJ = Boolean(lpJ && lpJ.kind === "clock_in" && Number(lpJ.line_id) === BODY_LINE_ID); void notify("help.released", [o.employee_id], `${meS.first_name} finished ${t.name} on ${bS.order_number}`, backJ ? `You're back on ${lnJ[0] ? lnJ[0].name : backJ === SHOP_LINE_ID ? "Shop time" : "your own line"}.` : leftJ.length ? (runJ ? "Your other Body steps keep running." : "Your other Body steps wait for you.") : "That was your last open Body step.", "/home"); } catch (eN) {} /* Block 338 (H4): bell-only */ }
+          catch (eJ) { console.error("body helper release:", eJ && eJ.message); } }
         const hrsD = await bodyHours326([build_id]);
         const stepH = Math.round((hrsD.byTask[task_id] || 0) * 100) / 100;
         logEvent("body.step_done", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, name: t.name, hours: stepH, back_to: back });
@@ -13172,7 +13320,9 @@ http.createServer(async (req, res) => {
           if (tg && tg.enabled && tA && Number(tA.hours_allowed) > 0 && stepH > Number(tA.hours_allowed) * 1.25) void notify("body.step_over", await floorMgrIds220("inspect"), `Order ${bS.order_number}: ${t.name} ran ${stepH} h of ${Number(tA.hours_allowed)} allowed`, "A fact for the standards, not a verdict — tune the family's hours under Admin → Body steps if this keeps happening.", "/body/" + encodeURIComponent(bS.order_number)); } catch (e) {}
         return json(200, { ok: true, hours: stepH });
       }
-      logEvent("body.step_paused", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, back_to: back });
+      await closeMine345("paused");   // Block 345: a hand pause — stays paused until a tap
+      const backP = await settleClock345(eS, meS, whenS, "Body: paused");
+      logEvent("body.step_paused", eS, { build_id, order_number: bS.order_number, task_id, step_no: t.step_no, back_to: backP, by_hand: true });
       return json(200, { ok: true });
     }
     if (url.pathname === "/api/body/done" && req.method === "POST") {
@@ -13199,10 +13349,7 @@ http.createServer(async (req, res) => {
       if (minD > 0 && photosD2.length < minD) return json(400, { ok: false, error: `Needs ${minD - photosD2.length} more in-primer photo${minD - photosD.length === 1 ? "" : "s"} first (${photosD.length} of ${minD})` });
       const whenD = new Date(p.claimed_at || Date.now()); if (isNaN(whenD.getTime())) return json(400, { ok: false, error: "Bad time" });
       // close any open stint still on this cab (someone forgot to pause) — their time stops here
-      const onD = (await bodyHours326([build_id])).onNow; const stuck = Object.values(onD).flat().filter((o) => o.build === build_id);   // Block 327 (reviewer): only the stints on THIS cab
-      for (const o of stuck) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await bodyLineAfter326(o.emp, mO);
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: `Body: done in primer (by ${meD.first_name})`, fix_build_id: build_id, claimed_at: whenD.toISOString() }) });
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(whenD.getTime() + 1000).toISOString() }) }); }
+      const stuck = { length: await releaseBodyCab345(build_id, whenD, `Body: done in primer (by ${meD.first_name})`) };   // Block 345 (Opus review): open rows close; only people clocked in on Body move
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ body_done_at: whenD.toISOString(), body_done_by: eD }) });
       try { await ensureWhTask327(bD, eD); } catch (eW327) { console.error("warehouse entry failed:", eW327 && eW327.message); }   // Block 327: the cab lands on the warehouse's finish-out list (idempotent — a send-back and re-Done keeps the step)
       const hrsAll = (await bodyHours326([build_id])).byBuild[build_id] || 0;
@@ -13222,6 +13369,7 @@ http.createServer(async (req, res) => {
       if (!["production_complete", "complete"].includes(String(bM.state))) return json(400, { ok: false, error: "Only a cab that has left production can move to Build" });
       const whenM = new Date().toISOString();
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ body_moved_to_build_at: whenM, body_moved_to_build_by: eM, body_build_reason: reason }) });
+      try { await releaseBodyCab345(build_id, new Date(whenM), `Body: moved to the Build department (by ${meM.first_name})`); } catch (eRB) { console.error("body release (build):", eRB && eRB.message); }   // Block 345 (Opus review)
       logEvent("body.moved_to_build", eM, { build_id, order_number: bM.order_number, reason });
       try { void notify("body.moved_to_build", await adminIds225(), `Order ${bM.order_number} moved to the Build department`, reason, "/order/" + encodeURIComponent(bM.order_number)); } catch (e) {}
       return json(200, { ok: true });
@@ -15560,9 +15708,7 @@ http.createServer(async (req, res) => {
       try { const onW = (await whHours327([build_id])).onNow; for (const o of Object.values(onW).flat().filter((x) => x.build === build_id)) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await whLineAfter327(o.emp, mO); const wO = await whenFor341(o.emp);
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: WH_LINE_ID, kind: "clock_out_early", reason: "Crating: cab sent back to production for a fix", fix_build_id: build_id, claimed_at: wO.toISOString() }) });
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(wO.getTime() + 1000).toISOString() }) }); } } catch (eO) {}
-      try { const onB = (await bodyHours326([build_id])).onNow; for (const o of Object.values(onB).flat().filter((x) => x.build === build_id)) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await bodyLineAfter326(o.emp, mO); const wO = await whenFor341(o.emp);
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: BODY_LINE_ID, kind: "clock_out_early", reason: "Body: cab sent back to production for a fix", fix_build_id: build_id, claimed_at: wO.toISOString() }) });
-        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(wO.getTime() + 1000).toISOString() }) }); } } catch (eO) {}
+      try { await releaseBodyCab345(build_id, new Date(when), "Body: cab sent back to production for a fix"); } catch (eO) { console.error("body release (fix):", eO && eO.message); }   // Block 345 (Opus review): open rows close; only people clocked in on Body move
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({
         state: "fix_job", line_id: lineId, fix_kind: kind, fix_reason: reason,
         fix_note: note || null, fix_hours: null, fix_assigned_at: when, ...ret341 }) });   // Block 281: no time frame · Block 341: a return
