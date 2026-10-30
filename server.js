@@ -2762,7 +2762,7 @@ const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
     return fetch(location.href, { cache: "no-store", credentials: "same-origin" }).then(function(r){ return r.text(); }).then(function(h){
       var d = new DOMParser().parseFromString(h, "text/html"); var n = d.querySelector(sel);
       if (!el || !n) { location.reload(); return; }
-      el.replaceWith(n); var a = document.getElementById("ack292");
+      el.replaceWith(n); if (typeof whRestore347 === "function") whRestore347(); var a = document.getElementById("ack292");
       // Block 292 option 2 (Daniel: "build both"): on the SHARED TABLET the natural
       // session is sign in → punch → sign out (Evan's are 4–19 s long). After a
       // punch from a dept clock card, return to the sign-in screen by itself in a
@@ -3087,19 +3087,65 @@ const whPageScript328 = (ah) => `${netJs}
 // list of every cab whose panels need stripping, in build order), 🚚 Finish-out (in from Body → Waiting to leave →
 // Gone). Each tab carries a count of the cabs that NEED A TAP (queue-only cabs don't count); the phone opens on the
 // last tab it used (localStorage, guarded); a bell link opens the cab whatever the tab.
-const whTabCounts337 = (rows, builds, wh327, canPrep) => {
-  let kits = 0;
-  for (const r of rows) for (let i = 0; i < r.queue.length; i++) { const q = r.queue[i];
+// ===== Block 347 (Daniel 10/30 11:09 + 11:21 + 11:24 + 11:26 — Plan 74): the Kits and Panel prep tabs are one OPEN/CLOSE CARD
+// PER LINE. Kits: a slim "On the line now" row at the top (grey, no buttons — the kit already left his hands; an amber "parts
+// still owed" tag if it started short), then the waiting cabs in build order (the line's own order — queue_pos, then oldest).
+// Panel prep: only what Eric can physically strip — the cab holding the line, and the on-deck cab ONCE ITS KIT PULL HAS STARTED
+// ("he will never be able to do any panel prepping until he has completed pulling the parts") — with its status: Not started ·
+// In progress · Paused · Done. At most 2 per line; the tab number = how many are not done. A card opens on its own when it has
+// something to tap; Eric's open/close is remembered on his phone (D1). The cab at inspection / back for a fix holds its line (D2).
+// the cab holding a line: building, at inspection, or back for a fix
+const whLineHolder347 = (r) => r.active || r.awaiting[0] || r.rework[0] || null;
+// the kits on ONE line that need a tap (the Block 337 rule, per line): not checked yet · next up and not pulled · pulled with the line clear
+const whLineKitCount347 = (r) => { let kits = 0;
+  for (let i = 0; i < r.queue.length; i++) { const q = r.queue[i];
     const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
     const isNext = i === (pullIdx < 0 ? 0 : pullIdx);
     if (q.kit_status !== "verified" && q.kit_status !== "short") kits++;                 // not checked yet
     else if (isNext && !q.kit_pull_started_at) kits++;                                   // next up — ready to pull
-    else if (q.kit_pull_started_at && !(r.active || r.awaiting[0] || r.rework[0])) kits++;   // pulled, the line is clear — ready to deliver
+    else if (q.kit_pull_started_at && !whLineHolder347(r)) kits++;                       // pulled, the line is clear — ready to deliver
   }
-  const prep = canPrep ? (builds || []).filter((b) => b.prep && b.prep.state !== "done" && (b.state !== "upcoming" || b.kit_status === "verified" || b.kit_status === "short")).length : 0;   // reviewer: cabs ready to strip (on a line, or kit checked) — a bare queue cab is not a tap yet
+  return kits; };
+// Panel prep for ONE line: the holder + the cab whose kit pull has started (the server allows a pull only on the on-deck cab)
+const whLinePrep347 = (r) => { const holder = whLineHolder347(r);
+  // review 1: "on deck" = the cab the kit counter calls next (the pinned-head rule), never just any cab carrying an old pull
+  const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
+  const od = r.queue[pullIdx < 0 ? 0 : pullIdx] || null, deck = od && od.kit_pull_started_at ? od : null;
+  const items = [holder ? { b: holder, where: "On the line" } : null, deck ? { b: deck, where: "On deck — kit pulled" } : null].filter(Boolean);
+  const next = deck ? null : od;   // D3: the next kit, not pulled yet — a note, not counted
+  return { items, next, open: items.filter((x) => !(x.b.prep && x.b.prep.state === "done")).length }; };
+const whTabCounts337 = (rows, builds, wh327, canPrep) => {
+  const kits = rows.reduce((n, r) => n + whLineKitCount347(r), 0);
+  const prep = canPrep ? rows.reduce((n, r) => n + whLinePrep347(r).open, 0) : 0;   // Block 347: on the line + on deck once pulled, not done (max 2 a line)
   const fin = (wh327 || []).filter((st) => !st.gone && !st.back && !(st.task && st.task.state === "complete")).length;
   return { kits, prep, fin };
 };
+// the open/close line card shared by both tabs. The toggle is a self-contained attribute (survives any in-place redraw) and
+// remembers the choice per phone ("whline347:<tab>:<line>"); the page script re-applies remembered choices on load.
+const LINE_TOGGLE_JS347 = "var c=this.parentNode,b=c.querySelector('.lbody347'),o=b.style.display==='none';b.style.display=o?'':'none';this.querySelector('.car347').textContent=o?'▾':'▸';try{localStorage.setItem('whline347:'+c.getAttribute('data-line347'),o?'1':'0')}catch(e){}";
+const whLineCard347 = (key, title, count, countWord, body) => `<div class="lane line347" data-line347="${whEsc288(key)}" style="padding:0;overflow:hidden">
+    <div class="lhead347" onclick="${LINE_TOGGLE_JS347}" style="display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:pointer;user-select:none"><span class="car347" style="width:14px;opacity:.8">${count ? "▾" : "▸"}</span><b style="flex:1">${whEsc288(title)}</b>${count ? `<span class="chip" style="background:#0a3a66;color:#cfe6ff">${count} ${whEsc288(countWord)}</span>` : `<span style="opacity:.5;font-size:.85rem">nothing to do</span>`}</div>
+    <div class="lbody347" style="padding:0 14px 12px${count ? "" : ";display:none"}">${body}</div>
+  </div>`;
+const whPrepChip347 = (b) => { const p = b.prep || { state: "none" }; return p.state === "done" ? `<span class="chip ok">&#10003; Done${p.by ? " — " + whEsc288(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; In progress — you" : p.active ? "&#9881; In progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
+const whPrepTab347 = (rows) => {
+  const card = (x) => `<a class="bcard${x.b.prep && x.b.prep.mine ? " next328" : ""}" href="/warehouse/${encodeURIComponent(x.b.order_number)}">
+      <div><span class="o">Order ${whEsc288(x.b.order_number)}</span> <span class="m">${x.b.cab_number ? `Cab #${whEsc288(x.b.cab_number)} · ` : ""}${whEsc288(x.b.family || x.b.part_number || "")}</span> <span style="float:right">${whPrepChip347(x.b)}</span></div>
+      <div class="s">${whEsc288(x.where)}${x.b.prep && x.b.prep.std ? ` · ${x.b.prep.hrs} of ${x.b.prep.std} h allowed` : ""}</div>
+    </a>`;
+  const cards = rows.map((r) => { const P = whLinePrep347(r);
+    const body = `${P.items.map(card).join("")}${P.next ? `<div style="opacity:.55;font-size:.88rem;margin-top:8px">On deck: Order ${whEsc288(P.next.order_number)} — pull the kit first.</div>` : ""}${!P.items.length && !P.next ? `<div style="opacity:.5;margin-top:4px">Nothing to prep on this line.</div>` : ""}`;
+    return whLineCard347("prep:" + r.line.id, r.line.name, P.open, "to do", body); }).join("");
+  return `<div style="opacity:.6;font-size:.85rem;margin:2px 4px 8px">Panels to strip: the cab on each line, and the next one once its kit is pulled. Tap a cab for Start / Pause / Finish.</div>${cards}`;
+};
+const whKitLineBody347 = (r) => { const h = whLineHolder347(r);
+  const word = !h ? "" : h.state === "active" ? "kit delivered · building" : h.state === "awaiting_inspection" ? "at inspection" : "back for a fix";
+  const owedN = h && h.kit_status === "short" ? kitParts344(h.kit_note).length : 0;
+  const onLine = h ? `<a href="/warehouse/${encodeURIComponent(h.order_number)}" style="display:block;text-decoration:none;color:#c7c7cc;background:#2c2c2e;border-radius:10px;padding:8px 12px;margin:2px 0 8px;font-size:.92rem">&#128295; <b style="color:#e5e5ea">On the line now</b> &middot; Order ${whEsc288(h.order_number)}${h.cab_number ? ` &middot; Cab #${whEsc288(h.cab_number)}` : ""} &middot; ${word}${h.kit_status === "short" ? ` <span class="chip short" style="margin-left:4px">&#9888; ${owedN ? `${owedN} part${owedN === 1 ? "" : "s"}` : "parts"} still owed</span>` : ""}</a>`
+    : `<div style="color:#30d158;font-weight:700;margin:2px 0 8px">LINE CLEAR — deliver when the kit is ready.</div>`;
+  const hint = h && h.state === "awaiting_inspection" ? `<div style="color:#ffd60a;font-size:.88rem;margin:-2px 0 8px">Line frees soon — pull the next kit now.</div>` : "";
+  return `${onLine}${hint}${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first) &middot; tap a cab to work it</div>
+      ${r.queue.map((q, i) => whQueueCard328(q, i, r, r.line.name)).join("")}` : `<div style="opacity:.5;margin-top:4px">Nothing waiting on this line.</div>`}`; };
 const whPrepList337 = (builds, rows, lnName) => {
   const esc = whEsc288;
   const order = []; for (const r of rows) { if (r.active) order.push(r.active); for (const a of r.awaiting) order.push(a); for (const a of r.rework) order.push(a); for (const q of r.queue) order.push(q); }
@@ -3185,18 +3231,9 @@ ${whCss288}</head>
   ${!clockedIn && emp.role !== "manager" && emp.role !== "admin" ? `<div class="ro288">You're not clocked in &mdash; you can read the line-up and open any cab, but the buttons stay off until you clock in.</div>` : ""}
   ${(() => { const T = tabs337 || { kits: 0, prep: 0, fin: 0, canPrep: false, histLive: hist || [] };
     const tab = (k, icon, name, n, d) => `<div class="tab337" data-tab="${k}" onclick="whTab337('${k}')">${icon} ${name}<span class="n">${n}</span><span class="d">${d}</span></div>`;
-    return `<div class="tabs337${T.canPrep ? "" : " two"}">${tab("kits", "&#128230;", "Kits", T.kits, "verify · pull · deliver")}${T.canPrep ? tab("prep", "&#128293;", "Panel prep", T.prep, "to strip") : ""}${tab("fin", "&#128666;", "Finish-out", T.fin, "in from Body")}</div>`; })()}
+    return `<div class="tabs337${T.canPrep ? "" : " two"}">${tab("kits", "&#128230;", "Kits", T.kits, "verify · pull · deliver")}${T.canPrep ? tab("prep", "&#128293;", "Panel prep", T.prep, "not done yet") : ""}${tab("fin", "&#128666;", "Finish-out", T.fin, "in from Body")}</div>`; })()}
   <div class="pane337" data-pane="kits">
-  ${rows.map((r) => `
-  <div class="lane">
-    <h3>${r.line.name}</h3>
-    ${r.active ? `<a class="now" href="/warehouse/${encodeURIComponent(r.active.order_number)}" style="display:block;text-decoration:none;color:inherit"><span class="tag">ON THE LINE NOW</span><b>Order ${r.active.order_number}</b>${r.active.cab_number ? ` &middot; Cab #${r.active.cab_number}` : ""}${r.active.family ? ` &middot; ${whEsc288(r.active.family)}` : ""}${r.active.prep && r.active.prep.state !== "done" ? prepStrip301({ ...r.active, prep: { ...r.active.prep, mine: false } }, false, clockedIn) : ""}</a>` : ""}
-    ${r.awaiting.length ? `<div style="color:#ffd60a;font-weight:700;margin-top:4px">⏳ ORDER ${r.awaiting[0].order_number} is AWAITING INSPECTION — line frees soon. Pull the next kit now.</div>` : ""}
-    ${!r.active && !r.awaiting.length && !r.rework.length ? `<div style="color:#30d158;font-weight:700">LINE CLEAR — deliver when the kit is ready.</div>` : ""}
-    ${r.rework.length ? `<div style="color:#ff9f0a;margin-top:4px">⟲ ORDER ${r.rework[0].order_number} in rework on this line.</div>` : ""}
-    ${r.queue.length ? `<div class="qhead">Waiting to start &mdash; ${r.queue.length} cab${r.queue.length === 1 ? "" : "s"}, in build order (top is built first) &middot; tap a cab to work it</div>
-      ${r.queue.map((q, i) => whQueueCard328(q, i, r, r.line.name)).join("")}` : `<div style="opacity:.5;margin-top:8px">Nothing waiting on this line.</div>`}
-  </div>`).join("")}
+  ${rows.map((r) => whLineCard347("kits:" + r.line.id, r.line.name, whLineKitCount347(r), "to do", whKitLineBody347(r))).join("")}
   ${(shortOwed254 || []).length ? `<div class="lane" style="border-color:#ff9f0a">
     <h3>Started short — parts still owed</h3>
     <div style="opacity:.55;font-size:.85rem;margin-bottom:6px">These cabs went to production missing parts. When missing pieces arrive, open the cab and tap Arrived on each part (or All arrived) — the last one clears it off this list.</div>
@@ -3220,7 +3257,11 @@ ${whCss288}</head>
     document.querySelectorAll(".tab337").forEach(function(t){ t.classList.toggle("on", t.getAttribute("data-tab") === k); });
     document.querySelectorAll(".pane337").forEach(function(p){ p.classList.toggle("on", p.getAttribute("data-pane") === k); });
     try { localStorage.setItem("whtab337", k); } catch (e) {} }
-  (function(){ var k = "kits"; try { k = localStorage.getItem("whtab337") || "kits"; } catch (e) {} var h = (location.hash || "").replace("#", ""); if (/^(kits|prep|fin)$/.test(h)) k = h; whTab337(k); })();
+  /* Block 347: one restore — the remembered tab + the line cards Eric opened or closed. Runs on load and again after every
+     in-place redraw (swapIn292 calls it; scripts inside a redrawn region never run on their own — review 1) */
+  function whRestore347(){ var k = "kits"; try { k = localStorage.getItem("whtab337") || "kits"; } catch (e) {} var h = (location.hash || "").replace("#", ""); if (/^(kits|prep|fin)$/.test(h)) k = h; whTab337(k);
+    document.querySelectorAll("[data-line347]").forEach(function(c){ var v = null; try { v = localStorage.getItem("whline347:" + c.getAttribute("data-line347")); } catch (e) {} if (v !== "1" && v !== "0") return; var b = c.querySelector(".lbody347"), a = c.querySelector(".car347"); if (b) b.style.display = v === "1" ? "" : "none"; if (a) a.textContent = v === "1" ? "▾" : "▸"; }); }
+  whRestore347();
   </script>
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
@@ -12416,7 +12457,7 @@ http.createServer(async (req, res) => {
         let wh327 = null; try { wh327 = await whFinishList327(); } catch (eW) { console.error("warehouse finish list:", eW && eW.message); wh327 = null; }   // Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
         const lnName337 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));   // Block 337 (above the hint block — the t239 walker slices hint239 → return send)
         const counts337 = whTabCounts337(rowsW, buildsW, wh327 || [], prep301.can);
-        const tabs337 = { ...counts337, help: helpW338, canPrep: prep301.can, prepHtml: prep301.can ? whPrepList337(buildsW, rowsW, lnName337) : "", histLive: (histW97 || []).filter((h) => ["active", "awaiting_inspection", "rework"].includes(String(h.state))) };   // Block 337 (F4): only cabs still on a line
+        const tabs337 = { ...counts337, help: helpW338, canPrep: prep301.can, prepHtml: prep301.can ? whPrepTab347(rowsW) : "", histLive: (histW97 || []).filter((h) => ["active", "awaiting_inspection", "rework"].includes(String(h.state))) };   // Block 337 (F4): only cabs still on a line
         let hint239 = "First punch of the day — this starts your hours.";
         if (lastW && lastW.kind !== "clock_in" && lastW.claimed_at && phxDate(new Date(lastW.claimed_at).getTime()) === phxDate(Date.now()))
           hint239 = /lunch/i.test(lastW.reason || "") ? "Back from lunch — this picks your day back up." : "Welcome back — this picks your day back up.";
