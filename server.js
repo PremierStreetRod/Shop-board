@@ -7386,8 +7386,11 @@ const whCheckLocked336 = (b, rows) => {
 const whCheckWord336 = (r) => r.group === "cab" ? "On the cab" : r.group === "kit" ? "On the order" : /parts bag/i.test(r.label || "") ? "On the order" : "Checked";
 const WH_PHOTO_MIN336 = 1;
 const rows336Open = (rows) => rows.filter((r) => !r.check);
-async function whPhotoCount336(buildId, sinceIso) { const ph = await db(`build_photo?select=id&build_id=eq.${buildId}&kind=eq.crate&hidden=is.false${sinceIso ? `&created_at=gte.${sinceIso}` : ""}&limit=50`).catch(() => []); return ph.length; }   // reviewer: a second crating round, or a cab back from a send-back, counts only its own photos
-const whPhotoSince341 = (b, task) => { const a = task && task.created_at ? task.created_at : null, c = b && b.wh_sent_back_at ? b.wh_sent_back_at : null; return a && c ? (a > c ? a : c) : (a || c || null); };
+async function whPhotoCount336(buildId, sinceIso) { const ph = await db(`build_photo?select=id&build_id=eq.${buildId}&kind=eq.crate&hidden=is.false${sinceIso ? `&created_at=gte.${encodeURIComponent(sinceIso)}` : ""}&limit=50`).catch(() => []); return ph.length; }   // reviewer: a second crating round, or a cab back from a send-back, counts only its own photos
+// Fix 10/30 (Daniel's "Server error" opening a crating cab): the database hands timestamps back as "…+00:00", and this value
+// goes into a query URL unencoded — the "+" reads as a space, Supabase refuses the query, the crating page 500s and the
+// Finish photo check silently counts 0. It now always returns the "…Z" form (no "+"), the later of the two moments.
+const whPhotoSince341 = (b, task) => { const ms = [task && task.created_at, b && b.wh_sent_back_at].filter(Boolean).map((x) => new Date(x).getTime()).filter(Number.isFinite); return ms.length ? new Date(Math.max(...ms)).toISOString() : null; };
 // Block 341 (reviewer): a send-back to Body or a fix job REOPENS the done-right check — the old ticks are voided (kept on file) so the warehouse verifies again when the cab comes back
 async function voidShipChecks341(buildId, orderNumber, actorId, because) {
   try { const vd = await db(`option_check?build_id=eq.${buildId}&gate=eq.ship&voided=is.false`, { method: "PATCH", body: JSON.stringify({ voided: true }) });
@@ -15286,7 +15289,7 @@ http.createServer(async (req, res) => {
       let idleW342 = ""; try { if (bW.started_at && bW.left_production_at) idleW342 = idleLine342((await loadCabLife342([bW], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bW.id]); } catch (e) { idleW342 = ""; }   // Block 342
       const bodyNames340 = Object.fromEntries((await db(`body_task?select=id,step_no,name&build_id=eq.${bW.id}`).catch(() => [])).map((t) => [t.id, `${t.step_no}. ${t.name}`]));
       let bodyW339 = null; try { if (bW.wh_sent_back_at || bW.body_done_at) bodyW339 = (await bodyStatus326([bW]))[0] || null; } catch (e) { bodyW339 = null; }   // reviewer: the banner's Body facts (the sent-back lock reads the steps)
-      const sinceW341 = whPhotoSince341(bW, stW && stW.task); const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false${sinceW341 ? `&created_at=gte.${sinceW341}` : ""}&order=created_at.asc&limit=100`);   // reviewer: this round's photos
+      const sinceW341 = whPhotoSince341(bW, stW && stW.task); const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false${sinceW341 ? `&created_at=gte.${encodeURIComponent(sinceW341)}` : ""}&order=created_at.asc&limit=100`);   // reviewer: this round's photos
       let trackingW = ""; try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); trackingW = ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { trackingW = ""; }
       // Block 328: the KIT work (verify / short / note / build sooner-later / pull / deliver / panel prep) lives HERE now —
       // the same whRow288 actions the Home used to carry, with the line context around them; a cab started short carries
