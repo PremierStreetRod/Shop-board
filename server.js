@@ -7042,6 +7042,8 @@ async function bodyStatus326(builds) {
     const inFix = b.state === "rework" || b.state === "fix_job";
     const status = b.body_moved_to_build_at ? "moved to the Build department" : b.body_done_at ? `done in primer ${phxDate(new Date(b.body_done_at).getTime())}` : inFix
       ? "back in production for a fix" : !steps.length ? "no Body steps yet" : done === steps.length ? (bodyLocked339(b, steps) ? "sent back from crating — reopen the step it needs" : "all steps done — waiting for ✓ Done in primer")
+      : steps.filter((t) => t.state === "in_progress").length > 1 ? (() => { const op = steps.filter((t) => t.state === "in_progress"), nm = [...new Set(op.flatMap((t) => t.on.map((o) => o.name)))];   // Block 349: steps 1 + 2 open together
+          return `Steps ${op.map((t) => t.step_no).join(" + ")} open · ${op.map((t) => t.name).join(" + ")}${nm.length ? ` · ${nm.join(" + ")} on it` : " · paused"}`; })()
       : cur ? `${cur.name} · ${cur.hours} of ${Number(cur.hours_allowed)} h${cur.state === "in_progress" ? (cur.on.length ? ` · ${cur.on.map((o) => o.name).join(" + ")} on it` : " · paused") : " · not started"}` : "";
     return { b, family: famOf[String(b.part_number || "").toUpperCase()] || "", steps, allowed, hours, done, total: steps.length, onNames: [...new Set(onNames)], status, inFix, names: hrs.names, round: steps[0] ? Number(steps[0].round || 1) : 1 };   // Block 341: +round
   });
@@ -7102,23 +7104,36 @@ const bodyHomePage326 = (emp, stats, clockedIn) => `<!doctype html>
   ${bodyList326(stats, false)}
   <p style="opacity:.5;font-size:.8rem;text-align:center">Oldest first. Tap a cab for its steps, photos, notes and sign-out. Hours come from Body Shop time punches — nothing is typed.</p>
 </div></body></html>`;
+// Block 349 (Daniel 11/2 08:46 + 08:51): the Body step order. The SECOND step may start once the first one has STARTED (Isaac
+// starts sanding while parts of the metal work dry) — "yes, step one must be started to start step two". Every later step still
+// needs every earlier step finished ("step 3 only happens after steps one and 2 are complete"). Finishing is always in order:
+// "step two cannot be finished before step one". Both open = the even 1/k split, unchanged ("option b"). One rule for the
+// route and the page, by step_no (never by array position). Returns the reason a tap is refused, or "" when it's allowed.
+const bodyStepGate349 = (steps, t) => {
+  const earlier = (steps || []).filter((x) => Number(x.step_no) < Number(t.step_no)).sort((a, z) => Number(a.step_no) - Number(z.step_no));
+  const open = earlier.filter((x) => x.state !== "complete");
+  const start = earlier.length === 1 ? (earlier[0].state === "not_started" ? `Start step ${earlier[0].step_no} first` : "")
+    : open.length ? `Finish step ${open[0].step_no} first` : "";
+  const done = open.length ? `Finish step ${open[0].step_no} first — step ${t.step_no} can't be done before it` : "";
+  return { start, done };
+};
 // The cab page — everything for ONE cab.
 const bodyCabPage326 = (emp, st, opts) => {
   const esc = escH; const b = st.b; const o = opts || {};
   const can = o.clockedIn && !b.body_done_at && !b.body_moved_to_build_at && !st.inFix;
   const where = o.where || whereNow339(b, { body: st, names: st.names });   // Block 339: the banner + F1
   const locked339 = Boolean(where && where.back && where.back.locked);
-  const prevDone = (i) => i === 0 || st.steps[i - 1].state === "complete";
+  const gate = (t) => bodyStepGate349(st.steps, t);   // Block 349: step 2 may start once step 1 has started; finishing stays in order
   const mineOn = (t) => t.on.some((x) => x.id === emp.id);
   const stepHtml = st.steps.map((t, i) => {
     const on = t.state === "in_progress" && t.on.length;
-    const label = t.state === "complete" ? `&#10003; done${t.completed_by ? ` — ${esc(st.names[t.completed_by] || "")}` : ""}${t.completed_at ? ` ${esc(phxDate(new Date(t.completed_at).getTime()))}` : ""}` : on ? `&#9881; ${esc(t.on.map((x) => x.name).join(" + "))} on it` : t.state === "in_progress" ? "&#9208; paused" : prevDone(i) ? "ready to start" : `waits for step ${i}`;
+    const label = t.state === "complete" ? `&#10003; done${t.completed_by ? ` — ${esc(st.names[t.completed_by] || "")}` : ""}${t.completed_at ? ` ${esc(phxDate(new Date(t.completed_at).getTime()))}` : ""}` : on ? `&#9881; ${esc(t.on.map((x) => x.name).join(" + "))} on it` : t.state === "in_progress" ? "&#9208; paused" : !gate(t).start ? "ready to start" : esc(gate(t).start.replace(/^Start step (\d+) first$/, "waits for step $1 to start").replace(/^Finish step (\d+) first$/, "waits for step $1"));
     const btns = !can ? "" : t.state === "complete"
       ? (o.canDone ? `<button class="b mv" onclick="arm(this,()=>bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'reopen'},this))">Reopen</button>` : "")
       : mineOn(t)
-        ? `<button class="b grn big" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Step done</button> <button class="b" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('bpf-${t.id}').click()">&#128247; Photo</button> ${noteBox340("/api/body/note", b.id, t.id)}<input type="file" id="bpf-${t.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="bodyPhoto326('${b.id}','body',this,'bpm-${t.id}')"><span id="bpm-${t.id}" class="msg"></span>`
-        : prevDone(i) ? `<button class="b grn" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : t.lastOff === emp.id ? "Resume" : "Pick it up") : "&#9654; Start"}</button>` : "";   // Block 338 (H3): Resume is yours; a step someone else paused reads Pick it up
-    return `<div class="bstep${on ? " on" : t.state === "complete" ? " done" : ""}" id="step-${t.id}"><h3>${t.step_no}. ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${label}</div><div>${btns}</div>${noteList340((o.notes || []).filter((n) => n.body_task_id === t.id))}</div>`;   // Block 340: the step's notes
+        ? `${gate(t).done ? `<button class="b grn big" disabled title="${esc(gate(t).done)}">&#10003; Step done</button>` : `<button class="b grn big" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Step done</button>`} <button class="b" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('bpf-${t.id}').click()">&#128247; Photo</button> ${noteBox340("/api/body/note", b.id, t.id)}<input type="file" id="bpf-${t.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="bodyPhoto326('${b.id}','body',this,'bpm-${t.id}')"><span id="bpm-${t.id}" class="msg"></span>`
+        : !gate(t).start ? `<button class="b grn" onclick="bodyPost('/api/body/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : t.lastOff === emp.id ? "Resume" : "Pick it up") : "&#9654; Start"}</button>` : "";   // Block 338 (H3): Resume is yours; a step someone else paused reads Pick it up
+    return `<div class="bstep${on ? " on" : t.state === "complete" ? " done" : ""}" id="step-${t.id}"><h3>${t.step_no}. ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${label}</div><div>${btns}</div>${can && t.state !== "complete" && mineOn(t) && gate(t).done ? `<div style="opacity:.7;font-size:.85rem;margin-top:4px">${esc(gate(t).done)}.</div>` : ""}${noteList340((o.notes || []).filter((n) => n.body_task_id === t.id))}</div>`;   // Block 340: the step's notes
   }).join("");
   const allDone = st.total && st.done === st.total;
   const photosB = (o.photos || []).filter((p) => p.kind === "body"), photosP = (o.photos || []).filter((p) => p.kind === "primer");
@@ -9720,7 +9735,9 @@ function whereNow339(b, ctx) {
       return W(t && t.state === "complete" ? "waiting" : "crating", "Crating & shipping", det, t && t.state === "complete" ? t.completed_at : b.body_done_at, 4, "#5eaeff");
     }
     const bd = c.body; const cur = bd && bd.steps ? (bd.steps.find((t) => t.state === "in_progress") || bd.steps.find((t) => t.state === "not_started")) : null;
-    const det = bd && bd.total ? (bd.done === bd.total ? (bodyLocked339(b, bd.steps) ? `all ${bd.total} steps done — sent back from crating, reopen the step it needs` : `all ${bd.total} steps done — waiting for ✓ Done in primer`) : `step ${bd.done + 1} of ${bd.total}${cur ? " · " + cur.name : ""}${cur && cur.on && cur.on.length ? ` · ${cur.on.map((o) => o.name).join(" + ")} on it` : cur && cur.state === "in_progress" ? " · paused" : " · nobody on it"}`) : "Body steps not started";
+    const det = bd && bd.total ? (bd.done === bd.total ? (bodyLocked339(b, bd.steps) ? `all ${bd.total} steps done — sent back from crating, reopen the step it needs` : `all ${bd.total} steps done — waiting for ✓ Done in primer`) : (() => { const op349 = bd.steps.filter((t) => t.state === "in_progress");   // Block 349: steps 1 + 2 can be open together
+        if (op349.length > 1) { const nm = [...new Set(op349.flatMap((t) => (t.on || []).map((o) => o.name)))]; return `steps ${op349.map((t) => t.step_no).join(" + ")} of ${bd.total} open · ${op349.map((t) => t.name).join(" + ")}${nm.length ? ` · ${nm.join(" + ")} on it` : " · paused"}`; }
+        return `step ${bd.done + 1} of ${bd.total}${cur ? " · " + cur.name : ""}${cur && cur.on && cur.on.length ? ` · ${cur.on.map((o) => o.name).join(" + ")} on it` : cur && cur.state === "in_progress" ? " · paused" : " · nobody on it"}`; })()) : "Body steps not started";
     const w = W("body", "Body Shop", det, b.wh_sent_back_at && !b.body_done_at ? b.wh_sent_back_at : b.left_production_at, 3, "#bf5af2");
     if (b.wh_sent_back_at && !b.body_done_at) w.back = { at: b.wh_sent_back_at, by: (c.names && c.names[b.wh_sent_back_by]) || (c.wh && c.wh.names && c.wh.names[b.wh_sent_back_by]) || "", reason: b.wh_sent_back_reason || "", locked: bodyLocked339(b, bd ? bd.steps : []) };
     return w;
@@ -13341,8 +13358,8 @@ http.createServer(async (req, res) => {
       if (action === "start") {
         if (!lastS || lastS.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first, then start the step" });
         if (t.state === "complete") return json(400, { ok: false, error: "That step is done — a Body manager can reopen it" });
-        const prev = tasks.filter((x) => x.step_no < t.step_no);
-        if (prev.some((x) => x.state !== "complete")) return json(400, { ok: false, error: `Finish step ${prev.find((x) => x.state !== "complete").step_no} first` });
+        const gateS349 = bodyStepGate349(tasks, t).start;   // Block 349: step 2 may start once step 1 has started; later steps need every earlier one finished
+        if (gateS349) return json(400, { ok: false, error: gateS349 });
         if (legacyOn345 || myOpen345.some((r) => r.body_task_id === task_id)) return json(400, { ok: false, error: "You're already on this step" });
         const priorMine = await db(`body_step_open?select=id&employee_id=eq.${eS}&body_task_id=eq.${task_id}&limit=1`);   // read BEFORE the new row lands
         let openedAt = whenS;
@@ -13367,6 +13384,8 @@ http.createServer(async (req, res) => {
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: BODY_LINE_ID, kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
       };
       if (action === "done") {
+        const gateD349 = bodyStepGate349(tasks, t).done;   // Block 349: "step two cannot be finished before step one" — refused before anything closes
+        if (gateD349) return json(400, { ok: false, error: gateD349 });
         // every open row on the step closes: mine 'done', a joiner's 'released' (their clock goes home only if it was their last open step)
         const others345 = await db(`body_step_open?select=id,employee_id&body_task_id=eq.${task_id}&closed_at=is.null&employee_id=neq.${eS}`);
         await closeMine345("done");
