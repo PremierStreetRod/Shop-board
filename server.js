@@ -4067,18 +4067,40 @@ const escH = (s) => String(s == null ? "" : s).replace(/[<>&]/g, (c) => ({ "<": 
 // configuration / add-on pieces. The cab line-item description is a clean
 // newline-delimited "Label: Value" list; other non-cab, non-blazer-top line
 // items are add-ons. Addresses are pre-formatted to strings here.
-function parseCoyoteDetail(payload, partNumber, allowSet) {
+// Block 350: callers hand a build row from many different selects; when the row key isn't on it, fetch it (one small read,
+// only needed when the order carries this part more than once — the common single-row order short-circuits).
+async function withRowKey350(b, payload) {
+  if (!b || !b.id || b.coyote_row_key !== undefined) return b;
+  const items = payload && Array.isArray(payload.line_items) ? payload.line_items : []; const pn = String(b.part_number || "").toUpperCase();
+  if (items.filter((it) => it && String(it.item_number || "").toUpperCase() === pn).length < 2) return b;
+  try { const [r] = await db(`build?select=coyote_row_key,coyote_row_idx&id=eq.${b.id}`); if (r) { b.coyote_row_key = r.coyote_row_key; b.coyote_row_idx = r.coyote_row_idx; } } catch (e) { /* fall back to the first row */ }
+  return b;
+}
+// Block 350: when an order carries the SAME cab part on several rows (23930: two Blazer kits, different fenders), each cab
+// must read ITS OWN row. `rowKey` = the cab's build.coyote_row_key (content key, see rowKey350); `rowIdx` = its row position
+// when first placed. Pick order: the row whose content key matches → the row at rowIdx if it still carries this part →
+// the first row of this part (the pre-350 behavior, still right for every single-cab order).
+function parseCoyoteDetail(payload, partNumber, allowSet, rowKey, rowIdx) {
   if (!payload || typeof payload !== "object") return null;
   const c = (payload.customer && typeof payload.customer === "object") ? payload.customer : {};
   const o = (payload.order && typeof payload.order === "object") ? payload.order : {};
   const items = Array.isArray(payload.line_items) ? payload.line_items : [];
   const pn = String(partNumber || "").toUpperCase();
+  let pick350 = -1;
+  if (pn && items.length > 1) {
+    const base = String(rowKey || "").split("#")[0];
+    if (base) { const copy = Number(String(rowKey || "").split("#")[1] || 0); let seen = 0;
+      for (let i = 0; i < items.length; i++) { const it = items[i]; if (!it || String(it.item_number || "").toUpperCase() !== pn) continue;
+        if (rowKey350({ part: pn, price350: it.price != null ? String(it.price) : "", desc350: String(it.description || "") }) === base) { if (seen === copy) { pick350 = i; break; } seen++; } } }
+    if (pick350 < 0 && Number.isInteger(rowIdx) && rowIdx >= 0 && items[rowIdx] && String(items[rowIdx].item_number || "").toUpperCase() === pn) pick350 = rowIdx;
+  }
   const fmtAddr = (a) => { if (!a || typeof a !== "object") return ""; return [a.street, a.street2, [a.city, a.state, a.zip].filter(Boolean).join(", "), (a.country && a.country !== "USA") ? a.country : ""].filter(Boolean).join(", "); };
   let cabDesc = "", cabTaken = false; const addons = [];
-  for (const it of items) {
+  for (let i350 = 0; i350 < items.length; i350++) { const it = items[i350];
     const num = String((it && it.item_number) || "").trim(); if (!num) continue;
     const up = num.toUpperCase(); if (up === "PSR-BLZR-TOP") continue;
     const desc = String((it && it.description) || "").trim();
+    if (pn && up === pn && pick350 >= 0) { if (i350 === pick350) { cabDesc = desc; cabTaken = true; } continue; }   // Block 350: this cab's own row; the sibling rows are other cabs, never add-ons
     if (pn && up === pn && !cabTaken) { cabDesc = desc; cabTaken = true; continue; }
     if (allowSet && allowSet.has(up)) { if (!cabTaken && !pn) { cabDesc = desc; cabTaken = true; } continue; }
     if (desc) addons.push({ num, desc });
@@ -4440,6 +4462,25 @@ const shareLane296 = (b, photoCount, links, myMobile) => {
 // the task list — a cab with a hollow task history (the go-live seeds) still
 // gets its full list. Returns every selection as "Label: value" text, stock
 // choices included (Daniel: stock gets acknowledged too).
+// Block 350 (Daniel 11/2 11:01: "the system should be looking at both orders and verifying in fact whether or not that
+// the two identical order numbers actually differ in customer requests"): every cab of a multi-cab order, each read from
+// ITS row, and the option lines that are not shared by all of them. Pure-ish: one build read, one intake read.
+async function siblingDiff350(b) {
+  const root = (b && (b.coyote_root || String(b.order_number || "").split(".")[0])) || "";
+  if (!root) return null;
+  const kids = (await db(`build?select=id,order_number,cab_number,part_number,state,coyote_row_key,coyote_row_idx&coyote_root=eq.${encodeURIComponent(root)}&state=neq.cancelled`)).sort((a, z) => (Number(String(a.order_number).split(".")[1] || 0) - Number(String(z.order_number).split(".")[1] || 0)) || (a.order_number < z.order_number ? -1 : 1));   // .2 before .10
+  if (!kids || kids.length < 2) return null;
+  const [ci] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(root)}&order=received_at.desc&limit=1`);
+  if (!ci || !ci.payload) return null;
+  const prods = await db("product?select=part_number"); const allow = new Set(prods.map((p) => String(p.part_number).toUpperCase()));
+  const rows = kids.map((k) => { const d = parseCoyoteDetail(ci.payload, k.part_number, allow, k.coyote_row_key, k.coyote_row_idx);
+    const lines = d ? d.features.map((f) => (f.label ? f.label + ": " : "") + f.value) : []; return { ...k, lines, model: d ? d.model : "" }; });
+  const counts = {}; for (const r of rows) for (const l of new Set(r.lines)) counts[l] = (counts[l] || 0) + 1;
+  const out = rows.map((r) => ({ order_number: r.order_number, cab_number: r.cab_number, part_number: r.part_number, state: r.state, me: r.id === b.id,
+    differs: r.lines.filter((l) => counts[l] < rows.length) }));
+  const identical = out.every((x) => !x.differs.length);
+  return { cabs: out, identical };
+}
 async function optionList255(b, allow255 = null) {
   const root = (b && (b.coyote_root || String(b.order_number || "").split(".")[0])) || "";
   if (!root) return [];
@@ -4448,7 +4489,8 @@ async function optionList255(b, allow255 = null) {
     allow255 = new Set(prods255.map((p) => String(p.part_number).toUpperCase()));
   }
   const [ci255] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(root)}&order=received_at.desc&limit=1`);
-  const det255 = ci255 && ci255.payload ? parseCoyoteDetail(ci255.payload, b.part_number, allow255) : null;
+  if (ci255 && ci255.payload) await withRowKey350(b, ci255.payload);   // Block 350
+  const det255 = ci255 && ci255.payload ? parseCoyoteDetail(ci255.payload, b.part_number, allow255, b.coyote_row_key, b.coyote_row_idx) : null;
   if (!det255 || !det255.features.length) return [];
   const lines255 = det255.features.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).filter(Boolean);
   // Block 322 (Daniel 10/21 18:16: "for body, they get all option boxes to check MINUS sheet metal
@@ -4545,6 +4587,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   <div class="lane">
     <div class="kv"><b>Cab</b>${escH(family || b.part_number || "—")}</div>
     <div class="kv"><b>Line</b>${escH(lineName || "not assigned yet")}</div>
+    ${b.sibs350 && b.sibs350.cabs ? `<div class="kv"><b>This order</b><span>${b.sibs350.cabs.length} cabs on Coyote order ${escH(b.coyote_root || String(b.order_number).split(".")[0])}${b.sibs350.identical ? ` · <span style="color:#ffd60a">identical requests on every cab</span>` : ""}<br>${b.sibs350.cabs.map((c) => `<span style="display:inline-block;margin:3px 10px 0 0;padding:4px 8px;border:1px solid ${c.me ? "#5eaeff" : "var(--line)"};border-radius:8px${c.me ? "" : ";opacity:.85"}">${c.me ? `<b>${escH(c.order_number)}</b>` : `<a href="/order/${encodeURIComponent(c.order_number)}" style="color:#5eaeff">${escH(c.order_number)}</a>`}${c.cab_number ? ` · Cab #${escH(c.cab_number)}` : ""} · ${escH(String(c.state || "").replace(/_/g, " "))}${c.differs.length ? `<br><span style="font-size:.88rem;opacity:.9">${c.differs.map(escH).join(" · ")}</span>` : `<br><span style="font-size:.85rem;opacity:.55">no option differs from the others</span>`}</span>`).join("")}</span></div>` : ""}
     <div class="kv"><b>Status</b>${b.state === "production_complete" ? "LEFT PRODUCTION" : escH(String(b.state || "").replace(/_/g, " ").toUpperCase())}${b.state === "rework" ? ` — ${escH(b.rework_reason || "")}` : ""}</div>   <!-- Block 339: a cab in Body or shipped no longer reads "PRODUCTION COMPLETE" as if that were where it is -->
     ${(b.state === "production_complete" || b.state === "complete") ? (() => { const st323 = stageOf323(b); const parts323 = []; if (st323.hand && b.stage_set_at) parts323.push(`moved here by an admin ${escH(phxDate(new Date(b.stage_set_at).getTime()))}${b.stage_reason ? ` — ${escH(b.stage_reason)}` : ""}`); if (b.left_production_at) parts323.push(`left production ${escH(phxDate(new Date(b.left_production_at).getTime()))}`); if (b.shipped_at) parts323.push(`shipped ${escH(phxDate(new Date(b.shipped_at).getTime()))}`); if (isAdmin97) parts323.push(`<a href="/reconcile" style="color:#8e8e93">move it from Order Tracking</a>`); return `<div class="kv"><b>Stage</b>${stageChip323(st323)}<span style="opacity:.7;font-size:.9em;margin-left:8px">${parts323.join(" · ")}</span></div>`; })() : ""}
     ${detail && detail.order && detail.order.status === "Processed" ? `<div class="kv"><b>&#36; Paid</b>Final payment received in Coyote (Processed)${b.state !== "production_complete" && b.state !== "complete" ? " — the cab stays where it is; Processed is about the money, not the shipping" : ""}</div>` : ""}
@@ -4583,7 +4626,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
   ${flags.length ? `<div class="lane" style="border-color:#ffd60a">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS A RULING \u2014 UPGRADE HOURS &amp; NOTE ITEMS</div>
     ${canHours
-      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : f.kind === "count" ? "cab count — verify" : f.kind === "stuck" ? "Coyote dropped the part — verify" : "option not in library"})</span><br>
+      ? flags.map((f) => `<div style="padding:7px 0;border-top:1px solid var(--line)">${escH(f.flag_text)} <span style="opacity:.5;font-size:.8em">(${f.kind === "custom" ? "custom add-on" : f.kind === "note" ? "from the order note" : f.kind === "count" ? "cab count — verify" : f.kind === "stuck" ? "Coyote dropped the part — verify" : f.kind === "rows" ? "Coyote order rows — check" : f.kind === "twin" ? "identical rows — both placed" : f.kind === "changed" ? "options changed mid-build" : "option not in library"})</span><br>
         Hrs <input id="fh-${f.id}" style="width:64px"> After step ${stepPick283("fd-" + f.id)} Reason <input id="fr-${f.id}" style="min-width:210px" value="${escH(f.flag_text).slice(0, 60)}">
         <button class="b" style="background:#2c2c2e;border:1px solid var(--line);border-radius:9px;color:#fff;padding:6px 12px;cursor:pointer" onclick="addHrs('${b.id}','${f.id}',this)">Set hours</button>
         <button class="b" style="background:#1c1c1e;border:1px solid #5a5a5e;border-radius:9px;color:#8e8e93;padding:6px 12px;cursor:pointer" onclick="notProd104('${b.id}','${f.id}',this,'body_build')">Body/Build \u2014 push along</button>
@@ -8463,15 +8506,14 @@ async function mapperPreviewData() {
       const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
-      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */ }); }
+      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }); }   // Block 350: the preview mirrors the engine's row rule
     }
     const status = String(o.status ?? "").trim() || "—";
     const noteRaw = String(o.invoice_note ?? "").trim();
-    // Block 151: the preview mirrors the engine — duplicate same-part rows
-    // collapse to one cab and the preview says so right in the Note column.
+    // Block 350: the preview mirrors the engine — every cab row is a cab; identical rows are called out in the Note column.
     const col151 = collapseCabs151(cabParts);
     const cabs151 = col151.cabs;
-    const dup151 = col151.dupes.map((d) => "⚠ " + d.part + " on " + d.rows + " rows" + (d.qty > 1 ? " (quantity " + d.qty + ")" : "") + " — one cab placed, verify the count").join(" · ");
+    const dup151 = col151.dupes.map((d) => "⚠ " + d.part + " on identical rows — both placed as cabs (Block 350); if the office duplicated a row, cancel one in Coyote").join(" · ");
     const note = noteRaw + (dup151 ? (noteRaw ? " · " : "") + dup151 : "");
     const cls = classifyOrder({ status, cabPartsCount: cabs151.length, hasBlazerTop: blazerTop });
     let group = cls.group, propState = cls.state, reason = cls.reason;
@@ -9173,7 +9215,7 @@ async function syncContext() {
   const lineName = {}, lineEnabled = {}; for (const l of lns) { lineName[l.id] = l.name; lineEnabled[l.id] = !!l.enabled; }
   const tmpls = await db(`build_template?select=family,ready`);
   const famReady = {}; for (const t of tmpls) famReady[t.family] = t.ready === true;
-  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status,line_override,left_production_at,shipped_at&order=id.asc`);   // Block 318: +line_override
+  const builds = await dbAll252(`build?select=id,order_number,coyote_root,line_id,part_number,state,started_at,invoice_note,note_flagged,customer_name,destination,options_sig,coyote_status,line_override,left_production_at,shipped_at,coyote_row_key,coyote_row_idx,cab_number,created_at,queue_pos&order=id.asc`);   // Block 350: +row key/idx/cab_number/created_at/queue_pos   // Block 318: +line_override
   const buildByOrder = {}; for (const b of builds) buildByOrder[b.order_number] = b;
   // Block 176 (Fable-5): index builds by their Coyote ROOT order number too, so
   // the stuck-cab detector below can find a cab whether it was placed under the
@@ -9181,8 +9223,30 @@ async function syncContext() {
   const buildsByRoot = {}; for (const b of builds) { const rt = b.coyote_root || String(b.order_number || "").split(".")[0]; (buildsByRoot[rt] = buildsByRoot[rt] || []).push(b); }
   const allNums = await dbAll252(`build?select=cab_number&cab_number=not.is.null&order=id.asc`);
   const hi = {}; for (const r of allNums) { const m = String(r.cab_number).trim().toUpperCase().match(/^(\d+)\s*([A-Z]{1,2})$/); if (m) hi[m[2]] = Math.max(hi[m[2]] || 0, Number(m[1])); }
-  return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder, buildsByRoot, hi };
+  // Block 350 (Daniel 11/3 08:22 "3 pushes is fine"): the settling rule needs the last pushes of every order that already has
+  // a live cab — including pushes already stamped processed. One read, newest first, trimmed to 3 per order in memory.
+  const liveRoots350 = [...new Set(builds.filter((b) => b.state !== "cancelled").map((b) => b.coyote_root || String(b.order_number || "").split(".")[0]))];
+  const recent350 = {};
+  // only the orders this run will actually look at (the fresh pushes) need history — one small read each, newest 3 (review 1 minor 8)
+  const freshRoots350 = new Set(rows.map((r) => { const p = r.payload || {}; const o = (p.order && typeof p.order === "object") ? p.order : {}; return String(o.order_number ?? p.order_number ?? "").trim(); }).filter(Boolean));
+  for (const rt of liveRoots350) { if (!freshRoots350.has(rt)) continue;
+    recent350[rt] = await db(`coyote_intake?select=order_number,payload,received_at&order_number=eq.${encodeURIComponent(rt)}&order=received_at.desc&limit=${SETTLE_PUSHES_350}`); }
+  return { rows, prodByPart, lineName, lineEnabled, famReady, buildByOrder, buildsByRoot, hi, recent350 };
 }
+// Block 350: the cab-row signature of one push (the set of row content keys, with qty), used by the settling rule
+function rowSig350(payload, prodByPart) {
+  const items = payload && Array.isArray(payload.line_items) ? payload.line_items : []; const keys = [];
+  for (const it of items) { const num = String((it && it.item_number) ?? "").trim(); if (!num || !prodByPart[num.toUpperCase()]) continue;
+    const ifc = it && it.interface != null ? String(it.interface).trim().toLowerCase() : null; if (ifc === "false") continue;
+    const qn = Math.floor(Number(it && (it.qty ?? it.quantity))); if (Number.isFinite(qn) && qn < 0) continue;
+    keys.push(rowKey350({ part: num, price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }) + "x" + (Number.isFinite(qn) && qn > 0 ? qn : 1)); }
+  return keys.sort().join(",");
+}
+const SETTLE_PUSHES_350 = 3;
+// Fable 11/3 (NAMED DEVIATION for Daniel): Coyote's feed is change-only — 6 of 11 queued cabs had ONE push in 14 days — so
+// "3 pushes agree" alone can wait forever after a single edit. The change also settles once the latest push is this old
+// and no newer push contradicts it (the 23806 blip lasted hours, not a day). Set to 0 to make it pushes-only.
+const SETTLE_HOURS_350 = 24;
 function reduceFresh(ctx) {
   const byKey = new Map();
   for (const r of ctx.rows) {
@@ -9217,25 +9281,15 @@ function reduceFresh(ctx) {
       if (ifc176 === "false" && pr) { ifaceDrops.push(num); continue; }
       if (ifc176 === "true" && !pr) { ifaceAdds.push(num); continue; }
       if (ifc176 === "false") continue;   // declared NOT ours (brackets, hardware, ~75/order) — recognized-and-excluded, never "unrecognized" noise; an all-false order parks clean as "No cab part."
-      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */ }); }
+      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }); }   // Block 350: the row itself rides along
       else unknownParts.push(num);
     }
-    const col151 = collapseCabs151(cabParts);   // Block 151: dup rows -> one cab + a report
-    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts: col151.cabs, dupCabs: col151.dupes, unknownParts, ifaceAdds, ifaceDrops, blazerTop, rowIds: [r.id] });
+    const ex350 = expandCabs350(cabParts);   // Block 350: every row (× qty) is a cab; return rows are never cabs
+    byKey.set(key, { key, orderNo: ordNo, status: String(o.status ?? "").trim() || "—", custName, dest, note: String(o.invoice_note ?? "").trim(), cabParts: ex350.cabs, dupCabs: [], twins350: ex350.twins, returns350: ex350.returns, unknownParts, ifaceAdds, ifaceDrops, blazerTop, rowIds: [r.id], receivedAt: r.received_at || null, rowsPayload350: p });
   }
   return [...byKey.values()];
 }
-// Block 151 (owner-rep, the 23305 double): ONE CAB PER DISTINCT CAB PART.
-// Coyote's line-item quantity arrives BLANK today, so the same part on two
-// rows is a leftover of a Coyote-side order edit far more often than a real
-// second cab — 23305 proved it (an office edit re-added the cab + Guniwheel
-// rows without removing the originals and the board silently built two cabs,
-// inventing 162.5C). Rule: duplicate same-part rows collapse to ONE cab and
-// are REPORTED so placement raises a manager "verify the count" flag — the
-// system calls the double out instead of a human having to catch it. The
-// moment Coyote starts sending a real quantity > 1, THAT expands honestly
-// into that many cabs (still reported, as a heads-up). Distinct parts keep
-// the normal dotted split, unchanged.
+// (Block 151/161's one-cab-per-distinct-part rule lived here; retired by Block 350 — see expandCabs350 below.)
 function parseDays152(x) {
   // "4" -> {day_no:4, day_end:null} · "4,5" / "4-6" -> {day_no:4, day_end:6}.
   // Bad input falls back to Day 1; a backwards or equal range drops the end.
@@ -9245,20 +9299,37 @@ function parseDays152(x) {
   const n2 = Number(t);
   return { day_no: Number.isFinite(n2) && n2 >= 1 ? Math.floor(n2) : 1, day_end: null };
 }
-function collapseCabs151(cabParts) {
-  const seen = new Map(); const out = []; const dupes = [];
-  for (const cp of cabParts) {
-    const k = String(cp.part || "").toUpperCase();
-    const qn = Math.floor(Number(cp.qty151)); const qty = Number.isFinite(qn) && qn > 0 ? qn : 1;
-    if (!seen.has(k)) seen.set(k, { cp, rows: 1, qty });
-    else { const e = seen.get(k); e.rows++; e.qty = Math.max(e.qty, qty); }
-  }
-  for (const e of seen.values()) {
-    for (let i = 0; i < e.qty; i++) out.push(e.cp);
-    if (e.rows > 1) dupes.push({ part: e.cp.part, rows: e.rows, qty: e.qty });   // Block 161 (owner-rep ruling): a clean qty>1 is TRUSTED data — split .1/.2 silently, no flag; only a part duplicated across ROWS (source contradicting its own qty convention, the 23305 edit pattern) is worth a human's eyes
-  }
-  return { cabs: out, dupes };
+// Block 350 (Daniel 11/2 11:01, verbatim: "treat every row as a cab, the .1 gets the top most part number, the .2 gets the
+// next one down and so on"; 11/3 08:22 "3 pushes is fine … build it"). SUPERSEDES Block 161's duplicate-row guard: the
+// whole push history (1,265 orders) shows every multi-row cab order whose rows DIFFERED (price or options) was real —
+// W108013, 22257, 21771, 21340, 21112 … and 23930 — and the one office-edit phantom (23305) had IDENTICAL rows. So:
+// every row of a cab part is a cab, a row's qty multiplies it, Coyote's row order gives the suffix (.1 = top row), and
+// each cab carries a CONTENT KEY (part + price + option text) so it stays tied to its own row if Coyote reorders rows.
+// Identical rows are still cabs (the ruling) but are reported as TWINS so the office can see a possible edit artifact.
+// A NEGATIVE qty is a return line (the RA orders) — never a cab, reported so the sync can note it.
+function rowKey350(cp) {
+  const txt = String(cp.desc350 || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const str = String(cp.part || "").toUpperCase() + "|" + String(cp.price350 || "") + "|" + txt;
+  let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return String(h);
 }
+function expandCabs350(cabParts) {
+  const out = [], twins = [], returns = []; const seen = new Map();
+  const ordered = [...cabParts].sort((a, b) => (a.rowIdx350 ?? 0) - (b.rowIdx350 ?? 0));   // Coyote's row order, top first
+  for (const cp of ordered) {
+    const qn = Math.floor(Number(cp.qty151));
+    if (Number.isFinite(qn) && qn < 0) { returns.push({ part: cp.part, qty: qn, rowIdx: cp.rowIdx350 }); continue; }   // a return line, never a cab
+    const qty = Number.isFinite(qn) && qn > 0 ? qn : 1;
+    const key = rowKey350(cp);
+    const prior = seen.get(key) || 0;
+    for (let i = 0; i < qty; i++) { const n = prior + i; out.push({ ...cp, rowKey350: n ? key + "#" + n : key }); }   // a row with qty 2 = two cabs; a twin row = the next copy
+    seen.set(key, prior + qty);
+    if (prior) twins.push({ part: cp.part, key, rowIdx: cp.rowIdx350 });   // the SAME content again on another row — reported, still a cab
+  }
+  return { cabs: out, twins, returns };
+}
+// kept for the Coyote mapper preview (Block 151 wording retired): same expansion, no collapse
+function collapseCabs151(cabParts) { const e = expandCabs350(cabParts); return { cabs: e.cabs, dupes: e.twins.map((t) => ({ part: t.part, rows: 2, qty: 1 })) }; }
 // Block 318: an admin's "Move to line" sticks — the sync keeps the family's line ONLY when no
 // override is on the cab (an override that names the family's own line reads the same as none).
 function syncLine318(existing, familyLine) {
@@ -9269,16 +9340,69 @@ function buildSyncPlan(ctx) {
   const items = [];
   for (const o of reduceFresh(ctx)) {
     const dec = classifyForBoard(o);
-    const targets = [];
+    const targets = []; let settle350 = null; let renames350 = [];
     if (dec.action === "place") {
       const multi = o.cabParts.length > 1;
-      o.cabParts.forEach((cp, i) => targets.push({
-        order_number: multi ? `${o.orderNo}.${i + 1}` : o.orderNo, coyote_root: o.orderNo,
-        line_id: cp.line, part_number: cp.part, state: dec.state,
-        customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
-      }));
+      const kids = ctx.buildsByRoot[o.orderNo] || [];
+      const live = kids.filter((b) => b.state !== "cancelled");
+      // Block 350: tie each Coyote row to an EXISTING cab — (1) the cab whose content key matches (a row reorder never swaps
+      // cabs); (2) else an unclaimed cab of the same part at the same row position (the row was EDITED — re-priced or
+      // re-optioned — so its key moved; the cab follows its row, Daniel R5 "flag it", never a new cab); (3) else any unclaimed
+      // cab of the same part, in order (pre-350 cabs with no key). A row with no cab left is a NEW cab. (review 1 blocker 1)
+      const sameP = (b, cp) => String(b.part_number).toUpperCase() === String(cp.part).toUpperCase();
+      const claimed = new Set(); const pick = (cp) => {
+        let ex = live.find((b) => !claimed.has(b.id) && b.coyote_row_key && b.coyote_row_key === cp.rowKey350) || null;
+        if (!ex) ex = live.find((b) => !claimed.has(b.id) && sameP(b, cp) && b.coyote_row_idx != null && Number(b.coyote_row_idx) === Number(cp.rowIdx350)) || null;
+        if (!ex) ex = live.find((b) => !claimed.has(b.id) && sameP(b, cp)) || null;
+        if (ex) claimed.add(ex.id); return ex; };
+      // first pass: exact keys claim their cabs before any position/part fallback can take them
+      const exact = new Map(); o.cabParts.forEach((cp) => { const b = live.find((x) => !claimed.has(x.id) && x.coyote_row_key && x.coyote_row_key === cp.rowKey350); if (b) { claimed.add(b.id); exact.set(cp, b); } });
+      // names: every number any cab of this order has EVER held (cancelled ones too — order_number is unique) is taken
+      const taken = new Set(kids.map((b) => b.order_number)); const give = (n) => { taken.add(n); return n; };
+      o.cabParts.forEach((cp, i) => {
+        const ex = exact.get(cp) || pick(cp);
+        const want = multi ? `${o.orderNo}.${i + 1}` : o.orderNo;
+        let name;
+        if (ex) {
+          name = ex.order_number;
+          if (ex.order_number === o.orderNo && multi) {   // the bare cab of a now-multi order → .1 (its id, history, queue spot)
+            let n = 1; while (taken.has(`${o.orderNo}.${n}`)) n++;   // (review 1 should-fix 3: never onto a number a cancelled cab holds)
+            name = give(`${o.orderNo}.${n}`); renames350.push({ from: ex.order_number, to: name, id: ex.id });
+          }
+        } else {
+          name = want; if (taken.has(name)) { let n = i + 1; while (taken.has(`${o.orderNo}.${n}`)) n++; name = `${o.orderNo}.${n}`; }
+          give(name);   // (review 1 blocker 2: the allocator consumes the names it hands out — two new rows never share one)
+        }
+        targets.push({ order_number: name, coyote_root: o.orderNo, line_id: cp.line, part_number: cp.part, state: dec.state,
+          customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
+          row_key: cp.rowKey350, row_idx: cp.rowIdx350, existing_id: ex ? ex.id : null, row_moved: Boolean(ex && ex.coyote_row_key && ex.coyote_row_key !== cp.rowKey350) });
+      });
+      // Block 350 R3 (Daniel 11/3 09:22: "23806, 23930.1, 23930.2 then 23929"): a NEW cab added to an order that already has
+      // cabs on the board queues RIGHT BEHIND the last of its siblings, not at the back of the line — queue order is
+      // queue_pos then created_at, so the new cab inherits the sibling's position and a created_at one second later.
+      const sibs = live.filter((b) => claimed.has(b.id));
+      if (sibs.length) { const last = sibs.reduce((a, b) => (String(a.created_at || "") > String(b.created_at || "") ? a : b));
+        let nNew = 0; targets.forEach((t) => { if (!t.existing_id) { nNew++; t.behind_pos = last.queue_pos ?? null; t.behind_at = last.created_at ? new Date(new Date(last.created_at).getTime() + 1000 * nNew).toISOString() : null; } }); }
+      // Block 350 settling (Daniel: 3 pushes): once ANY live cab exists for this order, a change in its cab ROWS (a row added,
+      // removed, re-priced, re-optioned, qty changed) is acted on only after the last 3 pushes agree. Until then: nothing moves,
+      // the row-change is reported. A started cab never moves anyway (Block 120) — this guards the queue.
+      if (live.length) {
+        const hist = ctx.recent350[o.orderNo] || [];
+        const sigs = hist.map((h) => rowSig350(h.payload, ctx.prodByPart));
+        // rows changed = a row with no cab (new), a cab with no row (gone), or a cab whose row content moved (edited). Unkeyed
+        // cabs claimed by a row are NOT a change — that is just a pre-350 cab learning its key. (review 1 should-fix 5)
+        const rowsChanged = targets.some((t) => !t.existing_id || t.row_moved) || live.some((b) => !claimed.has(b.id));
+        if (rowsChanged) {
+          const inHand = rowSig350((o.rowsPayload350 || {}), ctx.prodByPart);
+          const agree = sigs.length >= SETTLE_PUSHES_350 && sigs.every((x) => x === sigs[0]) && inHand === sigs[0];   // review 2: the push in hand must BE the settled shape
+          const ageH = hist[0] && hist[0].received_at ? (Date.now() - new Date(hist[0].received_at).getTime()) / 3600000 : 0;
+          const aged = SETTLE_HOURS_350 > 0 && ageH >= SETTLE_HOURS_350 && sigs.length > 0 && inHand === sigs[0];   // the push in hand IS the latest and it's old enough
+          const firstSeen = sigs.length > 0 && sigs.every((x) => x === sigs[0]) && inHand === sigs[0];   // every stored push already had this shape — the BOARD's rule changed, not Coyote (a pre-350 order)
+          if (!agree && !aged) settle350 = { pushes: sigs.length, need: SETTLE_PUSHES_350, agree: sigs.length ? sigs.filter((x) => x === sigs[0]).length : 0, age_h: Math.round(ageH), firstSeen };
+        }
+      }
     }
-    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts, dupCabs: o.dupCabs || [], ifaceAdds: o.ifaceAdds || [], ifaceDrops: o.ifaceDrops || [] });
+    items.push({ orderNo: o.orderNo || "—", status: o.status, customer: o.custName, action: dec.action, state: dec.state || null, reason: dec.reason, stamp: dec.stamp, targets, rowIds: o.rowIds, parts: o.cabParts.map((c) => c.part), unknownParts: o.unknownParts, dupCabs: o.dupCabs, twins350: o.twins350 || [], returns350: o.returns350 || [], ifaceAdds: o.ifaceAdds, ifaceDrops: o.ifaceDrops, settle350, renames350 });
   }
   return items;
 }
@@ -9369,11 +9493,27 @@ async function syncRun(apply, actorId) {
       if (it.stamp) stampIds.push(...it.rowIds); continue;
     }
     if (it.action === "place") {
+      // Block 350 settling: the order's cab ROWS changed since its cabs were placed and the last 3 pushes don't yet agree →
+      // touch nothing on this order (no place, no rename, no update, no orphan flag); report it; leave the pushes unstamped so
+      // the next tick re-reads them. A flag goes on the order's first live cab once, so an admin sees it the same hour.
+      if (it.settle350) {
+        sum.noop++; A(it.orderNo, `${it.settle350.firstSeen ? "this order has more cab rows than cabs on the board" : "cab rows changed in Coyote"} — waiting for ${it.settle350.need} matching pushes (${it.settle350.agree} of ${it.settle350.pushes} so far) or ${SETTLE_HOURS_350} h unchanged (${it.settle350.age_h} h)`, { settle: it.settle350 });
+        if (apply) { const kidsS = (ctx.buildsByRoot[it.orderNo] || []).filter((b) => b.state !== "cancelled"); const bS = kidsS.find((b) => ["upcoming", "on_hold", "active", "awaiting_inspection", "rework", "fix_job"].includes(b.state)) || kidsS[0];
+          if (bS) { try { await flagCabAlert176("rows", bS, `${it.settle350.firstSeen ? `Coyote order ${it.orderNo} has more cab rows than cabs on the board (every row is now a cab).` : `Coyote changed the cab rows on order ${it.orderNo} (a cab added, removed, re-priced or re-optioned).`} The board waits until ${SETTLE_PUSHES_350} pushes in a row agree, or the change has stood unchanged for ${SETTLE_HOURS_350} hours, before it changes anything here — nothing was moved.`, it.orderNo, actorId); } catch (eS) { console.error("settle flag:", (eS && eS.message) || eS); } } }
+        continue;
+      }
+      // Block 350: an order that was ONE cab and is now several → its bare cab becomes .1 (keeps id, cab number, history,
+      // queue spot); never a second copy of it. Renames land before the targets so the by-order lookup below finds them.
+      for (const rn of it.renames350 || []) {
+        if (apply) { await db(`build?id=eq.${rn.id}`, { method: "PATCH", body: JSON.stringify({ order_number: rn.to }) }); logEvent("sync.cab_renamed", actorId || null, { order_number: rn.to, was: rn.from, root: it.orderNo, note: "Block 350: the order now has several cab rows; the existing cab keeps its history as .1" }); }
+        const bR = ctx.buildByOrder[rn.from]; if (bR) { delete ctx.buildByOrder[rn.from]; bR.order_number = rn.to; ctx.buildByOrder[rn.to] = bR; }
+        sum.updated++; A(rn.to, `renamed from ${rn.from} — the order now has more than one cab`, { renamed: true });
+      }
       for (const t of it.targets) {
         const b = ctx.buildByOrder[t.order_number];
         if (!b) {
           const cn = nextCabNumber(ctx, t.part_number);
-          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null }) });
+          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null, coyote_row_key: t.row_key || null, coyote_row_idx: t.row_idx ?? null, ...(t.behind_at ? { created_at: t.behind_at } : {}), ...(t.behind_pos != null ? { queue_pos: t.behind_pos } : {}) }) });   // Block 350: tied to its Coyote row; queued behind its siblings (R3)
           sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state, cab: cn });
         } else if (b.started_at) {
           const patch = {};
@@ -9383,6 +9523,8 @@ async function syncRun(apply, actorId) {
             if (apply) { try { await noteTriage138(b.id, t.invoice_note, t.order_number); } catch (e138) { console.error("note triage:", (e138 && e138.message) || e138); } } }
           if ((b.customer_name || "") !== (t.customer_name || "")) patch.customer_name = t.customer_name;
           if ((b.destination || "") !== (t.destination || "")) patch.destination = t.destination;
+          if (t.row_key && (b.coyote_row_key !== t.row_key || b.coyote_row_idx !== t.row_idx)) { patch.coyote_row_key = t.row_key; patch.coyote_row_idx = t.row_idx ?? null; }   // Block 350: a pre-350 cab learns its row; an edited row's cab follows it (review 1)
+          if (apply && t.row_moved) { try { await flagCabAlert176("rows", b, `Coyote edited this cab's order row after it started (price or options changed) and the change has settled. The frozen checklist was NOT touched — compare the order page.`, it.orderNo, actorId); sum.flagged++; } catch (eM2) { console.error("row-moved flag:", (eM2 && eM2.message) || eM2); } }   // review 2 minor 4: a price-only edit is flagged too (Daniel R5)
           // Block 120 (owner-rep): a STARTED cab never leaves its spot on a
           // Coyote status change. Hold/Cancel are NOTED (coyote_status), never
           // a state move. (Block 323: "Processed" = final payment received — it no
@@ -9402,7 +9544,7 @@ async function syncRun(apply, actorId) {
           if (apply && b.id && b.options_sig) {
             try {
               const [ci94d] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(t.coyote_root || t.order_number)}&order=received_at.desc&limit=1`);
-              const det94d = ci94d && ci94d.payload ? parseCoyoteDetail(ci94d.payload, b.part_number, new Set(Object.keys(ctx.prodByPart))) : null;
+              const det94d = ci94d && ci94d.payload ? parseCoyoteDetail(ci94d.payload, b.part_number, new Set(Object.keys(ctx.prodByPart)), t.row_key || b.coyote_row_key, t.row_idx ?? b.coyote_row_idx) : null;   // Block 350: THIS cab's row, by its current key
               if (det94d) {
                 // Block 113: rebuild the signature under the SAME rule the
                 // freeze uses — a priced library match outranks stock-prefix —
@@ -9436,43 +9578,37 @@ async function syncRun(apply, actorId) {
           if ((b.invoice_note || "") !== (t.invoice_note || "")) { patch329.invoice_note = t.invoice_note; patch329.note_flagged = t.note_flagged; }
           if ((b.customer_name || "") !== (t.customer_name || "")) patch329.customer_name = t.customer_name;
           if ((b.destination || "") !== (t.destination || "")) patch329.destination = t.destination;
+          if (t.row_key && (b.coyote_row_key !== t.row_key || b.coyote_row_idx !== t.row_idx)) { patch329.coyote_row_key = t.row_key; patch329.coyote_row_idx = t.row_idx ?? null; }   // Block 350
           if (apply && Object.keys(patch329).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch329) });
           sum.noop++; A(t.order_number, "past production by an admin — state untouched", { past: true });
         } else {
           // Block 120: a NOT-started cab follows Coyote — Hold sets it aside
           // (state on_hold, off the line-up), Queued returns it to upcoming in
           // its line's queue and clears the note.
-          const patch = { line_id: syncLine318(b, t.line_id), part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
+          const patch = { coyote_row_key: t.row_key || b.coyote_row_key || null, coyote_row_idx: t.row_idx ?? b.coyote_row_idx ?? null, line_id: syncLine318(b, t.line_id), part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
           sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
+          // Block 350 (Daniel R5 "yes, flag it"): the row this cab came from was EDITED in Coyote (price or options) and 3 pushes
+          // agree — the cab followed its row; an admin should glance at it (the kit list / upgrade hours may differ now).
+          if (apply && t.row_moved) { try { await flagCabAlert176("rows", b, `Coyote edited this cab's order row (price or options changed) and the change has settled. The cab followed its row — check its options and kit list.`, it.orderNo, actorId); sum.flagged++; } catch (eM) { console.error("row-moved flag:", (eM && eM.message) || eM); } }
         }
       }
-      // Block 151 → 161 (owner-rep ruling): a clean qty of 2+ places .1/.2
-      // AUTOMATICALLY with no flag — the quantity field is trusted data (v160).
-      // Only the contradictory case — the same cab part duplicated across ROWS
-      // (an office-edit artifact, the 23305 pattern) — gets the "verify" flag,
-      // because the source is disagreeing with its own quantity convention.
-      // The board still acts on its own either way (collapse to the qty count;
-      // the phantom row never propagates); the flag just tells the office to
-      // clean the Coyote order. Idempotent per text, never blocks placement.
-      if (it.dupCabs && it.dupCabs.length && it.targets.length) {
-        for (const d151 of it.dupCabs) {
-          try {
-            const txt151 = ("Coyote lists cab part " + d151.part + " on " + d151.rows + " separate rows (qty says " + d151.qty + ") — duplicate rows are usually an office-edit artifact, so the board placed " + (d151.qty > 1 ? d151.qty + " cabs" : "ONE cab") + " per the quantity field and dropped the extra row. Have the office clean the duplicated rows in Coyote; if the customer truly ordered more cabs, fix the quantity there and re-push.").slice(0, 300);
-            sum.flagged++; A(it.orderNo, "duplicate cab-part rows — verify the count", { part: d151.part, rows: d151.rows });
-            if (!apply) continue;
-            const [b151] = await db(`build?select=id&order_number=eq.${encodeURIComponent(it.targets[0].order_number)}`);
-            if (!b151) continue;
-            const have151 = await db(`option_flag?select=flag_text&build_id=eq.${b151.id}&kind=eq.count`);
-            if (have151.some((f) => f.flag_text === txt151)) continue;
-            await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b151.id, kind: "count", flag_text: txt151 }) });
-            await db(`build?id=eq.${b151.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) });
-            const adm151 = await adminIds225();   // Block 225: cab-count verification is an admin ruling
-            await notify("cab.count", adm151, `Order ${it.orderNo}: same cab on multiple rows — verify the count`, txt151, "/order/" + encodeURIComponent(it.targets[0].order_number), { urgent: await urgent226(b151.id) });
-            logEvent("sync.dup_cab_flag", actorId || null, { order_number: it.orderNo, part: d151.part, rows: d151.rows, qty: d151.qty });
-          } catch (e151) { console.error("dup-cab flag:", (e151 && e151.message) || e151); }
+      // Block 350 (Daniel 11/2 11:01): the Block 151→161 one-cab-plus-flag path is RETIRED — every row is a cab.
+      // What survives is a plain report: TWIN rows (identical content on two rows — the 23305 shape) get a note on the
+      // second cab so the office can see a possible edit artifact; a RETURN line (negative qty) is noted on the order's
+      // first cab. Neither blocks anything, neither is a bell — the ruling is "the system should be looking at both orders
+      // and verifying … whether the two actually differ", and the difference (or sameness) shows on the cab pages.
+      if (apply && it.twins350 && it.twins350.length && it.targets.length) {
+        for (const tw of it.twins350) {
+          const tT = it.targets.find((t) => String(t.row_key || "").startsWith(tw.key + "#")) || it.targets[it.targets.length - 1];
+          try { const [bT] = await db(`build?select=id,order_number,note_flagged,coyote_root&order_number=eq.${encodeURIComponent(tT.order_number)}`);
+            if (bT) { const txt = `Coyote lists cab part ${tw.part} twice with IDENTICAL price and options — the board placed both as cabs (every row is a cab). If the office duplicated the row by mistake, cancel this one in Coyote.`;
+              const have = await db(`option_flag?select=id&build_id=eq.${bT.id}&kind=eq.twin&resolved=is.false`);
+              if (!have.length) { await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: bT.id, kind: "twin", flag_text: txt }) }); if (!bT.note_flagged) await db(`build?id=eq.${bT.id}`, { method: "PATCH", body: JSON.stringify({ note_flagged: true }) }); logEvent("sync.twin_rows", actorId || null, { order_number: tT.order_number, part: tw.part }); sum.flagged++; A(tT.order_number, "identical cab rows — both placed, noted", { part: tw.part }); } }
+          } catch (eT) { console.error("twin note:", (eT && eT.message) || eT); }
         }
       }
+      if (it.returns350 && it.returns350.length) { for (const rt of it.returns350) A(it.orderNo, `return line ignored (${rt.part} qty ${rt.qty})`, { part: rt.part }); }
       // Block 176 (Fable-5): ORPHANED CABS — Aaron's final-sync-without-the-part
       // arrives as a NORMAL update when the order still has other cab parts
       // (only an all-parts-gone order parks). Every push is a FULL order
@@ -11597,7 +11733,8 @@ async function freezeAndStart(b, empId, startedAt) {
       const [ci94] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd94)}&order=received_at.desc&limit=1`);
       const prodsAll94 = await db(`product?select=part_number,family`);
       const allow94 = new Set(prodsAll94.map((x) => String(x.part_number).toUpperCase()));
-      const det94 = ci94 && ci94.payload ? parseCoyoteDetail(ci94.payload, b.part_number, allow94) : null;
+      if (ci94 && ci94.payload) await withRowKey350(b, ci94.payload);   // Block 350: the frozen options are THIS cab's row
+      const det94 = ci94 && ci94.payload ? parseCoyoteDetail(ci94.payload, b.part_number, allow94, b.coyote_row_key, b.coyote_row_idx) : null;
       if (det94) {
         const famMap94 = {}; for (const x of prodsAll94) famMap94[String(x.part_number).toUpperCase()] = x.family;
         const fam94 = famMap94[String(b.part_number || "").toUpperCase()] || "";
@@ -13945,7 +14082,10 @@ http.createServer(async (req, res) => {
       const empView88 = await liveSession(req);
       if (!empView88) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const ord = decodeURIComponent(url.pathname.slice(7));
-      const [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
+      let [bO] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord)}`);
+      // Block 350: an order that became several cabs renamed its bare cab to .1 — a bookmark, bell or Coyote link to the bare
+      // number lands on .1 (the top row) instead of "No order on the board".
+      if (!bO && /^[A-Za-z]*\d+$/.test(ord)) { const [b1] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord + ".1")}`); if (b1) bO = b1; }
       if (!bO) return send(404, "text/html; charset=utf-8",
         `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
       const [prodO] = bO.part_number ? await db(`product?select=family,template_id&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
@@ -13957,7 +14097,7 @@ http.createServer(async (req, res) => {
       const allowSet86 = new Set(prodAll86.map((p) => String(p.part_number).toUpperCase()));
       const coyOrd86 = bO.coyote_root || String(bO.order_number || "").split(".")[0];
       let coyDetail86 = null;
-      if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86); }
+      if (coyOrd86) { const [ci86] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd86)}&order=received_at.desc&limit=1`); if (ci86 && ci86.payload) { await withRowKey350(bO, ci86.payload); coyDetail86 = parseCoyoteDetail(ci86.payload, bO.part_number, allowSet86, bO.coyote_row_key, bO.coyote_row_idx); } }
       let canFull86 = false, empNav196 = null;
       const empId86 = empView88;
       if (empId86) { const [me86] = await db(`employee?select=role,department&id=eq.${empId86}`); if (me86) { canFull86 = me86.role === "admin" || me86.role === "manager" || me86.department === "Warehouse" || me86.department === "Accounting" || me86.department === "Owner"; empNav196 = { role: me86.role, department: me86.department }; }
@@ -14049,6 +14189,9 @@ http.createServer(async (req, res) => {
         let idle342 = ""; try { if (bO.started_at && !["upcoming", "on_hold", "cancelled"].includes(String(bO.state))) { const L = (await loadCabLife342([bO], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bO.id]; idle342 = idleLine342(L); } } catch (e342) { idle342 = ""; }   // Block 342: for everyone
         where339 = { w: whereNow339(bO, { lineName: { [bO.line_id]: lnO ? lnO.name : "" }, prod: { done: doneO339, total: totO339, step: curO339 ? curO339.name : "" }, body: bodyB339, wh: whB339 }), idle: idle342 };
       } catch (e339) { console.error("where banner:", e339 && e339.message); where339 = null; }
+      // Block 350: the other cabs of this Coyote order, and what the customer asked for differently on each (23930: .1 Hart-Fab
+      // fenders / .2 stock). Read from the latest push, each cab by its own row. Quiet when the order has one cab.
+      try { bO.sibs350 = await siblingDiff350(bO); } catch (eS350) { console.error("sibling diff:", eS350 && eS350.message); bO.sibs350 = null; }
       let pastTool330 = false; if (isAdmin97r && ["upcoming", "on_hold"].includes(String(bO.state))) { try { const [tg330] = await db("feature_toggle?select=enabled&key=eq.past_production_tool"); pastTool330 = Boolean(tg330 && tg330.enabled); } catch (e) { pastTool330 = false; } }   // Block 330: the switch
       return send(200, "text/html; charset=utf-8", orderPage(bO, prodO ? prodO.family : "", lnO ? lnO.name : "", tasksO, coyDetail86, canFull86, flags94, canHours94, isAdmin97r, fixHrs127, empNav196, act230, stepsTpl283, share296, ["active", "rework"].includes(bO.state) ? prog316o : null, moveLines318, body326o, wh327o, pastTool330, where339));
     }
