@@ -7269,7 +7269,10 @@ const bodyCabPage326 = (emp, st, opts) => {
 // ✓ Picked up — sets build.shipped_at (Order Tracking reads Shipped). Money, freight and paperwork stay in Coyote.
 const WH_LINE_ID = 9;
 const WH_KIND327 = { ship: { kind: "crate", name: "Crating", dflt: 2 }, pickup: { kind: "stage", name: "Stage for pickup", dflt: 1 } };
-const WH_FIXED327 = ["Primer coverage — whole cab, nothing missed", "Hardware & parts bag with the cab", "No damage — cab, glass, panels"];
+// Block 352 (Daniel 11/3 10:32: "change the hardware and parts bag going with the cab to: ALL Parts for this Shipment are
+// Present"): the row is renamed; a tick already on the OLD wording (cabs mid-crating today) still counts for the new row.
+const WH_FIXED327 = ["Primer coverage — whole cab, nothing missed", "ALL Parts for this Shipment are Present", "No damage — cab, glass, panels"];
+const WH_FIXED_ALIAS352 = { "ALL Parts for this Shipment are Present": ["Hardware & parts bag with the cab"] };
 const WH_CHECK_PREFIX327 = "WH: ";
 // pickup vs ship, read from the latest Coyote push (order.ship_method): "Will Call" = the customer picks it up; anything else we crate & ship
 const shipModeOf327 = (sm) => /will\s*call|pick\s*up|pickup/i.test(String(sm || "")) ? "pickup" : "ship";
@@ -7335,7 +7338,7 @@ async function whChecklist327(b) {
   const rows = [];
   for (const l of keep) rows.push({ key: l, label: l, group: "cab", evidence: bodyOf[l] ? { by: bodyOf[l].checked_by, at: bodyOf[l].checked_at } : null, check: shipOf[l] || null });
   for (const l of kit) rows.push({ key: l, label: l, group: "kit", evidence: null, kit: true, check: shipOf[l] || null });
-  for (const f of WH_FIXED327) rows.push({ key: WH_CHECK_PREFIX327 + f, label: f, group: "fixed", evidence: null, check: shipOf[WH_CHECK_PREFIX327 + f] || null });
+  for (const f of WH_FIXED327) rows.push({ key: WH_CHECK_PREFIX327 + f, label: f, group: "fixed", evidence: null, check: shipOf[WH_CHECK_PREFIX327 + f] || (WH_FIXED_ALIAS352[f] || []).map((a) => shipOf[WH_CHECK_PREFIX327 + a]).find(Boolean) || null });   // Block 352: old wording counts
   return rows;
 }
 // Everything one Warehouse cab card / page needs.
@@ -7524,15 +7527,20 @@ const stepCard338 = (h) => !h ? "" : h.open345 ? (h.legacy338 ? stepCard338(h.le
 // The check is warehouse + admins only; it can be worked only once the step has started; it LOCKS the moment the
 // last row is checked (an admin can unlock it — build.wh_check_unlocked_at); Finish is refused until every row is
 // checked AND at least one crate / stage photo is on the cab; a production helper on the clock may tap Finish.
+// Block 352 (Daniel 11/3 10:32: "dont lock the list"): the done-right check NEVER locks now — a warehouse person can tick or
+// undo any row until the cab ships (Shipped still needs every row + Finish). Kept as a function so every caller stays
+// valid; the Block 336 body below it is unreachable on purpose (history, and an easy way back if the rule changes).
 const whCheckLocked336 = (b, rows) => {
+  if (WH_NO_LOCK352) return false;
   if (!rows.length || rows.some((r) => !r.check)) return false;
   const last = Math.max(...rows.map((r) => r.check && r.check.checked_at ? new Date(r.check.checked_at).getTime() : 0));
   const unl = b && b.wh_check_unlocked_at ? new Date(b.wh_check_unlocked_at).getTime() : 0;
   return !(unl && unl > last);   // an unlock after the last check opens the list; the next "last row" re-locks it
 };
 // the button word per row: cab options are ON THE CAB; the sheet-metal kit and the parts bag are ON THE ORDER; primer and damage are CHECKED (Daniel 14:08 / 14:10)
-const whCheckWord336 = (r) => r.group === "cab" ? "On the cab" : r.group === "kit" ? "On the order" : /parts bag/i.test(r.label || "") ? "On the order" : "Checked";
+const whCheckWord336 = (r) => r.group === "cab" ? "On the cab" : r.group === "kit" ? "On the order" : /parts bag|all parts/i.test(r.label || "") ? "On the order" : "Checked";
 const WH_PHOTO_MIN336 = 1;
+const WH_NO_LOCK352 = true;
 const rows336Open = (rows) => rows.filter((r) => !r.check);
 async function whPhotoCount336(buildId, sinceIso) { const ph = await db(`build_photo?select=id&build_id=eq.${buildId}&kind=eq.crate&hidden=is.false${sinceIso ? `&created_at=gte.${encodeURIComponent(sinceIso)}` : ""}&limit=50`).catch(() => []); return ph.length; }   // reviewer: a second crating round, or a cab back from a send-back, counts only its own photos
 // Fix 10/30 (Daniel's "Server error" opening a crating cab): the database hands timestamps back as "…+00:00", and this value
@@ -7600,13 +7608,17 @@ const whCabPage327 = (emp, st, opts) => {
   const groupTitle = { cab: "Sold with the cab — built in production, confirmed at inspection", kit: "Sheet metal kit — on the order", fixed: "Before it leaves" };   // Block 336 (Daniel 14:08): kit panels read "On the order"
   const stepStarted = Boolean(t && t.state !== "not_started");
   const locked = Boolean(st.locked);
-  const canCheck = can && o.canShip && stepStarted && !locked;   // Block 336: warehouse + admins, on the clock, once the step has started, until the list locks
+  const stepOpen352 = Boolean(t && t.state === "in_progress");
+  const canCheck = can && o.canShip && stepOpen352 && !locked;   // Block 336: warehouse + admins, on the clock, once the step has started · Block 352 (Fable audit): and only while the step is OPEN — Finish closes the list (Reopen opens both); no lock while open
   const checkRow = (r) => {
     const ev = r.evidence ? `confirmed at inspection${nm(r.evidence.by) ? " by " + esc(nm(r.evidence.by)) : ""}${r.evidence.at ? " " + esc(phxDate(new Date(r.evidence.at).getTime())) : ""}` : r.kit ? "sheet metal on the order — in the crate, not on the cab" : r.group === "fixed" ? "" : `<span style="color:#ffd60a">no record of this being built — look hard</span>`;
     const done = r.check ? `<span style="color:#5edb84">&#10003; ${esc(nm(r.check.checked_by) || "checked")}${r.check.checked_at ? " " + esc(phxDate(new Date(r.check.checked_at).getTime())) : ""}</span>` : "";
     const keyA = esc(r.key).replace(/"/g, "&quot;");
-    const btn = !canCheck ? "" : r.check ? `<button class="b mv" data-key="${keyA}" onclick="whCheck327('${b.id}',this,false)">undo</button>` : `<button class="b grn" data-key="${keyA}" onclick="whCheck327('${b.id}',this,true)">&#10003; ${whCheckWord336(r)}</button>`;
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)"><div><div style="font-weight:${r.check ? 500 : 700}">${esc(r.label)}</div><div style="opacity:.65;font-size:.85rem">${ev}${done ? (ev ? " · " : "") + done : ""}</div></div><div style="flex:0 0 auto">${btn}</div></div>`;
+    // Block 352: an unchecked row is a CHECKBOX (the whole row is the tap target, ≥ 48 px) — ticking only marks the phone; the
+    // sticky "Save N checked" bar sends them all at once. A checked row keeps ✓ who / when and a one-tap undo (no lock).
+    if (!r.check && canCheck) return `<label class="chk352" style="display:flex;align-items:center;gap:12px;padding:12px 4px;min-height:48px;border-top:1px solid var(--line);cursor:pointer"><input type="checkbox" class="cb352" data-key="${keyA}" onchange="tick352()" style="width:26px;height:26px;flex:0 0 26px;accent-color:#30d158"><span style="flex:1"><span style="display:block;font-weight:700">${esc(r.label)}</span><span style="display:block;opacity:.65;font-size:.85rem">${ev}${ev && whCheckWord336(r) !== "Checked" ? " · " : ""}${whCheckWord336(r) === "Checked" ? "" : esc(whCheckWord336(r).toLowerCase())}</span></span></label>`;   /* "Checked" was a button word — under an unticked box it read wrong */
+    const btn = !canCheck || !r.check ? "" : `<button class="b mv" data-key="${keyA}" onclick="whCheck327('${b.id}',this,false)">undo</button>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 4px;min-height:48px;border-top:1px solid var(--line)"><div style="display:flex;align-items:center;gap:12px">${r.check ? `<span style="width:26px;flex:0 0 26px;text-align:center;color:#30d158;font-size:1.3rem">&#10003;</span>` : `<span style="width:26px;height:26px;flex:0 0 26px;border:2px solid #48484a;border-radius:6px;opacity:.6"></span>`}<div><div style="font-weight:${r.check ? 500 : 700}">${esc(r.label)}</div><div style="opacity:.65;font-size:.85rem">${ev}${done ? (ev ? " · " : "") + done : ""}</div></div></div><div style="flex:0 0 auto">${btn}</div></div>`;
   };
   const groups = ["cab", "kit", "fixed"].map((g) => { const rs = rows.filter((r) => r.group === g); return rs.length ? `<div style="margin-top:10px;opacity:.6;font-size:.8rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase">${groupTitle[g]}</div>${rs.map(checkRow).join("")}` : ""; }).join("");
   const stepLabel = !t ? "" : t.state === "complete" ? `&#10003; finished${t.completed_by ? ` — ${esc(nm(t.completed_by))}` : ""}${t.completed_at ? ` ${esc(phxDate(new Date(t.completed_at).getTime()))}` : ""}` : t.state === "in_progress" && t.on.length ? `&#9881; ${esc(t.on.map((x) => x.name).join(" + "))} on it` : t.state === "in_progress" ? "&#9208; paused" : "ready to start";
@@ -7615,7 +7627,7 @@ const whCabPage327 = (emp, st, opts) => {
   const stepBtns = !t || !can ? "" : t.state === "complete"
     ? (o.canShip ? `<button class="b mv" onclick="arm(this,()=>whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'reopen'},this))">Reopen</button>` : "")
     : mineOn
-      ? `<button class="b grn big" ${allChecked && photoOk ? "" : "disabled"} title="${allChecked && photoOk ? "" : esc(finishWhy)}" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Finish</button> <button class="b" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('wpf327').click()">&#128247; Photo</button> ${noteBox340("/api/wh/note", b.id, t.id)}<input type="file" id="wpf327" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpm327')"><span id="wpm327" class="msg"></span>`
+      ? `<button class="b grn big" id="finish352" data-photo-ok="${photoOk ? "1" : "0"}" ${allChecked && photoOk ? "" : "disabled"} title="${allChecked && photoOk ? "" : esc(finishWhy)}" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Finish</button> <button class="b" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('wpf327').click()">&#128247; Photo</button> ${noteBox340("/api/wh/note", b.id, t.id)}<input type="file" id="wpf327" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpm327')"><span id="wpm327" class="msg"></span>`
       : `<button class="b grn" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : t.lastOff === emp.id ? "Resume" : "Pick it up") : "&#9654; Start"}</button>`;   // Block 338 (H3)
   const stepDone = t && t.state === "complete";
   const shipWord = st.mode === "pickup" ? "Picked up" : "Shipped";
@@ -7624,6 +7636,18 @@ const whCabPage327 = (emp, st, opts) => {
   if (!stepDone) missing.push(t ? `${t.name.toLowerCase()} not finished` : "no step on this cab");
   const photos = (o.photos || []);
   const pic = (p) => `<a href="/photo-view/${p.id}" target="_blank"><img src="/pthumb/${p.id}" loading="lazy" style="height:72px;border-radius:8px;margin:2px"></a>`;
+  // Block 352 (Daniel 10/30 12:15: "START crating button was hidden WAY down at the bottom of a long list"): ONE action bar at the
+  // top — the step's live buttons (Start / Join / Resume · Finish · Pause · Reopen), the progress, and Shipped when it's ready.
+  // The step card further down keeps hours / who / notes but no buttons, so there is one place to tap.
+  const shipReady352 = Boolean(o.canShip && !st.gone && !st.back && allChecked && stepDone);
+  const bar352 = st.gone || st.back ? "" : `<div class="lane" id="bar352" style="border:2px solid ${t && t.state === "in_progress" && t.on.length ? "#30d158" : "#3a3a3c"};padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px"><b style="font-size:1.05rem">&#9201; ${t ? esc(t.name) : "Crating"}</b><span style="opacity:.75;font-size:.9rem">${t ? stepLabel : "no step on this cab yet"}</span></div>
+    <div style="opacity:.8;font-size:.92rem;margin:6px 0 8px">&#9745; ${nChecked} of ${rows.length} checked · &#128247; ${photos.length} photo${photos.length === 1 ? "" : "s"}${t ? ` · ${t.hours} of ${Number(t.hours_allowed)} h` : ""}</div>
+    ${!o.clockedIn ? `<div style="opacity:.85">Clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen first — then the buttons wake up.</div>` : ""}
+    ${stepBtns || shipReady352 ? `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">${stepBtns}${shipReady352 ? `<button class="b grn big" onclick="arm(this,()=>whPost('/api/wh/ship',{build_id:'${b.id}'},this))">&#10003; ${shipWord} — it has left the building</button>` : ""}</div>` : ""}
+    ${t && can && !stepStarted ? `<div style="opacity:.75;font-size:.88rem;margin-top:6px">Tap <b>&#9654; Start</b>, then tick every item below and <b>Save</b>.</div>` : ""}
+    ${mineOn && finishWhy ? `<div style="opacity:.75;font-size:.88rem;margin-top:6px">Finish: ${esc(finishWhy)}.</div>` : ""}
+  </div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -7636,17 +7660,15 @@ const whCabPage327 = (emp, st, opts) => {
   <div style="opacity:.7;margin-bottom:8px">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(st.family || b.part_number || "")}${b.customer_name ? ` · ${esc(b.customer_name)}` : ""} · <a href="/order/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">order page</a></div>
   ${o.kit ? `<div class="lane" style="border-color:#3d6ea8;padding:12px"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">&#128230; KIT &mdash; ${esc(o.kit.lineName)}</div><div style="opacity:.7;font-size:.9rem;margin-bottom:8px">${o.kit.context}</div>${o.kit.html}<div class="msg err" id="err"></div></div>` : ""}
   ${o.owed ? whOwedLane344(b, o.owed, o.canAct) : ""}
-  ${o.kit && !b.body_done_at ? "" : `<div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
-  ${!o.clockedIn && !st.gone ? `<div class="lane" style="opacity:.8">Clock in from your <a href="/home" style="color:#5eaeff">Home</a> screen first — then the buttons wake up.</div>` : ""}
+  ${o.kit && !b.body_done_at ? "" : `${bar352}<div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
   ${st.back ? `<div class="lane" style="border-color:#ff8fa3"><b>Sent back to Body</b> ${b.wh_sent_back_at ? esc(phxDate(new Date(b.wh_sent_back_at).getTime())) : ""}${b.wh_sent_back_reason ? ` — ${esc(b.wh_sent_back_reason)}` : ""} · the cab comes back here when Body taps Done in primer again.</div>` : ""}
   ${st.modeMismatch ? `<div class="lane" style="border-color:#ffd60a;color:#ffd60a">Coyote now says <b>${esc(st.shipMethod || "?")}</b> but this cab's step is <b>${esc(t ? t.name : "")}</b> — check with the office before it leaves.</div>` : ""}
   ${(o.notes || []).some((n) => n.body_task_id) ? `<div class="lane" style="border-color:#bf5af2"><b>&#128221; Notes from Body</b> <span style="opacity:.6;font-size:.9rem">— what Isaac and Jason wrote on the steps</span>${noteList340((o.notes || []).filter((n) => n.body_task_id).map((n) => ({ ...n, note: `${(o.bodyStepNames || {})[n.body_task_id] ? (o.bodyStepNames || {})[n.body_task_id] + ": " : ""}${n.note}` })))}</div>` : ""}
-  <div class="lane"><b>&#9745; Done-right check</b> <span style="opacity:.6;font-size:.9rem">— ${nChecked} of ${rows.length}${locked ? ` · <span style="color:#5edb84">&#10003; complete, locked</span>` : stepStarted ? " · tap each one standing at the cab" : " · worked on the clock — tap Start first"}</span>${o.canShip && !stepStarted && !st.gone && !st.back && t ? `<div style="opacity:.7;font-size:.85rem;margin-top:4px">Tap <b>&#9654; Start</b> on the ${esc(t.name.toLowerCase())} step below, then check every item while the clock runs. Finish waits for the last check.</div>` : ""}${can && !o.canShip && stepStarted ? `<div style="opacity:.6;font-size:.85rem;margin-top:4px">The check is the warehouse's — you can run the clock and tap Finish once their list is complete.</div>` : ""}${locked && o.isAdmin ? `<div style="margin-top:6px"><button class="b mv" onclick="arm(this,()=>whPost('/api/wh/unlock',{build_id:'${b.id}'},this))">Unlock the check (admin)</button></div>` : ""}${groups || `<div style="opacity:.6;margin-top:6px">No order lines came through for this cab.</div>`}</div>
-  ${t ? `<div class="bstep${t.state === "in_progress" && t.on.length ? " on" : t.state === "complete" ? " done" : ""}"><h3>&#9201; ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${stepLabel}</div><div>${stepBtns}</div>${mineOn && finishWhy ? `<div style="opacity:.7;font-size:.85rem;margin-top:4px">Finish: ${esc(finishWhy)}.</div>` : ""}${noteList340((o.notes || []).filter((n) => n.wh_task_id === t.id))}</div>` : `<div class="lane" style="opacity:.6">No crating step on this cab yet.</div>`}
+  <div class="lane"><b>&#9745; Done-right check</b> <span style="opacity:.6;font-size:.9rem">— ${nChecked} of ${rows.length}${allChecked ? ` · <span style="color:#5edb84">&#10003; complete</span>` : stepDone ? ` · <span style="color:#ffd60a">step finished with items open — Reopen it above</span>` : stepStarted ? " · tick each one standing at the cab, then Save" : " · worked on the clock — tap ▶ Start above first"}</span>${o.canShip && !stepStarted && !st.gone && !st.back && t ? `<div style="opacity:.7;font-size:.85rem;margin-top:4px">Tap <b>&#9654; Start</b> at the top, then tick every item while the clock runs and Save. Finish waits for the last check.</div>` : ""}${can && !o.canShip && stepStarted ? `<div style="opacity:.6;font-size:.85rem;margin-top:4px">The check is the warehouse's — you can run the clock and tap Finish once their list is complete.</div>` : ""}${locked && o.isAdmin ? `<div style="margin-top:6px"><button class="b mv" onclick="arm(this,()=>whPost('/api/wh/unlock',{build_id:'${b.id}'},this))">Unlock the check (admin)</button></div>` : ""}${groups || `<div style="opacity:.6;margin-top:6px">No order lines came through for this cab.</div>`}</div>
+  ${t ? `<div class="bstep${t.state === "in_progress" && t.on.length ? " on" : t.state === "complete" ? " done" : ""}"><h3>&#9201; ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${stepLabel}</div>${noteList340((o.notes || []).filter((n) => n.wh_task_id === t.id))}</div>` : `<div class="lane" style="opacity:.6">No crating step on this cab yet.</div>`}
   <div class="lane"><b>Photos</b> <span style="opacity:.6;font-size:.9rem">— the ${st.mode === "pickup" ? "staged" : "crated"} cab, ${WH_PHOTO_MIN336} needed before Finish (${photos.length})</span>${can ? ` <button class="b mv" onclick="document.getElementById('wpfC').click()">&#128247; Add photo</button><input type="file" id="wpfC" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpmC')"><span id="wpmC" class="msg"></span>` : ""}<div>${photos.map(pic).join("")}</div></div>
   ${o.canShip && !st.gone && !st.back ? `<div class="lane" style="border-color:${allChecked && stepDone ? "#30d158" : "var(--line)"}">
-    <button class="b grn big" ${allChecked && stepDone ? "" : "disabled"} onclick="arm(this,()=>whPost('/api/wh/ship',{build_id:'${b.id}'},this))">&#10003; ${shipWord} — it has left the building</button>
-    <div style="opacity:.6;font-size:.85rem;margin-top:4px">${allChecked && stepDone ? `Everything is checked and ${t ? t.name.toLowerCase() : "the step"} is finished. This marks the cab ${shipWord.toLowerCase()} on Order Tracking.` : `Not yet: ${missing.join(" · ")}.`}</div>
+    <div style="opacity:.75;font-size:.9rem">${allChecked && stepDone ? `Everything is checked and ${t ? t.name.toLowerCase() : "the step"} is finished — tap <b>${shipWord}</b> at the top. It marks the cab ${shipWord.toLowerCase()} on Order Tracking.` : `${shipWord}: not yet — ${missing.join(" · ")}.`}</div>
     <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
       <button class="b mv" onclick="var d=document.getElementById('wback327');d.style.display=d.style.display==='none'?'':'none'">Send back to Body…</button>
       <div id="wback327" style="display:none;margin-top:6px"><input id="wbr327" maxlength="140" placeholder="Why (required) — e.g. primer thin on the left door" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:#1c1c1e;color:#fff"><button class="b red" onclick="arm(this,()=>whPost('/api/wh/back',{build_id:'${b.id}',reason:document.getElementById('wbr327').value},this))">Send it back</button></div>
@@ -7654,21 +7676,41 @@ const whCabPage327 = (emp, st, opts) => {
   </div>` : ""}
   ${st.gone ? `<div class="lane"><b>&#10003; ${shipWord}</b> ${esc(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && nm(b.shipped_by) ? ` — ${esc(nm(b.shipped_by))}` : ""}${st.hours ? ` · ${st.hours} h to ${st.mode === "pickup" ? "stage" : "crate"}` : ""}</div>` : ""}`}
   <div id="wmsg327" class="msg err" style="text-align:center;margin-top:8px"></div>
+  ${canCheck && rows.some((r) => !r.check) ? `<div id="save352" style="display:none;position:fixed;left:12px;right:12px;bottom:12px;z-index:40;background:#0b3d1a;border:2px solid #30d158;border-radius:14px;padding:10px 12px;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.6)"><span id="save352n" style="font-weight:700"></span><button class="b grn big" id="save352b" style="margin:0" onclick="save352('${b.id}',this)">Save</button></div><div style="height:84px"></div>` : ""}
   ${o.kit || o.owed ? `<script>${whPageScript328(o.ah || { lastReason: "" })}</script>` : ""}
   <script>${netJs}${noteJs340}
   function arm(btn, fn){ if (!btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; } btn.dataset.armed = ""; fn(); }
   async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
+    if (!(await flush352(payload && payload.build_id))) { if (btn) btn.disabled = false; return; }   /* Block 352 (Fable audit): unsaved ticks are SAVED first, never lost or prompted away */
     try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
       var j = await r.json(); if (j && j.ok) { location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
     catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
   function whCheck327(bid, btn, on){ whPost("/api/wh/check", { build_id: bid, key: btn.getAttribute("data-key"), on: on }, btn); }
+  /* Block 352: ticks live on the phone until ONE Save sends them all; leaving with unsaved ticks asks first */
+  var dirty352 = false;
+  function tick352(){ var n = document.querySelectorAll(".cb352:checked").length; var bar = document.getElementById("save352"); dirty352 = n > 0; if (!bar) return;
+    bar.style.display = n ? "flex" : "none"; var t = document.getElementById("save352n"); t.style.color = ""; t.textContent = n + " checked — not saved yet"; document.getElementById("save352b").textContent = "Save " + n + " checked";
+    var f = document.getElementById("finish352"), open = document.querySelectorAll(".cb352").length; if (f && open && f.dataset.photoOk === "1") { f.disabled = !(n && n === open); if (n && n === open) f.title = ""; } }   /* Block 352 (Opus re-audit): no open boxes = leave the server's Finish state alone (all saved, or a helper) */
+  async function save352(bid, btn){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length) return;
+    var t = document.getElementById("save352n"); btn.disabled = true; btn.textContent = "Saving…";
+    try { var r = await fetch("/api/wh/check-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, keys: keys, claimed_at: new Date().toISOString() }) });
+      var j = await r.json(); if (j && j.ok) { dirty352 = false; location.reload(); return; }
+      btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = (j && j.error) || "Didn't save — your ticks are still here, try again"; }
+    catch (e) { btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = "Network hiccup — your ticks are still here, try again"; } }
+  async function flush352(bid){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length || !bid) return true;
+    var t = document.getElementById("save352n");
+    try { var r = await fetch("/api/wh/check-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, keys: keys, claimed_at: new Date().toISOString() }) });
+      var j = await r.json(); if (j && j.ok) { dirty352 = false; return true; } if (t) { t.style.color = "#ff8fa3"; t.textContent = (j && j.error) || "Didn't save — your ticks are still here"; } return false; }
+    catch (e) { if (t) { t.style.color = "#ff8fa3"; t.textContent = "Network hiccup — your ticks are still here"; } return false; } }
+  window.addEventListener("beforeunload", function(e){ if (dirty352) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("pageshow", function(){ tick352(); });
   async function whPhoto327(bid, input, msgId){ var m = document.getElementById(msgId); var files = Array.from(input.files || []); if (!files.length) return; var okN = 0;
     for (var i = 0; i < files.length; i++) { m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
       try { var blob; try { blob = await photoPrep317(files[i], bid, "crate"); } catch (e317) { m.textContent = e317.message; input.value = ""; return; }
         var o = await sbUpload("/api/photo/upload?build_id=" + bid + "&kind=crate", blob, blob.type || "image/jpeg", function(t){ m.textContent = t; });
         if (o && o.ok) okN++; else { m.textContent = (o && o.error) || "Photo did not make it — try again"; input.value = ""; return; } }
       catch (e) { m.textContent = "Network hiccup — try again"; input.value = ""; return; } }
-    m.textContent = "✓ " + okN + " on the cab"; input.value = ""; setTimeout(function(){ location.reload(); }, 700); }
+    m.textContent = "✓ " + okN + " on the cab"; input.value = ""; await flush352(bid); setTimeout(function(){ location.reload(); }, 700); }
   </script>
 </div></body></html>`;
 };
@@ -13663,6 +13705,7 @@ http.createServer(async (req, res) => {
       if (!canShip327(meC)) return json(403, { ok: false, error: "The done-right check is the warehouse's — you can run the crating clock" });   // Block 336 (D2)
       const tasksC = await db(`wh_task?select=id,state,round&build_id=eq.${build_id}&order=round.desc`).then((all) => all.filter((t) => Number(t.round || 1) === Number(all[0] ? all[0].round || 1 : 1)));   // Block 341
       if (!tasksC.length || tasksC.every((t) => t.state === "not_started")) return json(400, { ok: false, error: "Tap Start on the step first — the check is worked on the clock" });   // Block 336
+      if (tasksC.every((t) => t.state === "complete")) return json(400, { ok: false, error: "The step is finished — tap Reopen to change the check" });   // Block 352 (Fable audit): Finish closes the list
       const rows = await whChecklist327(bC);
       if (whCheckLocked336(bC, rows)) return json(400, { ok: false, error: "The check is complete and locked — an admin can unlock it" });   // Block 336
       const row = rows.find((r) => r.key === key);
@@ -13673,13 +13716,44 @@ http.createServer(async (req, res) => {
         if (row.check) return json(200, { ok: true });
         await db("option_check", { method: "POST", body: JSON.stringify([{ build_id, gate: "ship", item_text: key, checked_by: eC, checked_at: whenC.toISOString() }]) });
         logEvent("wh.check", eC, { build_id, order_number: bC.order_number, item: key, group: row.group, had_inspection_record: Boolean(row.evidence) });
-        if (rows.filter((r) => !r.check).length === 1) logEvent("wh.check_locked", eC, { build_id, order_number: bC.order_number, items: rows.length });   // Block 336: that was the last row — the list is locked
+        if (rows.filter((r) => !r.check).length === 1) logEvent("wh.check_complete", eC, { build_id, order_number: bC.order_number, items: rows.length });   // Block 352: that was the last row — the list is complete (it no longer locks)
       } else {
         if (!row.check) return json(200, { ok: true });
-        await db(`option_check?build_id=eq.${build_id}&gate=eq.ship&item_text=eq.${encodeURIComponent(key)}&voided=is.false`, { method: "PATCH", body: JSON.stringify({ voided: true }) });   // never deleted — the undo voids the tap (the row and the audit stay)
+        await db(`option_check?build_id=eq.${build_id}&gate=eq.ship&item_text=eq.${encodeURIComponent(row.check.item_text || key)}&voided=is.false`, { method: "PATCH", body: JSON.stringify({ voided: true }) });   // Block 352: the stored key (a renamed row's old wording too) · never deleted — the undo voids the tap (the row and the audit stay)
         logEvent("wh.uncheck", eC, { build_id, order_number: bC.order_number, item: key, was_by: row.check.checked_by, was_at: row.check.checked_at });
       }
       return json(200, { ok: true });
+    }
+    // Block 352 (Daniel 10/30 12:15: "these would be MUCH better as checkboxes that can all easily be checked off at the same
+    // time before submitting"): ONE save for every row ticked on the phone. The same guards as /api/wh/check, checked once;
+    // every key must be on THIS cab's list or nothing is written; rows already checked are skipped (two people saving the
+    // same row is harmless); one insert; one wh.check audit row per row, exactly as the single tap writes them.
+    if (url.pathname === "/api/wh/check-batch" && req.method === "POST") {
+      const [eK, failK, meK] = await bodyAuth326(); if (failK) return failK;
+      const p = await body(req); const build_id = String(p.build_id || "");
+      const keysIn = Array.isArray(p.keys) ? p.keys : [];
+      if (!keysIn.length) return json(400, { ok: false, error: "Nothing ticked" });
+      if (keysIn.length > 200 || keysIn.some((k) => typeof k !== "string" || !k || k.length > 300)) return json(400, { ok: false, error: "That list isn't valid — refresh" });
+      const keys = [...new Set(keysIn)];
+      const [bK, badK] = await whCab327(build_id); if (badK) return badK;
+      const [lastK] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${eK}&order=claimed_at.desc&limit=1`);
+      if (!lastK || lastK.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first" });
+      if (!canShip327(meK)) return json(403, { ok: false, error: "The done-right check is the warehouse's — you can run the crating clock" });
+      const tasksK = await db(`wh_task?select=id,state,round&build_id=eq.${build_id}&order=round.desc`).then((all) => all.filter((t) => Number(t.round || 1) === Number(all[0] ? all[0].round || 1 : 1)));
+      if (!tasksK.length || tasksK.every((t) => t.state === "not_started")) return json(400, { ok: false, error: "Tap Start on the step first — the check is worked on the clock" });
+      if (tasksK.every((t) => t.state === "complete")) return json(400, { ok: false, error: "The step is finished — tap Reopen to change the check" });   // Block 352 (Fable audit): Finish closes the list
+      const rowsK = await whChecklist327(bK);
+      const byKey = {}; for (const r of rowsK) byKey[r.key] = r;
+      const stranger = keys.find((k) => !byKey[k]);
+      if (stranger) return json(404, { ok: false, error: "An item isn't on this cab's list any more — refresh and tick again" });
+      const whenK0 = new Date(p.claimed_at || Date.now()); if (isNaN(whenK0.getTime())) return json(400, { ok: false, error: "Bad time" });
+      const whenK = new Date(Math.max(whenK0.getTime(), bK.wh_check_unlocked_at ? new Date(bK.wh_check_unlocked_at).getTime() + 1000 : 0));
+      const add = keys.map((k) => byKey[k]).filter((r) => !r.check);
+      if (!add.length) return json(200, { ok: true, added: 0 });
+      await db("option_check", { method: "POST", body: JSON.stringify(add.map((r) => ({ build_id, gate: "ship", item_text: r.key, checked_by: eK, checked_at: whenK.toISOString() }))) });
+      for (const r of add) logEvent("wh.check", eK, { build_id, order_number: bK.order_number, item: r.key, group: r.group, had_inspection_record: Boolean(r.evidence), batch: add.length });
+      if (rowsK.filter((r) => !r.check).length === add.length) logEvent("wh.check_complete", eK, { build_id, order_number: bK.order_number, items: rowsK.length });
+      return json(200, { ok: true, added: add.length });
     }
     if (url.pathname === "/api/wh/step" && req.method === "POST") {
       const [eS, failS, meS] = await bodyAuth326(); if (failS) return failS;
