@@ -4067,6 +4067,29 @@ const escH = (s) => String(s == null ? "" : s).replace(/[<>&]/g, (c) => ({ "<": 
 // configuration / add-on pieces. The cab line-item description is a clean
 // newline-delimited "Label: Value" list; other non-cab, non-blazer-top line
 // items are add-ons. Addresses are pre-formatted to strings here.
+// Block 351 (Daniel 11/3 09:30 "build the structured options field block"): every cab row Coyote pushes (1,112 of 1,112,
+// never empty) carries `build_it_options` — a JSON array of {group, selection} pairs, the same facts the board has been
+// rebuilding by splitting the free-text description on line breaks and colons. Audit of the whole history: 991 rows the
+// two readings match exactly; in the 121 that differ the TEXT always carries more — older (2024) 47-53 / 55-59 orders
+// whose firewall + body upgrades live only in the text, and WEBSITE orders (W…) whose structured field is one junk entry
+// ("<whole title>, Year" => "Stock") with the real options in a comma-run text line. So: the structured field is read
+// FIRST and used only when it is SOUND — at least as many pairs as the text has "Label: value" lines, and no junk group
+// (over 60 chars or containing a comma). Otherwise the text parser runs exactly as before. A row's group-only entry is
+// the model/title line. Returns {model, features} or null.
+function structuredOptions351(it, textLineCount) {
+  const arr = it && Array.isArray(it.build_it_options) ? it.build_it_options : null;
+  if (!arr || !arr.length) return null;
+  let model = ""; const features = [];
+  for (const e of arr) {
+    if (!e || typeof e !== "object") return null;
+    const g = String(e.group == null ? "" : e.group).trim(), sel = e.selection == null ? null : String(e.selection).trim();
+    if (sel == null || (sel === "" && !features.length && !model)) { if (!model && g) model = g; continue; }   // the title entry (null selection, or an empty one in first place)
+    if (!g || g.length > 60 || g.includes(",")) return null;      // junk (the website shape) — fall back to the text
+    features.push({ label: g, value: sel, stock: /^(stock|none|n\/a)\b/i.test(sel) || sel === "" });   // review: the SAME stock rule as the multi-line text path, so a frozen options_sig never flips on the switch
+  }
+  if (!features.length || features.length < (Number(textLineCount) || 0)) return null;   // the text knows more — keep the text
+  return { model, features };
+}
 // Block 350: callers hand a build row from many different selects; when the row key isn't on it, fetch it (one small read,
 // only needed when the order carries this part more than once — the common single-row order short-circuits).
 async function withRowKey350(b, payload) {
@@ -4091,7 +4114,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet, rowKey, rowIdx) {
     const base = String(rowKey || "").split("#")[0];
     if (base) { const copy = Number(String(rowKey || "").split("#")[1] || 0); let seen = 0;
       for (let i = 0; i < items.length; i++) { const it = items[i]; if (!it || String(it.item_number || "").toUpperCase() !== pn) continue;
-        if (rowKey350({ part: pn, price350: it.price != null ? String(it.price) : "", desc350: String(it.description || "") }) === base) { if (seen === copy) { pick350 = i; break; } seen++; } } }
+        if (rowKey350({ part: pn, price350: it.price != null ? String(it.price) : "", desc350: String(it.description || ""), bio350: it.build_it_options }) === base) { if (seen === copy) { pick350 = i; break; } seen++; } } }
     if (pick350 < 0 && Number.isInteger(rowIdx) && rowIdx >= 0 && items[rowIdx] && String(items[rowIdx].item_number || "").toUpperCase() === pn) pick350 = rowIdx;
   }
   const fmtAddr = (a) => { if (!a || typeof a !== "object") return ""; return [a.street, a.street2, [a.city, a.state, a.zip].filter(Boolean).join(", "), (a.country && a.country !== "USA") ? a.country : ""].filter(Boolean).join(", "); };
@@ -4106,8 +4129,12 @@ function parseCoyoteDetail(payload, partNumber, allowSet, rowKey, rowIdx) {
     if (desc) addons.push({ num, desc });
   }
   const lines = cabDesc.split(/[\r\n\u2028\u2029]+/).map((s) => s.trim()).filter(Boolean);
-  let model = ""; const features = [];
-  if (lines.length) {
+  let model = ""; const features = []; let source351 = "text";
+  // Block 351: the structured field for THIS row (the row parseCoyoteDetail picked), when sound
+  const own351 = cabTaken ? items.find((it, i) => (pick350 >= 0 ? i === pick350 : String((it && it.item_number) || "").toUpperCase() === pn)) : null;
+  const so351 = own351 ? structuredOptions351(own351, lines.filter((l, i) => i > 0 && l.indexOf(":") > 0).length) : null;
+  if (so351) { model = so351.model || (lines[0] || ""); features.push(...so351.features); source351 = "structured"; }
+  else if (lines.length) {
     model = lines[0];
     for (let i = 1; i < lines.length; i++) {
       const idx = lines[i].indexOf(":");
@@ -4143,7 +4170,7 @@ function parseCoyoteDetail(payload, partNumber, allowSet, rowKey, rowIdx) {
   return {
     customer: { name: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(), company: String(c.company || "").trim(), email: String(c.email || "").trim(), phone: String(c.phone_primary || c.phone || "").trim(), billStr: fmtAddr(c.bill_to), shipStr: fmtAddr(ship), shipState: ship ? String(ship.state || "").trim() : "" },
     order: { status: String(o.status || payload.status || "").trim(), date: String(o.date || "").slice(0, 10), ship: String(o.ship_date || "").slice(0, 10), note: String(o.invoice_note || "").trim() },
-    model, features, addons,
+    model, features, addons, source351,
   };
 }
 // Block 211 (owner, Sat 8/22): the PROGRESS REPORTS HUB — the front office's
@@ -8506,7 +8533,7 @@ async function mapperPreviewData() {
       const num = String((it && it.item_number) ?? "").trim(); if (!num) continue;
       const up = num.toUpperCase();
       if (up === "PSR-BLZR-TOP") { blazerTop = true; continue; }
-      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }); }   // Block 350: the preview mirrors the engine's row rule
+      if (allow.has(up)) { const pr = prodByPart[up]; cabParts.push({ part: num, family: pr.family, lines: (pr.lines || []).map((lid) => lineName[lid] || ("Line " + lid)), qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || ""), bio350: it && it.build_it_options }); }   // Block 350: the preview mirrors the engine's row rule · Block 351: +structured options
     }
     const status = String(o.status ?? "").trim() || "—";
     const noteRaw = String(o.invoice_note ?? "").trim();
@@ -8514,6 +8541,10 @@ async function mapperPreviewData() {
     const col151 = collapseCabs151(cabParts);
     const cabs151 = col151.cabs;
     const dup151 = col151.dupes.map((d) => "⚠ " + d.part + " on identical rows — both placed as cabs (Block 350); if the office duplicated a row, cancel one in Coyote").join(" · ");
+    // Block 351: say which reading each cab row got — "options: structured" (the normal Coyote shape) or "options: text" (a
+    // website / 2024 row where the text knows more) — so the office can watch the switch on /mapper for a while.
+    const src351 = cabs151.map((cp) => { const n = String(cp.desc350 || "").split(/[\r\n\u2028\u2029]+/).map((l) => l.trim()).filter(Boolean).slice(1).filter((l) => l.indexOf(":") > 0).length; return structuredOptions351({ build_it_options: cp.bio350 }, n) ? "structured" : "text"; });   // (review: the same line count as the engine)
+    const optSrc351 = src351.length ? [...new Set(src351)].join("/") : "";
     const note = noteRaw + (dup151 ? (noteRaw ? " · " : "") + dup151 : "");
     const cls = classifyOrder({ status, cabPartsCount: cabs151.length, hasBlazerTop: blazerTop });
     let group = cls.group, propState = cls.state, reason = cls.reason;
@@ -8525,7 +8556,7 @@ async function mapperPreviewData() {
     orders.push({ order: ordNo || "—", customer: custName, status, group, propState, reason,
       date: String(o.date ?? "").slice(0, 10), ship: String(o.ship_date ?? "").slice(0, 10),
       parts: cabs151, lines: [...new Set(cabs151.flatMap((cp) => cp.lines))], family: [...new Set(cabs151.map((cp) => cp.family))].join(", "),
-      note, hasNote: !!note, blazerTop, splits });
+      note, hasNote: !!note, blazerTop, splits, optSrc351 });
   }
   const rank = { place: 0, review: 1, "needs-setup": 2, shipped: 3, excluded: 4 };
   orders.sort((a, b) => (rank[a.group] - rank[b.group]) || String(a.order).localeCompare(String(b.order)));
@@ -8541,7 +8572,7 @@ function mapperPreviewPage(d) {
     <td><b><a href="/order?n=${encodeURIComponent(o.order)}" style="color:inherit;text-decoration:underline dotted">${esc(o.order)}</a></b></td>
     <td>${esc(o.customer) || '<span class="muted">—</span>'}</td>
     <td>${o.parts.map((p) => esc(p.part)).join("<br>") || '<span class="muted">—</span>'}</td>
-    <td>${esc(o.family) || '<span class="muted">—</span>'}</td>
+    <td>${esc(o.family) || '<span class="muted">—</span>'}${o.optSrc351 ? ` <span class="muted" style="font-size:.8em" title="where this row's options were read from (Block 351)">· ${esc(o.optSrc351)}</span>` : ""}</td>
     <td>${o.lines.length ? o.lines.map(esc).join(", ") : '<span class="flag amber">no line</span>'}</td>
     <td><span class="st q">${esc(o.propState)}</span></td>
     <td class="muted">${esc(o.ship || o.date) || "—"}</td>
@@ -9239,7 +9270,7 @@ function rowSig350(payload, prodByPart) {
   for (const it of items) { const num = String((it && it.item_number) ?? "").trim(); if (!num || !prodByPart[num.toUpperCase()]) continue;
     const ifc = it && it.interface != null ? String(it.interface).trim().toLowerCase() : null; if (ifc === "false") continue;
     const qn = Math.floor(Number(it && (it.qty ?? it.quantity))); if (Number.isFinite(qn) && qn < 0) continue;
-    keys.push(rowKey350({ part: num, price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }) + "x" + (Number.isFinite(qn) && qn > 0 ? qn : 1)); }
+    keys.push(rowKey350({ part: num, price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || ""), bio350: it && it.build_it_options }) + "x" + (Number.isFinite(qn) && qn > 0 ? qn : 1)); }
   return keys.sort().join(",");
 }
 const SETTLE_PUSHES_350 = 3;
@@ -9281,7 +9312,7 @@ function reduceFresh(ctx) {
       if (ifc176 === "false" && pr) { ifaceDrops.push(num); continue; }
       if (ifc176 === "true" && !pr) { ifaceAdds.push(num); continue; }
       if (ifc176 === "false") continue;   // declared NOT ours (brackets, hardware, ~75/order) — recognized-and-excluded, never "unrecognized" noise; an all-false order parks clean as "No cab part."
-      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || "") }); }   // Block 350: the row itself rides along
+      if (pr) { const enabled = (pr.lines || []).filter((x) => ctx.lineEnabled[x]); const lid = enabled.length ? enabled[0] : ((pr.lines || [])[0] ?? null); cabParts.push({ part: num, family: pr.family, line: lid, ready: ctx.famReady[pr.family] === true, qty151: it && (it.qty ?? it.quantity) != null ? String(it.qty ?? it.quantity).trim() : ""   /* Block 160 (C2 audit): Coyote pushes the count as "qty" — "quantity" never existed in any real payload; read qty first, keep quantity as a fallback */, rowIdx350: items.indexOf(it), price350: it && it.price != null ? String(it.price) : "", desc350: String((it && it.description) || ""), bio350: it && it.build_it_options }); }   // Block 350: the row itself rides along · Block 351: +structured options
       else unknownParts.push(num);
     }
     const ex350 = expandCabs350(cabParts);   // Block 350: every row (× qty) is a cab; return rows are never cabs
@@ -9307,11 +9338,24 @@ function parseDays152(x) {
 // each cab carries a CONTENT KEY (part + price + option text) so it stays tied to its own row if Coyote reorders rows.
 // Identical rows are still cabs (the ruling) but are reported as TWINS so the office can see a possible edit artifact.
 // A NEGATIVE qty is a return line (the RA orders) — never a cab, reported so the sync can note it.
+// Block 351: the key is built from the row's CANONICAL option pairs — the structured field when it is sound, else the
+// text's "Label: value" lines — normalized and sorted, so a wording-only re-push, a reordered list or a CR/LF change never
+// reads as an edit. Keys carry a version prefix ("2:"); a stored key without one is a Block 350 text-hash key and is
+// re-keyed on sight without counting as a change (see buildSyncPlan).
+const ROW_KEY_VER_351 = "2:";
+function rowPairs351(cp) {
+  const norm = (x) => String(x == null ? "" : x).replace(/\s+:/g, ":").replace(/\s+/g, " ").trim().toLowerCase();
+  const lines = String(cp.desc350 || "").split(/[\r\n\u2028\u2029]+/).map((l) => l.trim()).filter(Boolean);
+  const textPairs = lines.slice(1).filter((l) => l.indexOf(":") > 0).map((l) => { const i = l.indexOf(":"); return norm(l.slice(0, i)) + ":" + norm(l.slice(i + 1)); });
+  const so = structuredOptions351({ build_it_options: cp.bio350 }, textPairs.length);
+  if (so) return so.features.map((f) => norm(f.label) + ":" + norm(f.value)).sort();
+  if (textPairs.length) return textPairs.sort();
+  return [norm(cp.desc350)];   // a one-line (website) description: the whole line is the fact
+}
 function rowKey350(cp) {
-  const txt = String(cp.desc350 || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const str = String(cp.part || "").toUpperCase() + "|" + String(cp.price350 || "") + "|" + txt;
+  const str = String(cp.part || "").toUpperCase() + "|" + String(cp.price350 || "") + "|" + rowPairs351(cp).join("|");
   let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  return String(h);
+  return ROW_KEY_VER_351 + String(h);
 }
 function expandCabs350(cabParts) {
   const out = [], twins = [], returns = []; const seen = new Map();
@@ -9351,7 +9395,7 @@ function buildSyncPlan(ctx) {
       // cab of the same part, in order (pre-350 cabs with no key). A row with no cab left is a NEW cab. (review 1 blocker 1)
       const sameP = (b, cp) => String(b.part_number).toUpperCase() === String(cp.part).toUpperCase();
       const claimed = new Set(); const pick = (cp) => {
-        let ex = live.find((b) => !claimed.has(b.id) && b.coyote_row_key && b.coyote_row_key === cp.rowKey350) || null;
+        let ex = live.find((b) => !claimed.has(b.id) && b.coyote_row_key && b.coyote_row_key === cp.rowKey350) || null;   // (a Block 350 v1 key never equals a "2:" key → falls to position/part below, by design)
         if (!ex) ex = live.find((b) => !claimed.has(b.id) && sameP(b, cp) && b.coyote_row_idx != null && Number(b.coyote_row_idx) === Number(cp.rowIdx350)) || null;
         if (!ex) ex = live.find((b) => !claimed.has(b.id) && sameP(b, cp)) || null;
         if (ex) claimed.add(ex.id); return ex; };
@@ -9375,7 +9419,7 @@ function buildSyncPlan(ctx) {
         }
         targets.push({ order_number: name, coyote_root: o.orderNo, line_id: cp.line, part_number: cp.part, state: dec.state,
           customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
-          row_key: cp.rowKey350, row_idx: cp.rowIdx350, existing_id: ex ? ex.id : null, row_moved: Boolean(ex && ex.coyote_row_key && ex.coyote_row_key !== cp.rowKey350) });
+          row_key: cp.rowKey350, row_idx: cp.rowIdx350, existing_id: ex ? ex.id : null, row_moved: Boolean(ex && ex.coyote_row_key && String(ex.coyote_row_key).startsWith(ROW_KEY_VER_351) && ex.coyote_row_key !== cp.rowKey350) });   // Block 351: an old-version key being upgraded is not an edit
       });
       // Block 350 R3 (Daniel 11/3 09:22: "23806, 23930.1, 23930.2 then 23929"): a NEW cab added to an order that already has
       // cabs on the board queues RIGHT BEHIND the last of its siblings, not at the back of the line — queue order is
