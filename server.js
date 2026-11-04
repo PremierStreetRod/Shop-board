@@ -38,6 +38,8 @@
 //   TWILIO_FROM           in +1XXXXXXXXXX form.
 // ============================================================
 const http = require("http");
+const https = require("https");   // Block 355: db() keep-alive transport (stdlib — zero-dep rule)
+const { AsyncLocalStorage } = require("async_hooks");   // Block 355: per-request database counting (stdlib)
 const crypto = require("crypto");
 const zlib = require("zlib");   // Block 212 (v201 SPEED): gzip — stdlib only, zero-dep rule intact
 const PORT = process.env.PORT || 3000;
@@ -104,19 +106,79 @@ async function upsertWorkLog290(empId, clockInId, note) {
 
 // ---------- tiny helpers ----------
 // Ask Supabase for rows. `path` is the REST query string.
-async function db(path, opts = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...opts,
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: opts.method === "POST" ? "return=representation" : "return=minimal",
-      ...(opts.headers || {}),
-    },
+// ============================================================================
+// Block 355 — SPEED STEP 1 (Daniel 11/4 12:37–12:44; Plan 80). One database trip cost ~145 ms even after the 10/30
+// move next to Supabase. Leading suspect: Node's built-in fetch keeps an idle connection only ~4 s, so the shop's bursty
+// traffic pays a fresh TLS connection on many calls — and fetch's keep-alive can't be changed without the `undici`
+// package (zero-dep rule). So db() rides Node's own https client with a keep-alive Agent, which also TELLS us whether
+// each call reused a connection (req.reusedSocket) — the measurement proves or disproves the theory. Same contract as
+// before (URL, headers, method, body; non-2xx throws "db <status>: <text>"; empty → null).
+// FABLE AUDIT (11/4 13:10, measured on LIVE from Daniel's Chrome before deploy): /login (one trip) in a burst = 214 ms median,
+// spaced 7 s apart (forced reconnect) = 199 ms → there is NO reconnect penalty; the keep-alive client buys no speed. So the
+// PROVEN fetch path stays the DEFAULT (byte-identical behavior); the keep-alive client is an opt-in (DB_TRANSPORT=keepalive,
+// a Railway env var) for a later live A/B through /api/perf. The measuring below runs on both paths. The speed will come from
+// FEWER TRIPS (Steps 2–4): one trip ≈ 60–80 ms of real time and the pages wait on them one after another.
+const DB_FETCH355 = String(process.env.DB_TRANSPORT || "").toLowerCase() !== "keepalive";
+const DB_TIMEOUT355 = 30000;
+const DB_AGENT355 = String(SUPABASE_URL || "").startsWith("https")
+  ? new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 48, scheduling: "lifo" })
+  : new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 48, scheduling: "lifo" });
+// per-request counters (AsyncLocalStorage store) + the trip memory /api/perf reads
+const REQ355 = new AsyncLocalStorage();
+const trip355 = { fresh: [], reused: [], byTable: {}, n: 0, retried: 0, timeouts: 0, since: new Date().toISOString() };
+const noteTrip355 = (path, ms, reused) => {
+  trip355.n++; const arr = reused ? trip355.reused : trip355.fresh; arr.push(ms); if (arr.length > 600) arr.shift();
+  const t = String(path || "").split(/[?/]/)[0] || "?"; const b = trip355.byTable[t] = trip355.byTable[t] || { n: 0, total: 0, max: 0 }; b.n++; b.total += ms; if (ms > b.max) b.max = ms;
+};
+const pct355 = (arr, p) => { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return Math.round(a[Math.min(a.length - 1, Math.floor(p * a.length))]); };
+const tripSummary355 = (arr) => ({ n: arr.length, avg_ms: arr.length ? Math.round(arr.reduce((x, y) => x + y, 0) / arr.length) : null, p50_ms: pct355(arr, 0.5), p90_ms: pct355(arr, 0.9) });
+// one HTTP(S) request on the keep-alive agent → { status, text, reused }
+function dbRequest355(urlStr, method, headers, body) {
+  const u = new URL(urlStr); const mod = u.protocol === "https:" ? https : http;
+  const payload = body == null ? null : (Buffer.isBuffer(body) ? body : Buffer.from(String(body)));
+  const attempt = (n) => new Promise((resolve, reject) => {
+    const hdr = { ...headers, "Accept-Encoding": "gzip" }; if (payload) hdr["Content-Length"] = payload.length;
+    let gotHeaders = false;
+    const req = mod.request(u, { method, headers: hdr, agent: DB_AGENT355 }, (res) => {
+      gotHeaders = true; const chunks = []; res.on("data", (c) => chunks.push(c)); res.on("error", reject);
+      res.on("end", () => { let buf = Buffer.concat(chunks); const enc = String(res.headers["content-encoding"] || "").toLowerCase();
+        try { if (enc === "gzip") buf = zlib.gunzipSync(buf); else if (enc === "br") buf = zlib.brotliDecompressSync(buf); else if (enc === "deflate") buf = zlib.inflateSync(buf); } catch (eZ) { return reject(eZ); }
+        resolve({ status: res.statusCode, text: buf.toString("utf8"), reused: Boolean(req.reusedSocket) }); });
+    });
+    req.setTimeout(DB_TIMEOUT355, () => { trip355.timeouts++; req.destroy(new Error(`db timeout after ${DB_TIMEOUT355 / 1000} s`)); });
+    req.on("error", (e) => {
+      // the documented Node pattern: a REUSED connection the far side closed while idle fails before any answer → send once more.
+      // Fable audit: READS ONLY (GET) and only before any response byte — a write is never sent twice; in that rare race it fails
+      // loud ("Network hiccup — try again"), exactly as the fetch path does.
+      if (n === 0 && method === "GET" && !gotHeaders && req.reusedSocket && e && (e.code === "ECONNRESET" || e.code === "EPIPE")) { trip355.retried++; return attempt(1).then(resolve, reject); }
+      reject(e);
+    });
+    if (payload) req.write(payload); req.end();
   });
-  if (!res.ok) throw new Error(`db ${res.status}: ${await res.text()}`);
-  const text = await res.text();
+  return attempt(0);
+}
+async function db(path, opts = {}) {
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+    Prefer: opts.method === "POST" ? "return=representation" : "return=minimal",
+    ...(opts.headers || {}),
+  };
+  const st = REQ355.getStore(); const t0 = Date.now();
+  if (st) { if (st.inflight === 0) st.waves++; st.inflight++; st.q++; }
+  let status, text, reused = false;
+  try {
+    if (DB_FETCH355) {   // the proven path (default) — Fable audit: + the same 30 s guard (a stuck call never hangs a request forever)
+      let res; try { res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...opts, headers, signal: AbortSignal.timeout(DB_TIMEOUT355) }); }
+      catch (eF) { if (eF && eF.name === "TimeoutError") { trip355.timeouts++; throw new Error(`db timeout after ${DB_TIMEOUT355 / 1000} s`); } throw eF; }
+      status = res.status; text = await res.text(); }
+    else ({ status, text, reused } = await dbRequest355(`${SUPABASE_URL}/rest/v1/${path}`, opts.method || "GET", headers, opts.body));
+  } finally {
+    const ms = Date.now() - t0; noteTrip355(path, ms, reused);
+    if (st) { st.inflight = Math.max(0, st.inflight - 1); st.ms += ms; if (String(path).startsWith("employee?")) st.emp++; }
+  }
+  if (!(status >= 200 && status < 300)) throw new Error(`db ${status}: ${text}`);
   return text ? JSON.parse(text) : null;
 }
 
@@ -12716,13 +12778,13 @@ setInterval(boardTick, 3000);
 // page runs one refresh at a time; and every slow request is remembered here
 // so tomorrow's 4:05 is measured, not argued (/api/perf, admin).
 const perf298 = { inflight: 0, slow: [], byPath: {} };
-const perfNote298 = (path, ms) => { const k = path.replace(/\/[0-9a-f-]{20,}.*$/, "/…").replace(/\?.*$/, ""); const b = perf298.byPath[k] = perf298.byPath[k] || { n: 0, total: 0, max: 0 }; b.n++; b.total += ms; if (ms > b.max) b.max = ms;
+const perfNote298 = (path, ms, st) => { const k = path.replace(/\/[0-9a-f-]{20,}.*$/, "/…").replace(/\?.*$/, ""); const b = perf298.byPath[k] = perf298.byPath[k] || { n: 0, total: 0, max: 0 }; b.n++; b.total += ms; if (st) { b.q = (b.q || 0) + st.q; b.waves = (b.waves || 0) + st.waves; b.dbms = (b.dbms || 0) + st.ms; b.emp = (b.emp || 0) + st.emp; }   /* Block 355 */ if (ms > b.max) b.max = ms;
   if (ms >= 1500) { perf298.slow.push({ at: new Date().toISOString(), path: k, ms, inflight: perf298.inflight }); if (perf298.slow.length > 300) perf298.slow.shift(); } };
 const boardCache298 = {};   // audience key -> { at, body, pending }
-http.createServer(async (req, res) => {
+const handleRequest355 = async (req, res) => {
   const url = new URL(req.url, "http://x");
-  const t0_298 = Date.now(); perf298.inflight++;
-  res.once("finish", () => { perf298.inflight = Math.max(0, perf298.inflight - 1); if (url.pathname !== "/api/board-stream") perfNote298(url.pathname, Date.now() - t0_298); });
+  const t0_298 = Date.now(); perf298.inflight++; const st355 = REQ355.getStore();
+  res.once("finish", () => { perf298.inflight = Math.max(0, perf298.inflight - 1); if (url.pathname !== "/api/board-stream") perfNote298(url.pathname, Date.now() - t0_298, st355); });
   res.once("close", () => { if (!res.writableFinished) perf298.inflight = Math.max(0, perf298.inflight - 1); });
   // Q123: security response headers on EVERY response — set once here (before
   // routing) so they ride along whether a route ends via send(), json(), a
@@ -12804,8 +12866,14 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/api/perf") {
       const eP = await liveSession(req); if (!eP) return json(401, { ok: false, error: "Signed out" });
       const [mP] = await db(`employee?select=role&id=eq.${eP}`); if (!mP || mP.role !== "admin") return json(403, { ok: false, error: "Admin only" });
-      const paths = Object.entries(perf298.byPath).map(([path, b]) => ({ path, n: b.n, avg_ms: Math.round(b.total / b.n), max_ms: b.max })).sort((a, z) => z.max_ms - a.max_ms).slice(0, 40);
-      return json(200, { ok: true, inflight: perf298.inflight, boards: sseClients.size, slow: perf298.slow.slice(-150), paths });
+      const paths = Object.entries(perf298.byPath).map(([path, b]) => ({ path, n: b.n, avg_ms: Math.round(b.total / b.n), max_ms: b.max,
+        avg_queries: b.q != null ? Math.round(b.q / b.n * 10) / 10 : null, avg_waves: b.waves != null ? Math.round(b.waves / b.n * 10) / 10 : null, avg_db_ms: b.dbms != null ? Math.round(b.dbms / b.n) : null, avg_who_are_you: b.emp != null ? Math.round(b.emp / b.n * 10) / 10 : null }))   // Block 355
+        .sort((a, z) => z.max_ms - a.max_ms).slice(0, 40);
+      // Block 355: every database trip since the deploy — fresh connection vs reused (the keep-alive proof), per table
+      const db355 = { transport: DB_FETCH355 ? "fetch (default)" : "https keep-alive (DB_TRANSPORT=keepalive)", since: trip355.since, trips: trip355.n, retried: trip355.retried, timeouts: trip355.timeouts,
+        fresh_connection: tripSummary355(trip355.fresh), reused_connection: tripSummary355(trip355.reused),
+        by_table: Object.entries(trip355.byTable).map(([table, b]) => ({ table, n: b.n, avg_ms: Math.round(b.total / b.n), max_ms: b.max })).sort((a, z) => z.n - a.n).slice(0, 30) };
+      return json(200, { ok: true, inflight: perf298.inflight, boards: sseClients.size, slow: perf298.slow.slice(-150), paths, db: db355 });
     }
 
     if (url.pathname === "/") return send(200, "text/html; charset=utf-8", shellPage);
@@ -19011,6 +19079,13 @@ self.addEventListener("notificationclick", (e) => {
     console.error(e);
     return json(500, { ok: false, error: "Server error" });
   }
+};
+// Block 355: every request runs inside its own counter (queries · waves · db ms); the Server-Timing header carries them.
+http.createServer((req, res) => {
+  const st = { q: 0, waves: 0, inflight: 0, ms: 0, emp: 0 };
+  const wh = res.writeHead;
+  res.writeHead = function (...a) { try { if (!this.headersSent) this.setHeader("Server-Timing", `db;dur=${Math.round(st.ms)};desc="${st.q} queries, ${st.waves} waves"`); } catch (eST) { /* never break a response */ } return wh.apply(this, a); };
+  return REQ355.run(st, () => handleRequest355(req, res));
 }).listen(PORT, () => console.log(`Shop Board v25 on :${PORT} (db ${DB_READY ? "connected" : "NOT configured"}, notifications ${NOTIFY_LIVE ? "LIVE" : "SANDBOXED (Q106)"})`));
 
 // ============================================================
