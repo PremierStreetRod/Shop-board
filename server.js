@@ -1697,7 +1697,46 @@ const netJs = `
     }
     function scan() { var all = document.querySelectorAll("input[type=file]"); for (var i = 0; i < all.length; i++) addCam(all[i]); }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scan); else scan();
+    document.addEventListener("quiet357", scan);   // Block 357: a quiet refresh gets the same camera buttons a full load does
   })();
+  // Block 357 (Daniel 11/4 14:20 "1, yes"): the QUIET REFRESH after a tap — the same page, fetched and drawn in place instead
+  // of location.reload(). It only ever produces the screen a full load would: the page's scripts must come back byte-for-byte
+  // what is already running (same server state baked in), the <head> and <body> attributes must match, and the count of
+  // top-level scripts must match — otherwise (or on ANY hiccup: offline, redirect, an error page, a different person signed
+  // in) it does the plain full reload, exactly as before. Typed-but-unsaved text in a box is carried over the way the browser
+  // restores it on a reload. No banner, no new words. Pages listen for "quiet357" to redo what their load-time code did.
+  async function quiet357() {
+    var my = quiet357.n = (quiet357.n || 0) + 1;   // two quick taps: only the LATEST fetch draws (an older answer never paints over a newer one)
+    try {
+      var r = await fetch(location.href, { credentials: "same-origin", cache: "no-store", headers: { "X-Quiet357": "1" } });
+      if (!r.ok || r.redirected || String(r.headers.get("content-type") || "").indexOf("text/html") < 0) throw 0;
+      var html = await r.text(); if (my !== quiet357.n) return false;
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var txt = function (d) { return Array.prototype.map.call(d.querySelectorAll("script"), function (x) { return (x.src || "") + "\\u0001" + x.textContent; }).join("\\u0002"); };
+      if (!doc.body || txt(doc) !== txt(document)) throw 0;
+      var headOf = function (d) { var h = d.head.cloneNode(true); Array.prototype.forEach.call(h.querySelectorAll("script"), function (x) { x.remove(); }); return h.innerHTML; };
+      if (headOf(doc) !== headOf(document)) throw 0;
+      var attrs = function (el) { return Array.prototype.map.call(el.attributes, function (a) { return a.name + "=" + a.value; }).sort().join("|"); };
+      if (attrs(doc.body) !== attrs(document.body)) throw 0;
+      var top = function (b) { return Array.prototype.filter.call(b.childNodes, function (n) { return n.nodeName === "SCRIPT"; }); };
+      var oldS = top(document.body); if (oldS.length !== top(doc.body).length) throw 0;
+      var typed = {}; Array.prototype.forEach.call(document.querySelectorAll("textarea[id],input[id]"), function (el) {
+        if (el.type === "file" || el.type === "hidden" || el.type === "checkbox" || el.type === "radio") return;
+        if (el.value !== el.defaultValue) typed[el.id] = el.value; });
+      var y = window.scrollY;
+      Array.prototype.slice.call(document.body.childNodes).forEach(function (n) { if (n.nodeName !== "SCRIPT") n.remove(); });
+      var k = 0, before = oldS[0] || null;
+      Array.prototype.slice.call(doc.body.childNodes).forEach(function (n) {
+        if (n.nodeName === "SCRIPT") { k++; before = oldS[k] || null; return; }
+        document.body.insertBefore(document.importNode(n, true), before);
+      });
+      if (doc.title !== document.title) document.title = doc.title;
+      Object.keys(typed).forEach(function (id) { var el = document.getElementById(id); if (el && el.value === el.defaultValue) el.value = typed[id]; });
+      try { document.dispatchEvent(new Event("quiet357")); } catch (e) {}
+      window.scrollTo(0, y);
+      return true;
+    } catch (e) { location.reload(); return false; }
+  }
   async function sbUpload(url, blob, ctype, onStatus) {
     for (let i = 0; i < 3; i++) {
       try {
@@ -1832,7 +1871,7 @@ const style = `<style>
   }
   var skip = ["/tv","/login","/","/change-pin","/inbox","/h"];
   if (skip.indexOf(location.pathname) !== -1) return;
-  document.addEventListener("DOMContentLoaded", function(){
+  var bell357 = function(){   // Block 357: named so a quiet refresh can redraw the bell + gear (+ the push ask) exactly as a full load does
     fetch("/api/inbox/unread").then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
       if (!d || !d.ok) return;
       var a = document.createElement("a");
@@ -1912,7 +1951,9 @@ const style = `<style>
         }
       } catch(e){}
     }).catch(function(){});
-  });
+  };
+  document.addEventListener("DOMContentLoaded", bell357);
+  document.addEventListener("quiet357", bell357);
 })();
 </script>`;
 
@@ -2637,7 +2678,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     const out = await sbPost("/api/task/state",
       { task_id: id, to: "not_started", claimed_at: new Date().toISOString() },
       (m) => { err.textContent = m; });
-    if (out.ok) return location.reload();
+    if (out.ok) return quiet357();   // Block 357: same screen, drawn in place
     err.textContent = out.error || "Something went wrong";
   }
   // Block 269: join or leave a running step as a HELPER — the safe move for
@@ -2647,7 +2688,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     const out = await sbPost("/api/task/helping",
       { task_id: id, on: on },
       (m) => { err.textContent = m; });
-    if (out.ok) return location.reload();
+    if (out.ok) return quiet357();   // Block 357
     err.textContent = out.error || "Something went wrong";
   }
   // Block 198 (owner, day 4): the one-tap lunch / end-of-day buttons up top.
@@ -2732,6 +2773,8 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   // Two-step check-off (Q45): not_started -> in_progress -> complete.
   // Tapping a completed task backs it up one step (undo, Q90).
   const next = { not_started: "in_progress", in_progress: "complete", complete: "in_progress" };
+  // Block 357: a full load stops the phone hand-off poll (its code box is gone) — the quiet refresh does the same
+  document.addEventListener("quiet357", () => { if (window.__hcPoll) { clearInterval(window.__hcPoll); window.__hcPoll = null; } });
   document.addEventListener("click", async (e) => {
     const b = e.target.closest(".task");
     if (b && !b.disabled) {
@@ -2740,7 +2783,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       const out = await sbPost("/api/task/state",
         { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString() },
         (m) => { err.textContent = m; });
-      if (out.ok) return location.reload();
+      if (out.ok) return quiet357();   // Block 357: the floor's most-tapped button — same screen, drawn in place
       // Block 159 (owner-rep F1): the soft cap's nudge. OK starts it anyway
       // (the server logs the override for the manager); Cancel leaves it be.
       if (out.nudge159) {
@@ -2748,7 +2791,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
           const out2 = await sbPost("/api/task/state",
             { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString(), confirm159: true },
             (m) => { err.textContent = m; });
-          if (out2.ok) return location.reload();
+          if (out2.ok) return quiet357();   // Block 357
           err.textContent = out2.error || "Something went wrong";
         } else { err.textContent = ""; }
         b.disabled = false;
@@ -7539,7 +7582,7 @@ const bodyCabPage326 = (emp, st, opts) => {
   function arm(btn, fn){ if (!btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; } btn.dataset.armed = ""; fn(); }
   async function bodyPost(url, payload, btn){ var m = document.getElementById("bmsg326"); if (btn) btn.disabled = true; m.textContent = "";
     try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
-      var j = await r.json(); if (j && j.ok) { location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
+      var j = await r.json(); if (j && j.ok) { if (url === "/api/body/step") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
     catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
   // Block 326: photos ride the shared upload path (Block 317: bytes read first, empty picks refused, retries, the thumbnail)
   async function bodyPhoto326(bid, kind, input, msgId){ var m = document.getElementById(msgId); var files = Array.from(input.files || []); if (!files.length) return; var okN = 0;
@@ -7724,6 +7767,8 @@ async function onStep338(empId, last, me) {
 // only if they are actually clocked in on Body right now, and only for a non-Body-Shop helper (a Body Shop person stays on
 // Body time). Shared by /api/body/step and the three routes that end a cab's Body work (Done in primer, Move to Build, fix job).
 async function settleBodyClock345(emp, me2, when, why) {
+  // Block 357: its three reads (no write between them) go out together
+  prefetch356([`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`, (me2 && me2.department === "Body Shop") ? null : `clock_event?select=line_id&voided=is.false&employee_id=eq.${emp}&kind=eq.clock_in&line_id=neq.${BODY_LINE_ID}&order=claimed_at.desc&limit=1`]);
   const left = await db(`body_step_open?select=id&employee_id=eq.${emp}&closed_at=is.null&limit=1`);
   if (left.length) return null;
   const [lp] = await db(`clock_event?select=kind,line_id,claimed_at,fix_build_id&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`);
@@ -8024,7 +8069,7 @@ const whCabPage327 = (emp, st, opts) => {
   async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
     if (!(await flush352(payload && payload.build_id))) { if (btn) btn.disabled = false; return; }   /* Block 352 (Fable audit): unsaved ticks are SAVED first, never lost or prompted away */
     try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
-      var j = await r.json(); if (j && j.ok) { location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
+      var j = await r.json(); if (j && j.ok) { if (url === "/api/wh/step" || url === "/api/wh/check") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
     catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
   function whCheck327(bid, btn, on){ whPost("/api/wh/check", { build_id: bid, key: btn.getAttribute("data-key"), on: on }, btn); }
   /* Block 352: ticks live on the phone until ONE Save sends them all; leaving with unsaved ticks asks first */
@@ -8035,7 +8080,7 @@ const whCabPage327 = (emp, st, opts) => {
   async function save352(bid, btn){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length) return;
     var t = document.getElementById("save352n"); btn.disabled = true; btn.textContent = "Saving…";
     try { var r = await fetch("/api/wh/check-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, keys: keys, claimed_at: new Date().toISOString() }) });
-      var j = await r.json(); if (j && j.ok) { dirty352 = false; location.reload(); return; }
+      var j = await r.json(); if (j && j.ok) { dirty352 = false; quiet357(); return; }   /* Block 357: same screen, drawn in place */
       btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = (j && j.error) || "Didn't save — your ticks are still here, try again"; }
     catch (e) { btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = "Network hiccup — your ticks are still here, try again"; } }
   async function flush352(bid){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length || !bid) return true;
@@ -8045,6 +8090,7 @@ const whCabPage327 = (emp, st, opts) => {
     catch (e) { if (t) { t.style.color = "#ff8fa3"; t.textContent = "Network hiccup — your ticks are still here"; } return false; } }
   window.addEventListener("beforeunload", function(e){ if (dirty352) { e.preventDefault(); e.returnValue = ""; } });
   window.addEventListener("pageshow", function(){ tick352(); });
+  document.addEventListener("quiet357", function(){ tick352(); });   /* Block 357: what a full load's pageshow does */
   async function whPhoto327(bid, input, msgId){ var m = document.getElementById(msgId); var files = Array.from(input.files || []); if (!files.length) return; var okN = 0;
     for (var i = 0; i < files.length; i++) { m.textContent = "Sending photo " + (i + 1) + " of " + files.length + "…";
       try { var blob; try { blob = await photoPrep317(files[i], bid, "crate"); } catch (e317) { m.textContent = e317.message; input.value = ""; return; }
@@ -9569,7 +9615,7 @@ function linesManagerPage(d) {
     // Block 122 (owner-rep, warn-and-allow): disabling a line that still has a
     // cab on it is ALLOWED (a temporary line-down; re-enabling restores it),
     // but never silent — confirm first, and point at the lighter daily tool.
-    if(to==="false" && occ){ if(!confirm("This line still has ORDER "+occ+" on it. Disabling hides and pauses that cab until you re-enable the line — it isn't lost, and it comes right back when you turn the line back on.\n\nFor a quick pause instead, use “Down for today” in the Manager console.\n\nDisable this line anyway?")) return; }
+    if(to==="false" && occ){ if(!confirm("This line still has ORDER "+occ+" on it. Disabling hides and pauses that cab until you re-enable the line — it isn't lost, and it comes right back when you turn the line back on.\\n\\nFor a quick pause instead, use “Down for today” in the Manager console.\\n\\nDisable this line anyway?")) return; }   // Block 357 (Fable audit): these line breaks came out as REAL newlines in the page, so the whole Lines script failed to parse — broken on live since the message was added
     post("/api/admin/line",{action:"toggle",id:id,enabled:to},b);
   }
   function routeFam(i,b){ var L=ckl("rt-"+i); if(!L.length)return alert("Pick at least one line"); post("/api/admin/catalog",{action:"route",family:FAM[i],lines:L},b); }
@@ -12151,17 +12197,19 @@ async function freezeAndStart(b, empId, startedAt) {
   // where they land in a cab build", never at the end of the day).
   const anchorOf282 = {}; for (const st of steps) anchorOf282[st.id] = { day_no: st.day_no, sort: Number(st.sort_order) * 10 };
   const anchorUsed282 = {};
-  for (const st of steps)   // frozen copy (Q97) — sequential inserts keep it simple at this scale
-    await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: st.display_no,
+  // frozen copy (Q97). Block 357 (Daniel 11/4 14:20 "2, yes"): ONE batched insert — the same rows, same values, same order,
+  // and all-or-nothing (a hiccup can no longer leave half a checklist). PostgREST bulk insert = one statement.
+  const rows357 = steps.map((st) => ({ build_id: b.id, display_no: st.display_no,
       name: st.name, detail: st.detail ?? null, day_no: st.day_no, day_end: st.day_end ?? null, man_hours: st.man_hours, is_background: st.is_background,
       source: "template", state: "not_started", sort_order: Number(st.sort_order) * 10,
-      wh_callout: st.wh_callout ?? null }) });   // Block 260: the warehouse call-out freezes with the step
+      wh_callout: st.wh_callout ?? null }));   // Block 260: the warehouse call-out freezes with the step
+  if (rows357.length) await db("task", { method: "POST", body: JSON.stringify(rows357) });
   // Block 94b: freeze the cab's UPGRADE OPTIONS in with the steps. Structured
   // options match the per-family library by exact normalized text and get real
   // hours on their day. Unknown options + ALL PSR-CUSTOM add-ons become FLAGS
   // (a human types the hours — never guessed); admins get notified (Q106-
   // sandboxed). Wrapped in try/catch: an option hiccup never blocks a start.
-  let optCount94 = 0, flagCount94 = 0;
+  let optCount94 = 0, flagCount94 = 0; const up357 = [], flag357 = [];
   try {
     const coyOrd94 = b.coyote_root || String(b.order_number || "").split(".")[0];
     if (coyOrd94) {
@@ -12221,22 +12269,22 @@ async function freezeAndStart(b, empId, startedAt) {
               // two spellings of the same job build one actuals history. The
               // order's own wording still rides the signature (sig94, above)
               // and the sign-off checklist (optionList255 reads the order).
-              await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
+              up357.push({ build_id: b.id, display_no: "U" + optCount94,
                 name: "UPGRADE — " + hit.match_text, day_no: place282.day_no, man_hours: hit.man_hours, is_background: false,
-                source: "option", state: "not_started", sort_order: place282.sort_order }) });
+                source: "option", state: "not_started", sort_order: place282.sort_order });   // Block 357: saved together below
             } else if (hit.show_on_floor) {
               // Block 282 (Daniel 9/28): a 0-hour option flagged "show on the
               // floor" becomes a BACKGROUND reminder line behind its anchor —
               // visible on the step list, takes no crew hours, never sampled,
               // never earns, never counted toward the open-steps cap.
               optCount94++;
-              await db("task", { method: "POST", body: JSON.stringify({ build_id: b.id, display_no: "U" + optCount94,
+              up357.push({ build_id: b.id, display_no: "U" + optCount94,
                 name: "UPGRADE — " + hit.match_text, day_no: place282.day_no, man_hours: 0, is_background: true,
-                source: "option", state: "not_started", sort_order: place282.sort_order }) });
+                source: "option", state: "not_started", sort_order: place282.sort_order });   // Block 357
             }
           } else {
             flagCount94++;
-            await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "option", flag_text: full }) });
+            flag357.push({ build_id: b.id, kind: "option", flag_text: full });   // Block 357
           }
         }
         for (const a of det94.addons) {
@@ -12248,8 +12296,11 @@ async function freezeAndStart(b, empId, startedAt) {
           const num104 = String(a.num || "").toUpperCase();
           if (!(num104 === "LABOR" || num104.startsWith("LABOR") || num104 === "PSR-CUSTOM" || num104.startsWith("PSR-CUSTOM"))) continue;
           flagCount94++;
-          await db("option_flag", { method: "POST", body: JSON.stringify({ build_id: b.id, kind: "custom", flag_text: a.desc }) });
+          flag357.push({ build_id: b.id, kind: "custom", flag_text: a.desc });   // Block 357
         }
+        // Block 357: the upgrade steps, then the flags — each one batched insert (same rows, same order as the old one-by-one saves)
+        if (up357.length) await db("task", { method: "POST", body: JSON.stringify(up357) });
+        if (flag357.length) await db("option_flag", { method: "POST", body: JSON.stringify(flag357) });
         let sg94 = 0; const ss94 = sig94.sort().join("|"); for (let i = 0; i < ss94.length; i++) sg94 = (sg94 * 31 + ss94.charCodeAt(i)) >>> 0;
         await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ options_sig: String(sg94) }) });
         if (flagCount94) {
@@ -13349,6 +13400,8 @@ const handleRequest355 = async (req, res) => {
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const { task_id, to, claimed_at, confirm159 } = await body(req);
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
+      // Block 357: a start's open-steps count (read later, before any write) rides in the same round trip
+      if (to === "in_progress") prefetch356([`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`]);
       // Block 212 (v201 SPEED): the floor's most-tapped endpoint — the two
       // independent lookups now share one round trip.
       const [tRows212, lastCkRows212] = await Promise.all([
@@ -13387,10 +13440,12 @@ const handleRequest355 = async (req, res) => {
       // Starting tasks can NOT inflate pace (labor-based), so this guards
       // data quality. Background steps neither count nor get nudged.
       if (to === "in_progress" && t.state === "not_started" && !t.is_background) {
+        prefetch356([`build?select=line_id&id=eq.${t.build_id}`]);   // Block 357
         const open159 = await db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`);
         const real159 = (open159 || []).filter((x) => !x.is_background);
         let n159 = 0;
         if (real159.length) {
+          prefetch356([`build?select=id,line_id&id=in.(${[...new Set(real159.map((x) => x.build_id))].join(",")})`]);   // Block 357: same string as b159 below
           const [tb159] = await db(`build?select=line_id&id=eq.${t.build_id}`);
           const bIds159 = [...new Set(real159.map((x) => x.build_id))];
           const b159 = await db(`build?select=id,line_id&id=in.(${bIds159.join(",")})`);
@@ -13931,6 +13986,12 @@ const handleRequest355 = async (req, res) => {
       const build_id = String(p.build_id || ""), task_id = String(p.task_id || ""), action = String(p.action || "");
       if (!isUuid(build_id) || !isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
       if (!["start", "pause", "done", "reopen"].includes(action)) return json(400, { ok: false, error: "Which tap?" });
+      // Block 357: the reads this tap is certain to make go out together (prefetch356 — same reads, same order of use, no write moved)
+      prefetch356(action === "pause"
+        ? [`build?select=id,order_number,cab_number,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`, `body_step_open?select=id,build_id&employee_id=eq.${eS}&body_task_id=eq.${task_id}&build_id=eq.${build_id}&closed_at=is.null&limit=1`, `clock_event?select=claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`]
+        : [`build?select=id,order_number,cab_number,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`, `body_task?select=id,round,step_no,name,state,started_by,started_at,completed_by,completed_at&build_id=eq.${build_id}&order=round.desc,step_no.asc`, `clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`, `body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${eS}&closed_at=is.null&order=opened_at.asc`,
+           action === "start" ? `body_step_open?select=id&employee_id=eq.${eS}&body_task_id=eq.${task_id}&limit=1` : null,
+           action === "done" ? `body_step_open?select=id,employee_id&body_task_id=eq.${task_id}&closed_at=is.null&employee_id=neq.${eS}` : null]);
       const [bS] = await db(`build?select=id,order_number,cab_number,state,body_done_at,body_moved_to_build_at&id=eq.${build_id}`);
       if (!bS) return json(404, { ok: false, error: "Cab not found" });
       if (action === "pause") {   // Block 345 (Opus review fix 1): a step I still hold can always be paused — even if the cab moved on (a fix, Build, a new round)
@@ -13938,6 +13999,7 @@ const handleRequest355 = async (req, res) => {
         if (own) { const [lpP] = await db(`clock_event?select=claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`).catch(() => []);
           const wP0 = new Date(p.claimed_at || Date.now()); const wP = new Date(Math.max(isNaN(wP0.getTime()) ? Date.now() : wP0.getTime(), lpP ? new Date(lpP.claimed_at).getTime() + 1000 : 0));
           await db(`body_step_open?id=eq.${own.id}`, { method: "PATCH", body: JSON.stringify({ closed_at: wP.toISOString(), closed_reason: "paused" }) });
+          prefetch356([`body_task?select=step_no&id=eq.${task_id}`]);   // Block 357: read after the save, alongside the clock check (a clock write in between wipes it → read fresh)
           const backE = await settleBodyClock345(eS, meS, wP, "Body: paused");
           const [tP] = await db(`body_task?select=step_no&id=eq.${task_id}`).catch(() => []);
           logEvent("body.step_paused", eS, { build_id, order_number: bS.order_number, task_id, step_no: tP ? tP.step_no : null, back_to: backE, by_hand: true });
@@ -14080,6 +14142,12 @@ const handleRequest355 = async (req, res) => {
     // Same door as Body (anyone signed in on the shop Wi-Fi); the step moves the clock onto the Warehouse line stamped
     // cab + step (one open stint per person = the one-in-hand rule across Body AND crating); Shipped / Picked up and
     // the send-back are the warehouse's (Eric) + admins.
+    // Block 357: the crating check's certain reads (cab, last punch, the step, the ticks) go out in one round trip
+    const whCheckPre357 = (build_id, emp) => { if (isUuid(build_id) && isUuid(emp)) prefetch356([
+      `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`,
+      `clock_event?select=kind&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`,
+      `wh_task?select=id,state,round&build_id=eq.${build_id}&order=round.desc`,
+      `option_check?select=gate,item_text,checked_by,checked_at,voided&build_id=eq.${build_id}&order=checked_at.asc`]); };
     const whCab327 = async (build_id) => {
       if (!isUuid(build_id)) return [null, json(400, { ok: false, error: "That cab reference isn't valid" })];
       const [bW] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`);
@@ -14092,6 +14160,7 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/api/wh/check" && req.method === "POST") {
       const [eC, failC, meC] = await bodyAuth326(); if (failC) return failC;
       const p = await body(req); const build_id = String(p.build_id || ""); const key = String(p.key || "").slice(0, 300); const on = p.on !== false && p.on !== "false";
+      whCheckPre357(build_id, eC);
       const [bC, bad] = await whCab327(build_id); if (bad) return bad;
       if (!key) return json(400, { ok: false, error: "Which item?" });
       const [lastC] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${eC}&order=claimed_at.desc&limit=1`);
@@ -14129,6 +14198,7 @@ const handleRequest355 = async (req, res) => {
       if (!keysIn.length) return json(400, { ok: false, error: "Nothing ticked" });
       if (keysIn.length > 200 || keysIn.some((k) => typeof k !== "string" || !k || k.length > 300)) return json(400, { ok: false, error: "That list isn't valid — refresh" });
       const keys = [...new Set(keysIn)];
+      whCheckPre357(build_id, eK);
       const [bK, badK] = await whCab327(build_id); if (badK) return badK;
       const [lastK] = await db(`clock_event?select=kind&voided=is.false&employee_id=eq.${eK}&order=claimed_at.desc&limit=1`);
       if (!lastK || lastK.kind !== "clock_in") return json(400, { ok: false, error: "Clock in first" });
@@ -14155,6 +14225,11 @@ const handleRequest355 = async (req, res) => {
       const build_id = String(p.build_id || ""), task_id = String(p.task_id || ""), action = String(p.action || "");
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
       if (!["start", "pause", "done", "reopen"].includes(action)) return json(400, { ok: false, error: "Which tap?" });
+      if (isUuid(build_id)) prefetch356([   // Block 357: the step tap's certain reads in one round trip
+        `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`,
+        `wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed,round,created_at&id=eq.${task_id}&build_id=eq.${build_id}`,
+        `wh_task?select=id&build_id=eq.${build_id}&order=round.desc,created_at.desc&limit=1`,
+        `clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`]);
       const [bS, badS] = await whCab327(build_id); if (badS) return badS;
       const [t] = await db(`wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed,round,created_at&id=eq.${task_id}&build_id=eq.${build_id}`);
       if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
