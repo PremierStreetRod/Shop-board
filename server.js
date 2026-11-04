@@ -840,6 +840,117 @@ async function planHoursPerDay314() {
   PLAN_HPD_314.loadedAt = Date.now(); return PLAN_HPD_314.value;
 }
 const daysFor314 = (hours, people, hpd) => Math.max(1, Math.ceil(Number(hours) / (Math.max(1, Number(people) || 1) * (Number(hpd) || 8)) - 1e-9));
+// ============================================================================
+// Block 353 — LEAD TIMES ON THE SHOP BOARD (Daniel 11/3 15:45 – 11/4 08:11; Plan 78).
+// Each UPCOMING cab gets an Expected Line Date (the day it should START on its line) and each line gets
+// "EXPECTED LEAD TIME TO HIT THE LINE: lo–hi weeks" = a new order placed today starts when the line's
+// queue is worked off (Daniel 11/4 08:07: no Body / crating time — that waits for real data).
+//   Hours ahead  = the cab(s) on the line: unfinished task hours (+ rework hours) · each upcoming cab, in
+//                  queue order: its family's standard hours + its upgrade hours, read with the SAME rules as
+//                  the start (parseCoyoteDetail row pick, kitSplitRows353, optHit353, the stock rule).
+//                  Options with no hours yet count 0 (counted in `unk`).
+//   By hours     = people planned × plan hours/day (8) per OPEN shop day (shop_calendar: holidays skip).
+//   Recent pace  = the same × the line's real output over the last 56 days (standard hours of cabs that left
+//                  production ÷ open days ÷ plan), clamped 60–100%; no finished cabs → no pace shown.
+//   Weeks        = calendar days from today ÷ 7; Daniel 11/3 15:58: a fraction ≤ .3 rounds DOWN, past .3 UP.
+//                  lo = by-hours weeks, hi = recent-pace weeks; same week → lo–lo+1 (Daniel 11/4 08:07).
+// Read-only. Computed in the background, at most every 5 minutes; /api/board-state only reads the cache,
+// so the board (and the TV's poll) pays NO extra database trips.
+const LEAD353 = { at: 0, data: null, pending: null, pendingAt: 0 };
+const LEAD353_TTL = 5 * 60000, LEAD353_STALE = 60 * 60000, LEAD353_HUNG = 2 * 60000, PACE353_DAYS = 56, PACE353_MIN = 0.6, PACE353_MAX = 1.0;   // Fable audit: a hung compute is abandoned after 2 min; data older than an hour is not shown
+const round353 = (w) => { const f = Math.floor(w + 1e-9); return (w - f) <= 0.3 + 1e-9 ? f : Math.ceil(w - 1e-9); };
+const leadWindow353 = (wHours, wPace) => { const lo = round353(wHours); let hi = wPace == null ? lo + 1 : round353(wPace); if (hi <= lo) hi = lo + 1; return { lo, hi }; };
+const addDays353 = (ymd, n) => new Date(Date.parse(ymd + "T12:00:00Z") + n * 864e5).toISOString().slice(0, 10);
+// the open shop days from `today` on (today counts when it is open)
+const openDays353 = (today, isOpen, n) => { const out = []; for (let i = 0; out.length < n && i < n * 3; i++) { const d = addDays353(today, i); if (isOpen(d)) out.push(d); } return out; };
+// the open day on which `hours` of work at `cap` hours/day are used up (0 hours → the first open day)
+const dayAfter353 = (days, hours, cap) => { if (!(cap > 0)) return null; const i = Math.floor(Math.max(0, Number(hours) || 0) / cap + 1e-9); return i < days.length ? days[i] : null; };
+const weeksTo353 = (today, ymd) => (Date.parse(ymd + "T12:00:00Z") - Date.parse(today + "T12:00:00Z")) / (7 * 864e5);
+async function computeLead353() {
+  const nowMs = Date.now(), today = phxDate(nowMs);
+  const isOpen = openDayFn316(await calendarOverrides());
+  const hpd = await planHoursPerDay314();
+  const winStart = addDays353(today, -PACE353_DAYS);
+  const [lines, builds, prods, lib, doneB] = await Promise.all([
+    db(`line?select=id,people_planned&enabled=is.true&order=id`),
+    db(`build?select=id,order_number,coyote_root,coyote_row_key,coyote_row_idx,part_number,line_id,state,queue_pos,created_at,rework_hours&state=in.(upcoming,active,rework)&line_id=not.is.null`),
+    db(`product?select=part_number,family,template_id`),
+    dbAll252(`option_item?select=id,family,match_text,man_hours,alias_of,kit_only&retired=is.false&order=id`),
+    db(`build?select=id,line_id&left_production_at=gte.${winStart}T07:00:00Z&left_production_at=lt.${today}T07:00:00Z&started_at=not.is.null&state=neq.cancelled&fix_kind=is.null`),
+  ]);
+  const prodOf = {}; for (const p of prods) prodOf[String(p.part_number).toUpperCase()] = p;
+  const allow = new Set(prods.map((p) => String(p.part_number).toUpperCase()));
+  const libOf = {}; for (const o of lib) (libOf[o.family] = libOf[o.family] || []).push(o);
+  const onLine = builds.filter((b) => b.state === "active" || b.state === "rework");
+  const ups = builds.filter((b) => b.state === "upcoming");
+  const taskIds = [...onLine, ...doneB].map((b) => b.id);
+  const tplIds = [...new Set(ups.map((b) => (prodOf[String(b.part_number || "").toUpperCase()] || {}).template_id).filter((x) => x != null))];
+  const roots = [...new Set(ups.map((b) => b.coyote_root || String(b.order_number || "").split(".")[0]).filter(Boolean))];
+  const [tasks, steps, pays] = await Promise.all([
+    taskIds.length ? dbAll252(`task?select=build_id,man_hours,state,is_background&build_id=in.(${taskIds.join(",")})&order=id`) : [],
+    tplIds.length ? dbAll252(`step_template?select=template_id,man_hours,is_background&template_id=in.(${tplIds.join(",")})&retired=is.false&order=id`) : [],
+    Promise.all(roots.map((r) => db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(r)}&order=received_at.desc&limit=1`).then((x) => [r, x && x[0] ? x[0].payload : null]).catch(() => [r, null]))),
+  ]);
+  const payOf = Object.fromEntries(pays);
+  const stdOf = {}; for (const st of steps) if (!st.is_background) stdOf[st.template_id] = (stdOf[st.template_id] || 0) + (Number(st.man_hours) || 0);
+  const left = {}, total = {}; for (const t of tasks) { if (t.is_background) continue; const h = Number(t.man_hours) || 0; total[t.build_id] = (total[t.build_id] || 0) + h; if (t.state !== "complete") left[t.build_id] = (left[t.build_id] || 0) + h; }
+  // one upcoming cab's hours — the start's own reading of its Coyote row
+  const cabHours = (b) => {
+    const pr = prodOf[String(b.part_number || "").toUpperCase()] || {};
+    const std = Number(stdOf[pr.template_id]) || 0; let up = 0, unk = 0;
+    const pay = payOf[b.coyote_root || String(b.order_number || "").split(".")[0]];
+    const det = pay ? parseCoyoteDetail(pay, b.part_number, allow, b.coyote_row_key, b.coyote_row_idx) : null;
+    if (det && pr.family) {
+      const rows = libOf[pr.family] || []; const byText = {}, byId = {};
+      for (const o of rows) { byText[normOpt322(o.match_text)] = o; byId[o.id] = o; }
+      const fulls = det.features.map((f) => (f.label ? f.label + ": " : "") + f.value);
+      const kitSet = new Set(kitSplitRows353(rows, fulls).kit.map(normOpt322));
+      det.features.forEach((f, i) => {
+        if (kitSet.has(normOpt322(fulls[i]))) return;
+        const hit = optHit353(byText, byId, fulls[i], f.value);
+        if (f.stock && !(hit && Number(hit.man_hours) > 0)) return;
+        if (hit) up += Number(hit.man_hours) > 0 ? Number(hit.man_hours) : 0; else unk++;
+      });
+      for (const a of det.addons) { const n = String(a.num || "").toUpperCase(); if (n.startsWith("LABOR") || n.startsWith("PSR-CUSTOM")) unk++; }
+    }
+    return { hours: std + up, std, up, unk };
+  };
+  const doneHrs = {}; for (const b of doneB) doneHrs[b.line_id] = (doneHrs[b.line_id] || 0) + (Number(total[b.id]) || 0);
+  let winOpen = 0; for (let d = winStart; d < today; d = addDays353(d, 1)) if (isOpen(d)) winOpen++;
+  const days = openDays353(today, isOpen, 800);
+  const out = { at: nowMs, today, hpd, lines: {} };
+  for (const l of lines) {
+    const cap = Math.max(1, Number(l.people_planned) || 1) * hpd;
+    const rawPace = doneHrs[l.id] && winOpen ? doneHrs[l.id] / (winOpen * cap) : null;
+    const pace = rawPace == null ? null : Math.min(PACE353_MAX, Math.max(PACE353_MIN, rawPace));
+    let ahead = 0;
+    for (const b of onLine) if (b.line_id === l.id) ahead += (Number(left[b.id]) || 0) + (b.state === "rework" ? Number(b.rework_hours) || 0 : 0);
+    const q = ups.filter((b) => b.line_id === l.id).sort((x, y) => ((x.queue_pos == null ? 1e9 : Number(x.queue_pos)) - (y.queue_pos == null ? 1e9 : Number(y.queue_pos))) || (x.created_at < y.created_at ? -1 : x.created_at > y.created_at ? 1 : 0));
+    const cabs = {};
+    for (const b of q) {
+      let h; try { h = cabHours(b); } catch (eC) { const pr = prodOf[String(b.part_number || "").toUpperCase()] || {}; h = { hours: Number(stdOf[pr.template_id]) || 0, std: Number(stdOf[pr.template_id]) || 0, up: 0, unk: 0, err: true }; }   // Fable audit: one odd Coyote payload costs that cab its upgrades, never the whole board its dates
+      cabs[b.id] = { date: dayAfter353(days, ahead, cap), pace_date: pace == null ? null : dayAfter353(days, ahead, cap * pace), hours: Math.round(h.hours * 10) / 10, unk: h.unk };
+      ahead += h.hours;
+    }
+    const dH = dayAfter353(days, ahead, cap), dP = pace == null ? null : dayAfter353(days, ahead, cap * pace);
+    const wH = dH ? weeksTo353(today, dH) : null, wP = dP ? weeksTo353(today, dP) : null;
+    const win = wH == null ? null : leadWindow353(wH, wP);
+    out.lines[l.id] = { cabs, lead: win ? { lo: win.lo, hi: win.hi, date: dH, pace_date: dP, weeks: Math.round(wH * 10) / 10, pace_weeks: wP == null ? null : Math.round(wP * 10) / 10, pace: rawPace == null ? null : Math.round(rawPace * 100) / 100, hours: Math.round(ahead * 10) / 10 } : null };
+  }
+  return out;
+}
+// the cached answer (null until the first computation lands); a stale cache starts a refresh in the background
+function lead353() {
+  const now = Date.now();
+  if (LEAD353.pending && now - LEAD353.pendingAt > LEAD353_HUNG) LEAD353.pending = null;   // db() has no timeout — never let one stuck read freeze the estimate
+  if (DB_READY && !LEAD353.pending && now - LEAD353.at > LEAD353_TTL) {
+    const run = computeLead353().then((d) => { if (LEAD353.pending === run) { LEAD353.data = d; LEAD353.at = Date.now(); } })
+      .catch((e) => { if (LEAD353.pending === run) LEAD353.at = Date.now() - LEAD353_TTL + 60000; console.error("lead353:", e && e.message); })   // retry in a minute
+      .finally(() => { if (LEAD353.pending === run) LEAD353.pending = null; });
+    LEAD353.pending = run; LEAD353.pendingAt = now;
+  }
+  return LEAD353.data && now - LEAD353.data.at <= LEAD353_STALE ? LEAD353.data : null;   // stale beyond an hour = no dates, never wrong dates
+}
 // Block 332 (Daniel 10/27 17:36: "Line Idle for: TIME … the complete time that line has had no one
 // working a step since it started on the line … make sure it calculates for lunch time so it doesnt
 // track that, one hour per day"): the one idle number the TV tile and the reports share.
@@ -3986,7 +4097,27 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
       // Block 95: the left-hand UPCOMING rail — every queued cab, grouped by
       // line in White-Board order. TV shows the basics only; staff tap through.
       const rl = document.getElementById("rail");
-      if (rl) {
+      // Block 353 (Daniel 11/3 15:45 – 11/4 08:11): the STAFF board's Upcoming — the whole card is one tap (opens
+      // the order), the right side reads "Expected Line Date" (by hours, with the recent-pace date in parentheses),
+      // and every line ends with its EXPECTED LEAD TIME TO HIT THE LINE card. The TV keeps the old rail (below).
+      const e353 = (x) => String(x == null ? "" : x).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      const mdy353 = (d) => typeof d === "string" && d.length === 10 && d[4] === "-" && d[7] === "-" ? d.slice(5, 7) + "/" + d.slice(8, 10) + "/" + d.slice(0, 4) : "";
+      if (rl && !TVMODE) {
+        const grpS = s.lines.filter(l => (l.upcoming && l.upcoming.length) || l.lead);
+        rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
+          (grpS.length ? grpS.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:.95rem;margin-bottom:4px;color:' + LTHD[lt(l.id)] + ';opacity:.85">' + e353(l.name) + '</div>' +
+            ((l.upcoming || []).length ? l.upcoming.map(u => '<a class="up353" href="/order/' + encodeURIComponent(u.order) + '" style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;color:inherit;text-decoration:none;background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px">' +
+              '<div style="min-width:0"><b>ORDER ' + e353(u.order) + '</b><div style="opacity:.8;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e353([u.customer, u.dest].filter(Boolean).join(" · ")) + '</div></div>' +
+              (u.eld ? '<div style="text-align:right;flex:none"><div style="font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;opacity:.62">Expected Line Date</div><div style="font-weight:700;font-size:1.02rem;font-variant-numeric:tabular-nums">' + mdy353(u.eld) + '</div>' +
+                (u.eldp ? '<div style="font-size:.74rem;opacity:.62;font-variant-numeric:tabular-nums">(at recent pace: ' + mdy353(u.eldp) + ')</div>' : '') + '</div>' : '') + '</a>').join("")
+              : '<div style="opacity:.45;margin-bottom:6px">Nothing in the queue.</div>') +
+            (l.lead ? '<div class="lead353" style="margin-top:8px;border:1px solid ' + LTHD[lt(l.id)] + ';border-left-width:6px;border-radius:12px;padding:10px 14px;background:#161618">' +
+              '<div style="font-size:.74rem;letter-spacing:.06em;font-weight:800;opacity:.62">EXPECTED LEAD TIME TO HIT THE LINE</div>' +
+              '<div style="font-size:1.5rem;font-weight:800;margin-top:2px">' + l.lead.lo + '&ndash;' + l.lead.hi + ' weeks</div>' +
+              '<div style="font-size:.78rem;opacity:.62;margin-top:2px;font-variant-numeric:tabular-nums">A new order placed today &middot; by hours ' + mdy353(l.lead.date) + (l.lead.pace_date ? ' (at recent pace: ' + mdy353(l.lead.pace_date) + ')' : '') + '</div></div>' : '') +
+            '</div>').join("")
+          : '<div style="opacity:.45">Nothing in the queue.</div>');
+      } else if (rl) {
         const grp = s.lines.filter(l => l.upcoming && l.upcoming.length);
         rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
           (grp.length ? grp.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:.95rem;margin-bottom:4px;color:' + LTHD[lt(l.id)] + ';opacity:.85">' + l.name + '</div>' +
@@ -4535,12 +4666,23 @@ async function optionList255(b, allow255 = null) {
 // a mixed label hides only that value — a stray flag can never hide a cab dropdown. The library
 // itself was rebuilt from the 10/22 crawl (migration 0072, Playbooks/69_Item3_Kit_Options_Audit.md).
 const normOpt322 = (s) => String(s || "").trim().toLowerCase().replace(/\s+:/g, ":").replace(/\s+/g, " ");
+// Block 353: the library lookup the start uses (Block 94b exact normalized text, full "Label: value" first then the value;
+// Block 261 one-hop alias). byText = { normOpt322(match_text): row }, byId = { id: row }. Pure — no DB.
+function optHit353(byText, byId, full, value) {
+  let hit = byText[normOpt322(full)] || byText[normOpt322(value)];
+  if (hit && hit.alias_of) { const can = byId[hit.alias_of]; hit = (can && !can.alias_of) ? can : null; }
+  return hit || null;
+}
 async function kitSplit322(b, lines) {
   if (!lines || !lines.length) return { keep: lines || [], kit: [] };
   let fam = "";
   try { const [pr] = await db(`product?select=family&part_number=eq.${encodeURIComponent(String(b.part_number || ""))}`); fam = pr && pr.family ? pr.family : ""; } catch (e) { fam = ""; }
   if (!fam) return { keep: lines, kit: [] };
   const rows = await db(`option_item?select=match_text,kit_only&family=eq.${encodeURIComponent(fam)}&retired=is.false`);
+  return kitSplitRows353(rows, lines);
+}
+// Block 353: the kit-split RULE as a pure function (same code the start uses) so the lead-time estimate reads a cab exactly like the start will
+function kitSplitRows353(rows, lines) {
   const byLabel = {}; const kitText = new Set();
   for (const r of rows) { const n = normOpt322(r.match_text); const lab = n.includes(":") ? n.split(":")[0] : null; if (lab) { byLabel[lab] = byLabel[lab] || { kit: 0, cab: 0 }; byLabel[lab][r.kit_only ? "kit" : "cab"]++; } if (r.kit_only) kitText.add(n); }
   const keep = [], kit = [];
@@ -11840,7 +11982,7 @@ async function freezeAndStart(b, empId, startedAt) {
         for (const f of det94.features) {
           const full = (f.label ? f.label + ": " : "") + f.value;
           if (kitSet322.has(norm94(full))) { sig94.push(full); continue; }
-          let hit = byText94[norm94(full)] || byText94[norm94(f.value)];
+          const hit = optHit353(byText94, byId261, full, f.value);   // Block 353: the lookup is shared with the lead-time estimate (same rule, one place)
           // Block 261 (Daniel: "combine the duplicates so ONLY one shows up,
           // but the wording variations still populate through"): an ALIAS row
           // is a spelling variant pointing at its canonical wording. Resolve
@@ -11848,7 +11990,6 @@ async function freezeAndStart(b, empId, startedAt) {
           // spelling lands as the same task. A dangling alias (canonical
           // retired or missing) resolves to NOTHING and falls through to the
           // flag path below — never-guess holds.
-          if (hit && hit.alias_of) { const can261 = byId261[hit.alias_of]; hit = (can261 && !can261.alias_of) ? can261 : null; }
           // Block 113 (owner-rep): a PRICED library match OUTRANKS the
           // stock-prefix heuristic — "Stock Holes w/ Radius Front Edge"
           // starts with the word Stock but carries real radius-edge labor,
@@ -14621,7 +14762,7 @@ http.createServer(async (req, res) => {
       const payload298 = { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]), prep: deckOf[l.id].prep_state || "none" } : null;   // Block 301: panels ready / in progress / not yet
-        const upcoming95 = (upOf[l.id] || []).map((u) => ({ order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));
+        const upcoming95 = (upOf[l.id] || []).map((u) => ({ id: u.id, order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));   // Block 353: +id (the lead-time cache is keyed by build)
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
@@ -14731,6 +14872,11 @@ http.createServer(async (req, res) => {
           const stB = (await bodyStatus326(cabsB)).filter((x) => x.total > 0);
           payload298.body = { cabs: stB.map((x) => { const pct = x.allowed ? Math.round(100 * x.hours / x.allowed) : 0; return { order: x.b.order_number, cab: x.b.cab_number || "", family: x.family, hours: x.hours, allowed: x.allowed, done: x.done, total: x.total, status: x.status, on: x.onNames, color: x.done === x.total ? "green" : x.hours > x.allowed ? "red" : x.hours > x.allowed * 0.85 ? "amber" : "green" }; }) };
         } } catch (eB) { console.error("body tile:", eB && eB.message); }
+      // Block 353: Expected Line Dates + the line's lead time — read from the 5-minute background cache (no DB trip here)
+      // Fable audit: SIGNED-IN viewers only (Daniel 11/3: "on the shop board, NOT on the live TV board"; Block 173: the public JSON is
+      // structure, not shop performance) — and the build id is used here, never shipped.
+      try { const L353 = sessB133 ? lead353() : null; for (const pl of payload298.lines) { const ll = L353 && L353.lines ? L353.lines[pl.id] : null; if (ll) pl.lead = ll.lead;
+        for (const u of pl.upcoming || []) { const c = ll ? ll.cabs[u.id] : null; delete u.id; if (c) { u.eld = c.date; u.eldp = c.pace_date; } } } } catch (e353) { /* the board never waits on, or breaks over, the estimate */ }
       const body298 = JSON.stringify(payload298);
       clearTimeout(pendTimer298); boardCache298[bsKey298] = { at: Date.now(), body: body298, pending: null }; resolve298(body298);
       return send(200, "application/json", body298);
