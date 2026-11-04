@@ -3662,6 +3662,42 @@ const mytimePage290 = (d) => {
 };
 // Block 308: the home-screen inspection strip (inspectors + admins). One per waiting cab; deep link to its card.
 const inspStrip308 = (list) => (list && list.length) ? list.map((c) => `<a href="/manager#insp-${c.id}" style="display:block;text-decoration:none;margin:4px auto 10px;max-width:560px;padding:14px 16px;border-radius:14px;background:#3a2f00;border:2px solid #ffd60a;color:#ffd60a;font-weight:800;font-size:1.1rem;text-align:left">&#128269; Cab waiting for inspection &mdash; ORDER ${escH(c.order)}${c.cab ? ` &middot; Cab #${escH(c.cab)}` : ""}${c.line ? ` &middot; ${escH(c.line)}` : ""}<div style="text-align:right;margin-top:4px;font-size:1rem">Inspect &rarr;</div></a>`).join("") : "";
+// Block 354: the Body area switch — page helpers (the rule and the idle math sit with bodyBucket326, further down)
+const BODY_AREA353 = 13;   // the Body Shop time line (= BODY_LINE_ID) — local, so the page helpers travel with the page (t292 renders watcherPage in a sandbox)
+const AREA353 = { 13: "Body Shop", 10: "Shop time", 12: "Build department" };
+const AREA_SUB353 = { 13: "your cabs and steps", 10: "jig, meetings, in-house work", 12: "work for the Build dept" };
+const AREA_BG353 = { 13: "#1d5a2d", 10: "#1d3a5a", 12: "#3d2a5a" };
+// self-contained onclick (the Home redraws regions in place — inserted <script> never runs; Block 345 fix 4)
+const SW_JS353 = "var b=this,m=document.getElementById('swmsg353');b.disabled=true;var go=function(x){return fetch('/api/clock/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({line_id:Number(b.dataset.l353),claimed_at:new Date().toISOString()},x||{}))}).then(function(r){return r.json()})};go().then(function(o){if(o&&o.nudge163)return window.confirm(o.error)?go({confirm163:true}):{ok:false,error:'Nothing changed.'};return o}).then(function(o){if(o&&o.ok){location.reload();return}b.disabled=false;if(m)m.textContent=(o&&o.error)||'Something went wrong'}).catch(function(){b.disabled=false;if(m)m.textContent='Network hiccup - try again'})";
+const NOTE_JS353 = "var b=this,t=document.getElementById('note353'),m=document.getElementById('notemsg353');b.disabled=true;m.style.color='';m.textContent='Saving...';fetch('/api/clock/note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:t?t.value:''})}).then(function(r){return r.json()}).then(function(o){b.disabled=false;if(o&&o.ok){m.textContent='✓ Saved '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});return}m.style.color='#ff8fa3';m.textContent=(o&&o.error)||'Did not save - try again'}).catch(function(){b.disabled=false;m.style.color='#ff8fa3';m.textContent='Network hiccup - try again'})";
+// the "SWITCH TO" card + (off Body) the optional note card — Body Shop people on the clock only.
+// Fable audit: on ANY off-Body line the steps card hands its Back button to this card (one Back, never two) — area353 is set for every non-13 line.
+const areaCards353 = (clk) => {
+  if (!clk || !clk.body353 || !clk.clockedIn) return "";
+  const cur = Number(clk.cur353);
+  const nOpen = clk.help && clk.help.open345 ? clk.help.open345.length : 0;
+  const btn = (l) => l === 13
+    ? `<button class="swb353" style="background:${AREA_BG353[13]};border:2px solid #30d158" data-l353="13" onclick="${SW_JS353}">&#9654; Back to Body<small>${nOpen ? `${nOpen} step${nOpen === 1 ? "" : "s"} waiting for you` : AREA_SUB353[13]}</small></button>`
+    : `<button class="swb353" style="background:${AREA_BG353[l]}" data-l353="${l}" onclick="${SW_JS353}">&#8646; ${AREA353[l]}<small>${AREA_SUB353[l]}</small></button>`;
+  const targets = cur === 13 ? [10, 12] : cur === 10 ? [13, 12] : cur === 12 ? [13, 10] : [13, 10, 12];
+  const note = cur === 10 || cur === 12 ? `<div class="lane" style="border-color:#0a84ff;max-width:560px;margin:10px auto">
+    <div style="font-weight:800;letter-spacing:.03em">WHAT ARE YOU WORKING ON? <span style="opacity:.6;font-weight:600">(optional)</span></div>
+    <textarea id="note353" maxlength="500" rows="2" placeholder="A quick line — skip it if you like" style="width:100%;box-sizing:border-box;margin-top:8px;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:10px;padding:12px;font-size:16px;font-family:inherit;resize:vertical">${escH(clk.note353 || "")}</textarea>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px"><span id="notemsg353" style="opacity:.7;font-size:.85rem">${clk.note353 ? "&#10003; Saved" : ""}</span><button class="b" onclick="${NOTE_JS353}">Save note</button></div></div>` : "";
+  return `${note}<div class="lane" style="max-width:560px;margin:10px auto"><style>.swb353{border:none;border-radius:12px;color:#fff;font-weight:800;font-size:1rem;padding:14px 10px;min-height:64px;line-height:1.2;cursor:pointer;width:100%}.swb353 small{display:block;font-weight:600;font-size:.78rem;opacity:.85;margin-top:3px}</style>
+    <div style="font-weight:800;letter-spacing:.03em">SWITCH TO</div>
+    <div style="display:grid;grid-template-columns:repeat(${targets.length},1fr);gap:8px;margin-top:8px">${targets.map(btn).join("")}</div>
+    ${cur === 13 ? `<div style="opacity:.6;font-size:.82rem;text-align:center;margin-top:6px">Your open steps pause while you're off Body and pick back up when you come back.</div>` : ""}
+    <div id="swmsg353" class="msg err" style="margin-top:6px"></div></div>`;
+};
+// the header words + color for a Body Shop person on the clock: the AREA the clock is really on
+const areaHead353 = (clk, fallback) => {
+  if (!clk || !clk.body353 || !clk.clockedIn) return null;
+  const cur = Number(clk.cur353);
+  if (cur === 10 || cur === 12) return { text: `${AREA353[cur]}${clk.since353 ? ` · since ${clk.since353}` : ""}`, style: "background:#1d3a5a;color:#fff;border:2px solid #0a84ff" };
+  if (cur === 13) return { text: clk.help && clk.help.label ? clk.help.label : "Body Shop", style: null };
+  return { text: (clk.help && clk.help.label) || fallback, style: null };
+};
 const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
@@ -3673,8 +3709,10 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
   <h2>Welcome, ${emp.first_name}.</h2>
   ${inspStrip308(insp308)}
   ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
-  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${clk.help && clk.help.label ? clk.help.label : emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
-  ${clk.help && (clk.clockedIn || clk.help.open345) ? stepCard338(clk.help) : ""}
+  <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? ((areaHead353(clk, "") || {}).style || "background:#1d5a2d;color:#fff;border:2px solid #30d158") : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${areaHead353(clk, emp.department) ? escH(areaHead353(clk, emp.department).text) : clk.help && clk.help.label ? clk.help.label : emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${clk.body353 && clk.clockedIn && Number(clk.cur353) !== BODY_AREA353 ? areaCards353(clk) : ""}
+  ${clk.help && (clk.clockedIn || clk.help.open345) ? stepCard338(clk.body353 && clk.clockedIn && Number(clk.cur353) !== BODY_AREA353 ? { ...clk.help, area353: AREA353[Number(clk.cur353)] || "another line" } : clk.help) : ""}
+  ${clk.body353 && clk.clockedIn && Number(clk.cur353) === BODY_AREA353 ? areaCards353(clk) : ""}
   ${clk.stay ? `<div style="max-width:560px;margin:0 auto">${stayCard334(clk.stay)}</div>` : ""}
   <div style="text-align:center;margin-bottom:14px">${clk.clockedIn
     ? `${clk.ah && clk.ah.open ? `<div style="color:#ffd60a;font-size:.9rem;margin-bottom:6px">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</div>
@@ -5591,7 +5629,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
         <tr><th style="text-align:left;opacity:.55">Time</th><th style="text-align:left;opacity:.55">Punch</th><th style="text-align:left;opacity:.55">Line</th><th style="text-align:left;opacity:.55">Correction</th><th></th><th></th></tr>
         ${tc.punches.map((p) => `<tr style="${p.voided ? "text-decoration:line-through;opacity:.45" : ""}">
           <td>${p.hhmm}</td>
-          <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}</td>
+          <td>${p.kind === "clock_in" ? "IN" : "OUT"}${p.kind === "clock_out_auto" ? " (auto)" : ""}${p.reason ? ` · ${p.reason}` : ""}${p.workNote ? `<div style="opacity:.75;font-size:.85rem;margin-top:2px">&#128221; ${escH(p.workNote)}</div>` : ""}</td>
           <td>${isAdmin && !p.voided && p.kind === "clock_in" && p.line_id !== FIX_LINE_ID ? `<select id="tcl-${p.id}" style="max-width:11em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:5px">${[...tc.lines, { id: 14, name: "Off the line" }].map((l) => `<option value="${l.id}"${l.id === p.line_id ? " selected" : ""}>${l.name}</option>`).join("")}</select> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcReline297('${p.id}'))">Change line</button>` : p.lineName}</td>
           <td style="opacity:.7">${p.voided ? "VOIDED" : p.corrected ? "corrected" : p.added ? "added" : ""}${p.note ? `: ${p.note}` : ""}</td>
           <td>${p.voided ? "" : `<input type="time" id="tcm-${p.id}" value="${p.hhmm}" step="60"> <button class="btn gray" style="padding:6px 10px;margin-top:0" onclick="armM(this,()=>tcMove('${p.id}'))">Move</button>`}</td>
@@ -7643,12 +7681,57 @@ function mergeHelp345(ob, os) {
 // nudge is answered with a confirm; after hours, the plain clock-in screen (it asks what it's for) is the way back.
 const PAUSE_JS345 = "var b=this,m=document.getElementById('pmsg345');b.disabled=true;fetch('/api/body/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build_id:b.dataset.b345,task_id:b.dataset.t345,action:'pause',claimed_at:new Date().toISOString()})}).then(function(r){return r.json()}).then(function(o){if(o.ok){location.reload();return}b.disabled=false;if(m)m.textContent=o.error||'Something went wrong'}).catch(function(){b.disabled=false;if(m)m.textContent='Network hiccup - try again'})";
 const BACK_JS345 = "var b=this,m=document.getElementById('bbmsg345');b.disabled=true;var go=function(x){return fetch(b.dataset.u345,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({line_id:13,claimed_at:new Date().toISOString()},x||{}))}).then(function(r){return r.json()})};go().then(function(o){if(o&&o.nudge163)return window.confirm(o.error)?go({confirm163:true}):{ok:false,error:'Still on your line - nothing changed.'};return o}).then(function(o){if(o&&o.ok){location.reload();return}b.disabled=false;if(m)m.textContent=o&&/after hours/i.test(o.error||'')?'After hours - clock in on Body Shop from the clock-in screen (it asks what it is for); your steps run again then.':(o&&o.error)||'Something went wrong'}).catch(function(){b.disabled=false;if(m)m.textContent='Network hiccup - try again'})";
+// ============================================================================
+// Block 354 — BODY SWITCHES WORK AREAS (Daniel 11/4 09:39–10:05; Plan 79). Isaac (any Body Shop person) clocks in on Body
+// Shop time by default and can switch, one tap, to Shop time (line 10) or the Build department (line 12, "Build time" in
+// the line table) and back. The accounting already works (Block 345): open Body steps accrue ONLY while the clock is on
+// line 13, so off Body they pause in place and pick back up automatically on the way back; a step HE paused by hand
+// (closed_reason 'paused') stays paused until he taps it. Off Body he may leave an optional note (work_log, one per
+// stint — the Marketing table, no migration). No photos (Daniel 09:59). Idle = on the Body clock with no step open —
+// calculated (bodyDay353), not shown on a screen yet (Daniel 09:45: "just calculate idle time for now").
+// IDLE + the area split for ONE person over [a, b) (ms). Pure. evs = their punches in claimed_at order (one seed punch
+// before `a` included so an open stint is known); rows = their body_step_open rows overlapping the window. Mirrors
+// bodyBucket326: a step row counts only while the clock is on Body (13); a legacy Body punch stamped with a step
+// (fix_build_id) counts as a row for that stint. A hand-paused / done / released row is closed → it stops counting.
+//   onSteps = Body clock with ≥ 1 row open · idle = Body clock with no row open · shop (10) · build (12) · other lines.
+function bodyDay353(evs, rows, a, b, now) {
+  const end = Math.min(b, now == null ? Date.now() : now);
+  const st = []; let open = null;
+  for (const e of evs || []) { const t = new Date(e.claimed_at).getTime(); if (!Number.isFinite(t)) continue;
+    if (open) { st.push({ ...open, e: t }); open = null; }
+    if (e.kind === "clock_in") open = { s: t, line: Number(e.line_id), stamped: Boolean(e.fix_build_id) }; }
+  if (open) st.push({ ...open, e: Math.max(open.s, end) });
+  const R = []; for (const r of rows || []) { const s0 = new Date(r.opened_at).getTime(); const e0 = r.closed_at ? new Date(r.closed_at).getTime() : end; if (Number.isFinite(s0) && e0 > s0) R.push({ s: s0, e: e0 }); }
+  const out = { onSteps: 0, idle: 0, shop: 0, build: 0, other: 0 };
+  for (const c of st) {
+    const s = Math.max(c.s, a), e = Math.min(c.e, end); if (e <= s) continue;
+    if (c.line !== BODY_LINE_ID) { out[c.line === SHOP_LINE_ID ? "shop" : c.line === 12 ? "build" : "other"] += e - s; continue; }
+    if (c.stamped) { out.onSteps += e - s; continue; }
+    const cuts = new Set([s, e]); for (const r of R) { if (r.s > s && r.s < e) cuts.add(r.s); if (r.e > s && r.e < e) cuts.add(r.e); }
+    const pts = [...cuts].sort((x, y) => x - y);
+    for (let i = 0; i + 1 < pts.length; i++) { const x = pts[i], y = pts[i + 1]; (R.some((r) => r.s <= x && r.e >= y) ? (out.onSteps += y - x) : (out.idle += y - x)); }
+  }
+  const h = (ms) => Math.round(ms / 36000) / 100;
+  const res = { on_steps: h(out.onSteps), idle: h(out.idle), shop: h(out.shop), build: h(out.build), other: h(out.other) };
+  res.body = Math.round((res.on_steps + res.idle) * 100) / 100; res.total = Math.round((res.body + res.shop + res.build + res.other) * 100) / 100;
+  return res;
+}
+async function bodyDayFor353(empId, ymd) {
+  const a = phxDayStart(ymd), b = a + 86400000;
+  const [seed, evs, rows] = await Promise.all([
+    db(`clock_event?select=kind,line_id,fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=lt.${new Date(a).toISOString()}&order=claimed_at.desc&limit=1`),
+    dbAll252(`clock_event?select=kind,line_id,fix_build_id,claimed_at&voided=is.false&employee_id=eq.${empId}&claimed_at=gte.${new Date(a).toISOString()}&claimed_at=lt.${new Date(b).toISOString()}&order=claimed_at.asc,id.asc`),
+    dbAll252(`body_step_open?select=opened_at,closed_at&employee_id=eq.${empId}&opened_at=lt.${new Date(b).toISOString()}&or=(closed_at.is.null,closed_at.gt.${new Date(a).toISOString()})&order=opened_at.asc,id.asc`),
+  ]);
+  return bodyDay353([...(seed || []), ...(evs || [])], rows, a, b, Date.now());
+}
 const stepCard345 = (h) => { const esc = escH; const a = (c, muted) => `<div style="display:flex;align-items:stretch;gap:6px;margin-top:8px"><a href="${esc(c.href)}" style="flex:1;display:block;text-decoration:none;color:inherit;background:${muted ? "#1c1c1e" : "#10261a"};border:1px solid ${muted ? "#3a3a3c" : "#30d158"};border-radius:10px;padding:10px 12px;text-align:left${muted ? ";opacity:.75" : ""}">
       <div style="font-weight:800">${esc(c.step)} <span style="opacity:.75;font-weight:600">· Order ${esc(c.order)}${c.cab ? ` · Cab #${esc(c.cab)}` : ""}</span></div>
       <div style="font-size:.88rem;opacity:.8;margin-top:2px">${muted ? "paused by you — tap to pick it back up" : h.onBody ? `running · ${c.hours} h so far` : `waiting · ${c.hours} h so far`}</div></a>${muted ? "" : `<button class="b" style="margin:0;white-space:nowrap" data-b345="${c.buildId}" data-t345="${c.taskId}" onclick="${PAUSE_JS345}">&#9208; Pause</button>`}</div>`;
   return `<div class="lane" style="border-color:${h.onBody || !h.open345.length ? "#30d158" : "#ffd60a"}">
     ${h.open345.length ? `<div style="font-weight:800;letter-spacing:.03em">YOUR OPEN STEPS <span class="muted" style="font-weight:600">(${h.open345.length})</span></div>` : ""}
-    ${h.open345.length && !h.onBody ? `<div style="color:#ffd60a;font-size:.9rem;margin-top:4px">${h.clockedIn ? "Your clock is on another line — these wait until you're back on Body." : "You're clocked out — these wait for you."}</div>
+    ${h.open345.length && !h.onBody && h.area353 ? `<div style="color:#ffd60a;font-size:.9rem;margin-top:4px">Paused while you're on ${escH(h.area353)} — nothing counts against them. They pick back up when you tap Back to Body.</div>` : ""}
+    ${h.open345.length && !h.onBody && !h.area353 ? `<div style="color:#ffd60a;font-size:.9rem;margin-top:4px">${h.clockedIn ? "Your clock is on another line — these wait until you're back on Body." : "You're clocked out — these wait for you."}</div>
       <button class="b grn" style="margin-top:8px;padding:12px 18px;font-size:1.02rem" data-u345="${h.clockedIn ? "/api/clock/switch" : "/api/clock/in"}" onclick="${BACK_JS345}">&#9654; Back on Body — ${h.open345.length} step${h.open345.length === 1 ? "" : "s"} open</button><div id="bbmsg345" class="msg err"></div>` : ""}
     ${h.open345.map((c) => a(c, false)).join("")}
     ${h.paused345.length ? `<div style="font-weight:800;letter-spacing:.03em;margin-top:${h.open345.length ? 14 : 0}px;opacity:.8">PAUSED BY YOU <span class="muted" style="font-weight:600">(${h.paused345.length})</span></div>${h.paused345.map((c) => a(c, true)).join("")}` : ""}
@@ -7891,6 +7974,7 @@ function punchesAlternate(evs) {
 // Phoenix midnight of a YYYY-MM-DD string, as real ms (AZ never shifts).
 const phxDayStart = (d) => Date.parse(d + "T00:00:00Z") + 7 * 3600000;
 // A punch's Phoenix wall-clock HH:MM — what the corrector's inputs speak.
+const phxClock12354 = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); const H = d.getUTCHours(), M = String(d.getUTCMinutes()).padStart(2, "0"); return `${H % 12 || 12}:${M} ${H < 12 ? "AM" : "PM"}`; };   // Block 354: "since 10:12 AM"
 const phxHHMM = (ts) => { const d = new Date(new Date(ts).getTime() - 7 * 3600000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); };
 
 // Q119: parse the reports period from the query — clear presets (rolling
@@ -12895,7 +12979,7 @@ http.createServer(async (req, res) => {
         if (DEPT_LINE92[emp.department]) {
           // Block 212 (v201 SPEED): reads fired together per dependency wave.
           const [lastC92Rows, rs92, hrs92] = await Promise.all([
-            db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 338: +the step stamps
+            db(`clock_event?select=id,kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 338: +the step stamps · Block 354: +id (the stint's note)
             db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
             shopHours(),
           ]);
@@ -12913,7 +12997,12 @@ http.createServer(async (req, res) => {
           const [openAh92] = openAh92Rows;
           const stay92 = await stayFor334(empId, hrs92);   // Block 334
           const help92 = mergeHelp345(await openSteps345(empId, lastC92, emp).catch(() => null), in92 ? await onStep338(empId, lastC92, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
+          // Block 354: a Body Shop person sees the area switch; off Body, the stint's optional note
+          const body354 = emp.department === "Body Shop", cur354 = in92 ? Number(lastC92.line_id) : null;
+          let note354 = "";
+          if (body354 && in92 && (cur354 === SHOP_LINE_ID || cur354 === 12) && lastC92.id) { try { const [wl] = await db(`work_log?select=note&clock_in_id=eq.${lastC92.id}&limit=1`); note354 = (wl && wl.note) || ""; } catch (eN) { note354 = ""; } }
           clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department], stay: stay92, help: help92,
+            body353: body354, cur353: cur354, note353: note354, since353: in92 && lastC92.claimed_at ? phxClock12354(lastC92.claimed_at) : "",
             ah: { now: ahNow92 && !stay92.openStay, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) && stay92.openStarted,
               lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
         }
@@ -13579,6 +13668,29 @@ http.createServer(async (req, res) => {
     // (C15/Q103), so helping ANOTHER line while clocked into your own quietly
     // feeds your hours to the wrong cab's pace math. Making the honest path
     // one tap is the fix — the friction was the problem.
+    // Block 354: the optional note on a Body person's Shop time / Build department stint (work_log, one per stint, upsert)
+    if (url.pathname === "/api/clock/note" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const { note } = await body(req);
+      const txt = String(note == null ? "" : note).replace(/\s+$/g, "").slice(0, 500);
+      const [[meN], [lastN]] = await Promise.all([db(`employee?select=department&id=eq.${empId}`), db(`clock_event?select=id,kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`)]);
+      if (!meN || meN.department !== "Body Shop") return json(403, { ok: false, error: "Notes here are for Body Shop time switches" });
+      if (!lastN || lastN.kind !== "clock_in" || !(Number(lastN.line_id) === SHOP_LINE_ID || Number(lastN.line_id) === 12)) return json(400, { ok: false, error: "You're not on Shop time or the Build department right now" });
+      await upsertWorkLog290(empId, lastN.id, txt);
+      logEvent("clock.area_note", empId, { clock_in_id: lastN.id, line_id: Number(lastN.line_id), chars: txt.length });
+      return json(200, { ok: true });
+    }
+    // Block 354: a Body person's day — on steps / idle / Shop time / Build department (admin check; no screen yet — Daniel 09:45)
+    if (url.pathname === "/api/admin/body-day" && req.method === "GET") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [meD] = await db(`employee?select=role&id=eq.${empId}`);
+      if (!meD || meD.role !== "admin") return json(403, { ok: false, error: "Admins only" });
+      const who = String(url.searchParams.get("emp") || ""), ymd = String(url.searchParams.get("date") || phxDate(Date.now()));
+      if (!isUuid(who) || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return json(400, { ok: false, error: "emp=<id>&date=YYYY-MM-DD" });
+      return json(200, { ok: true, emp: who, date: ymd, hours: await bodyDayFor353(who, ymd) });
+    }
     if (url.pathname === "/api/clock/switch" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
@@ -15116,6 +15228,10 @@ http.createServer(async (req, res) => {
             : p2.line_id === 10 ? "Shop time" : lname190[p2.line_id] || "line " + p2.line_id,   // Block 190: dept-time punches read by name
           reason: p2.reason || "", voided: p2.voided, corrected: Boolean(p2.corrected_by),
           added: Boolean(p2.added_by), note: p2.correction_note || "" }));
+        // Block 354: the stint's work note (Body's optional Shop time / Build note; Marketing's recap) beside its clock-in
+        try { const inIds354 = tcPunches.filter((x) => x.kind === "clock_in").map((x) => x.id);
+          if (inIds354.length) { const wl354 = await db(`work_log?select=clock_in_id,note&clock_in_id=in.(${inIds354.join(",")})`); const by354 = Object.fromEntries((wl354 || []).filter((w) => w.note).map((w) => [w.clock_in_id, w.note]));
+            for (const x of tcPunches) if (by354[x.id]) x.workNote = by354[x.id]; } } catch (eW354) { /* the timecard never breaks over a note */ }
       }
       // Block 189: the add-pair line picker now carries the DEPT-TIME lines too
       // (Warehouse 9 · Build 12 · Body Shop 13 · Accounting 16 — disabled on
