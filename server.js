@@ -157,7 +157,59 @@ function dbRequest355(urlStr, method, headers, body) {
   });
   return attempt(0);
 }
+// ============================================================================
+// Block 356 — SPEED STEPS 2+3 (Daniel 11/4 13:22: "audit the next few steps to do to save even more time … build it and lets
+// fable audit it"; Plan 81). Measured first (the perf rig, Server-Timing): heavy pages read 3–8 settings-type rows and 2–6
+// employee rows per load — the same few tables, on every page, waiting in line. Two memories, both INSIDE db() so every caller
+// is covered and every write wipes them:
+//   (a) a 60 s SHARED memory for the tables that almost never change (employees, settings, toggles, lines, products, templates,
+//       pick lists, standards, the option library, the calendar). ANY write through db() to one of them wipes that table's
+//       memory at once — so an in-app change (deactivate someone, flip a feature, edit a line) is instant; only a direct SQL
+//       edit in Supabase waits ≤ 60 s. One Railway replica = one memory (a second replica would need this revisited).
+//   (b) a PER-REQUEST memory: the same GET twice inside ONE request is fetched once; any write in that request wipes it.
+// Every answer from memory is a deep copy (callers may sort / push / edit what they get). DB_CACHE=off (Railway env) = no memory.
+const CACHE356_OFF = String(process.env.DB_CACHE || "").toLowerCase() === "off";
+const CACHE356_TTL = 60000;
+const CACHE356_TABLES = new Set(["employee", "feature_toggle", "shop_setting", "shop_calendar", "line", "product", "step_template", "build_template", "pick_list_item", "body_standard", "wh_standard", "prep_standard", "option_item"]);
+const cache356 = new Map();   // path -> { at, val }
+const inflight356 = new Map();   // path -> the pending read (shared tables)
+const cacheStat356 = { hits: 0, misses: 0, memo: 0, wipes: 0, since: new Date().toISOString() };
+const tableOf356 = (path) => String(path || "").split(/[?/]/)[0];
+const clone356 = (v) => (v == null || typeof v !== "object") ? v : structuredClone(v);
+const gen356 = new Map();   // table -> write counter: a read only fills the memory if NO write touched its table while it was in flight
+function wipe356(table) { gen356.set(table, (gen356.get(table) || 0) + 1); for (const k of inflight356.keys()) if (tableOf356(k) === table) inflight356.delete(k); let n = 0; for (const k of cache356.keys()) if (tableOf356(k) === table) { cache356.delete(k); n++; } if (n) cacheStat356.wipes++; }
 async function db(path, opts = {}) {
+  const method356 = String(opts.method || "GET").toUpperCase(), table356 = tableOf356(path), st356 = REQ355.getStore();
+  if (method356 !== "GET") {   // a write: wipe both memories BEFORE it goes (a read racing it can never re-fill the old answer after)
+    if (CACHE356_TABLES.has(table356)) wipe356(table356);
+    if (st356 && st356.memo) st356.memo.clear();
+    try { return await db355(path, opts); } finally { if (CACHE356_TABLES.has(table356)) wipe356(table356); }
+  }
+  if (CACHE356_OFF) return db355(path, opts);
+  if (CACHE356_TABLES.has(table356)) {
+    const hit = cache356.get(path);
+    if (hit && Date.now() - hit.at < CACHE356_TTL) { cacheStat356.hits++; if (st356) st356.hits = (st356.hits || 0) + 1; return clone356(hit.val); }
+    const fly = inflight356.get(path); if (fly) { cacheStat356.hits++; return clone356(await fly); }   // the same read already on its way → share it
+    cacheStat356.misses++;
+    const at = Date.now(), g = gen356.get(table356) || 0; const pr = db355(path, opts); inflight356.set(path, pr);
+    let val; try { val = await pr; } finally { if (inflight356.get(path) === pr) inflight356.delete(path); }
+    if ((gen356.get(table356) || 0) === g) { if (cache356.size > 2000) cache356.clear(); cache356.set(path, { at, val: clone356(val) }); }   // a write landed mid-read → don't keep it
+    return clone356(val);
+  }
+  if (st356) {   // (b) the same GET twice in one request → one trip
+    st356.memo = st356.memo || new Map();
+    if (st356.memo.has(path)) { cacheStat356.memo++; return clone356(await st356.memo.get(path)); }
+    const pr = db355(path, opts); st356.memo.set(path, pr); pr.catch(() => st356.memo && st356.memo.get(path) === pr && st356.memo.delete(path));
+    return clone356(await pr);
+  }
+  return db355(path, opts);
+}
+// Block 356: PREFETCH — start reads a page is CERTAIN to make later, without waiting. The per-request memory holds the
+// in-flight answer, so when the page's own (unchanged, sequential) code asks for the identical read it gets that answer
+// instead of a new trip. Logic and order of the page are untouched; a prefetch the page ends up not needing costs one extra
+// read in parallel, never a wave; a write in between wipes the memory and the page reads fresh, as before.
+function prefetch356(paths) { if (!REQ355.getStore() || CACHE356_OFF) return; for (const p of paths) if (p) db(p).catch(() => {}); }
+async function db355(path, opts = {}) {
   const headers = {
     apikey: SUPABASE_KEY,
     Authorization: `Bearer ${SUPABASE_KEY}`,
@@ -7708,8 +7760,10 @@ async function releaseBodyCab345(buildId, when, why) {
 // while clocked in on Body; "waiting" with a ▶ Back on Body tap after lunch / when the clock is on another line) and, muted,
 // PAUSED BY YOU (hand-paused steps still open on the cab, so one is never forgotten). Each card IS the link to the step.
 async function openSteps345(empId, last, me) {
-  const rows = await db(`body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${empId}&closed_at=is.null&order=opened_at.asc`).catch(() => []);
-  const paused = await db(`body_step_open?select=body_task_id,build_id,closed_at&employee_id=eq.${empId}&closed_reason=eq.paused&closed_at=gte.${new Date(Date.now() - 7 * 86400000).toISOString()}&order=closed_at.desc&limit=20`).catch(() => []);
+  const [rows, paused] = await Promise.all([   // Block 356: the two reads side by side (neither needs the other)
+    db(`body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${empId}&closed_at=is.null&order=opened_at.asc`).catch(() => []),
+    db(`body_step_open?select=body_task_id,build_id,closed_at&employee_id=eq.${empId}&closed_reason=eq.paused&closed_at=gte.${new Date(Date.now() - 7 * 86400000).toISOString()}&order=closed_at.desc&limit=20`).catch(() => []),
+  ]);
   if (!rows.length && !paused.length) return null;
   const openT = new Set(rows.map((r) => r.body_task_id)), seenP = new Set(); const pz = [];
   for (const p of paused) { if (openT.has(p.body_task_id) || seenP.has(p.body_task_id)) continue; seenP.add(p.body_task_id); pz.push(p); }
@@ -10158,6 +10212,13 @@ async function whActivity230() {
   return wh230;
 }
 async function reconcileData() {
+  prefetch356([   // Block 356: the Order Queue's reads are fixed queries — start them all at once (see prefetch356)
+    "build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&order=id.asc&limit=1000&offset=0",
+    "build?select=cab_number&cab_number=not.is.null&order=id.asc&limit=1000&offset=0",
+    "build?select=order_number,part_number,cab_number,state,customer_name,coyote_status,created_at&state=in.(on_hold,cancelled)&started_at=is.null&order=created_at.desc,id.asc&limit=1000&offset=0",
+    "build?select=id&state=in.(production_complete,complete)&order=id.asc&limit=1000&offset=0",
+    `build?select=id&returned_at=not.is.null&limit=1000`,
+  ]);
   const open = await dbAll252("build?select=id,order_number,coyote_root,part_number,cab_number,line_id,state,customer_name,destination,promised_finish,note_flagged,queue_pos,queue_pinned,created_at,coyote_status&state=in.(upcoming,active,awaiting_inspection,rework,fix_job)&order=id.asc");   // Block 233: fix_job joined the list — a returned cab on a line was falling off the queue page entirely
   const prods = await db("product?select=part_number,family");
   const famOf = {}; for (const p of prods) famOf[String(p.part_number).toUpperCase()] = p.family;
@@ -12984,6 +13045,18 @@ const handleRequest355 = async (req, res) => {
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       // Q114: a temporary code gets you exactly one place — the change-PIN screen.
       if (emp.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      // Block 356: PREFETCH the reads every Home shape makes for this person (the stay-late card, the open-steps banner, the
+      // after-hours session, the floor's time off + fix list, Body's inspection strip + cab list) — see prefetch356.
+      prefetch356([
+        `clock_event?select=kind,line_id,claimed_at,reason,corrected_by,added_by,correction_note&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`,
+        `after_hours_session?select=id,started_at,reason&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`,
+        `body_step_open?select=id,body_task_id,build_id,opened_at&employee_id=eq.${empId}&closed_at=is.null&order=opened_at.asc`,
+        `after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`,
+        emp.department === "Production" || !emp.department ? `time_off_request?select=start_date,end_date,reason,status,decision_note&employee_id=eq.${empId}&or=(status.eq.pending,end_date.gte.${phxDate(Date.now())})&order=start_date.desc&limit=8` : null,
+        emp.department === "Production" || !emp.department ? `build?select=id,order_number,cab_number,fix_kind,fix_reason,fix_hours&state=eq.fix_job&order=fix_assigned_at` : null,
+        canInspect321(emp) ? "build?select=id,order_number,cab_number,line_id&state=eq.awaiting_inspection&order=created_at.asc" : null,
+        emp.department === "Body Shop" ? "build?select=id,order_number,cab_number,part_number,customer_name,state,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,body_build_reason,stage,wh_sent_back_at,wh_sent_back_by,wh_sent_back_reason&state=in.(production_complete,complete,rework,fix_job)&body_moved_to_build_at=is.null&stage=is.null&order=left_production_at.asc.nullslast,created_at.asc,id.asc&limit=1000&offset=0" : null,
+      ]);
       if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
         // Block 212 (v201 SPEED): independent reads fired together.
@@ -14527,6 +14600,23 @@ const handleRequest355 = async (req, res) => {
       if (!bO && /^[A-Za-z]*\d+$/.test(ord)) { const [b1] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ord + ".1")}`); if (b1) bO = b1; }
       if (!bO) return send(404, "text/html; charset=utf-8",
         `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ord)}" on the board</h2><p><a href="/shopboard" style="color:#8e8e93">← Back to the board</a></p></div></body></html>`);
+      // Block 356: PREFETCH — start the reads this page always makes for this cab, so the sequential code below finds them
+      // already on their way (exact same queries; see prefetch356). Nothing below changes order or logic.
+      { const root356 = bO.coyote_root || String(bO.order_number || "").split(".")[0];
+        prefetch356([
+          bO.part_number ? `product?select=family,template_id&part_number=eq.${encodeURIComponent(bO.part_number)}` : null,
+          bO.line_id ? `line?select=name&id=eq.${bO.line_id}` : null,
+          `task?select=id,display_no,name,day_no,day_end,man_hours,state,is_background,source,sort_order&build_id=eq.${bO.id}&order=day_no,sort_order`,
+          `product?select=part_number`,
+          root356 ? `coyote_intake?select=payload&order_number=eq.${encodeURIComponent(root356)}&order=received_at.desc&limit=1` : null,
+          empView88 ? `employee?select=role,department&id=eq.${empView88}` : null,
+          empView88 ? `employee?select=role&id=eq.${empView88}` : null,
+          `option_flag?select=id,kind,flag_text&build_id=eq.${bO.id}&resolved=is.false&order=created_at.asc`,
+          `clock_event?select=employee_id&voided=is.false&line_id=eq.${FIX_LINE_ID}&fix_build_id=eq.${bO.id}&kind=eq.clock_in&limit=2000`,
+          `body_task?select=id,step_no,name&build_id=eq.${bO.id}`,
+          `wh_task?select=id,name&build_id=eq.${bO.id}`,
+          root356 ? `build?select=id,order_number,cab_number,part_number,state,coyote_row_key,coyote_row_idx&coyote_root=eq.${encodeURIComponent(root356)}&state=neq.cancelled` : null,
+        ]); }
       const [prodO] = bO.part_number ? await db(`product?select=family,template_id&part_number=eq.${encodeURIComponent(bO.part_number)}`) : [null];
       // Block 283: the live template's steps feed the "lands after step" picker for custom extras (works before the cab starts, too)
       const stepsTpl283 = prodO && prodO.template_id ? await db(`step_template?select=display_no,name&template_id=eq.${prodO.template_id}&retired=is.false&order=sort_order`) : [];
@@ -15915,6 +16005,7 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/body" || url.pathname.startsWith("/body/")) {
       const empB = await liveSession(req);
       if (!empB) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      prefetch356([`clock_event?select=kind&voided=is.false&employee_id=eq.${empB}&order=claimed_at.desc&limit=1`]);   // Block 356
       const [meB] = await db(`employee?select=id,first_name,last_name,role,department,must_change_pin&id=eq.${empB}`);
       if (!meB) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       if (meB.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
@@ -15931,18 +16022,23 @@ const handleRequest355 = async (req, res) => {
       const ordB = decodeURIComponent(url.pathname.slice(6));
       const [bB] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ordB)}`);
       if (!bB) return send(404, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ordB)}" in Body</h2><p><a href="/body" style="color:#8e8e93">← Body</a></p></div></body></html>`);
-      const [stB] = await bodyStatus326([bB]);
-      const photosB = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bB.id}&kind=in.(body,primer)&hidden=is.false&order=created_at.asc&limit=300`);
-      let linesB = []; try { const L = await optionList255(bB); linesB = (L || []).map((x) => typeof x === "string" ? x : (x && (x.text || x.label)) || "").filter(Boolean); } catch (e) { linesB = []; }
-      const notesB340 = await stepNotes340(bB.id);   // Block 340
-      let whB339 = null; try { if (bB.body_done_at || bB.shipped_at) whB339 = (await whStatus327([bB], false))[0] || null; } catch (e) { whB339 = null; }   // reviewer: the banner knows the crating state too
-      let idleB342 = ""; try { if (bB.started_at) idleB342 = idleLine342((await loadCabLife342([bB], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bB.id]); } catch (e) { idleB342 = ""; }   // Block 342
+      // Block 356: the independent pieces of the Body cab page load SIDE BY SIDE (each only reads; none needs another's answer)
+      const [stBA, photosB, linesB, notesB340, whB339, idleB342] = await Promise.all([
+        bodyStatus326([bB]),
+        db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bB.id}&kind=in.(body,primer)&hidden=is.false&order=created_at.asc&limit=300`),
+        (async () => { try { const L = await optionList255(bB); return (L || []).map((x) => typeof x === "string" ? x : (x && (x.text || x.label)) || "").filter(Boolean); } catch (e) { return []; } })(),
+        stepNotes340(bB.id),   // Block 340
+        (async () => { try { if (bB.body_done_at || bB.shipped_at) return (await whStatus327([bB], false))[0] || null; } catch (e) { /* optional */ } return null; })(),   // reviewer: the banner knows the crating state too
+        (async () => { try { if (bB.started_at) return idleLine342((await loadCabLife342([bB], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bB.id]); } catch (e) { /* optional */ } return ""; })(),   // Block 342
+      ]);
+      const [stB] = stBA;
       return send(200, "text/html; charset=utf-8", bodyCabPage326(meB, stB, { clockedIn: clockedB, canDone: canInspect321(meB), photos: photosB, photoMin: BODY_PHOTO_MIN326, lines: linesB, notes: notesB340, idle: idleB342, where: whereNow339(bB, { body: stB, wh: whB339, names: stB.names }) }));
     }
     // ===== Block 327 — WAREHOUSE FINISH-OUT: the list (also on the warehouse's own Home), the cab page, the taps =====
     if (url.pathname === "/warehouse" || url.pathname.startsWith("/warehouse/")) {
       const empW = await liveSession(req);
       if (!empW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      prefetch356([`clock_event?select=kind&voided=is.false&employee_id=eq.${empW}&order=claimed_at.desc&limit=1`]);   // Block 356
       const [meW] = await db(`employee?select=id,first_name,last_name,role,department,must_change_pin,panel_prep,lines&id=eq.${empW}`);
       if (!meW) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       if (meW.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
@@ -15957,20 +16053,25 @@ const handleRequest355 = async (req, res) => {
       if (!bW) return send(404, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ordW)}" at crating</h2><p><a href="/warehouse" style="color:#8e8e93">← Crating &amp; shipping</a></p></div></body></html>`);
       // Block 336 (F5): before the step starts, Coyote's latest ship method decides Crating vs Stage for pickup
       try { const [tW] = await db(`wh_task?select=id,kind,name,state,hours_allowed&build_id=eq.${bW.id}&order=round.desc,created_at.desc&limit=1`); if (tW && tW.state === "not_started" && !bW.shipped_at) { const smW = (await shipMethodFor327([rootOf323(bW)]))[rootOf323(bW)] || ""; await whReconcileMode336(bW, tW, smW, empW); } } catch (eF5) { console.error("wh mode reconcile:", eF5 && eF5.message); }
-      const [stW] = await whStatus327([bW], true);
-      const notesW340 = await stepNotes340(bW.id);   // Block 340: the step's notes + Notes from Body
-      let idleW342 = ""; try { if (bW.started_at && bW.left_production_at) idleW342 = idleLine342((await loadCabLife342([bW], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bW.id]); } catch (e) { idleW342 = ""; }   // Block 342
-      const bodyNames340 = Object.fromEntries((await db(`body_task?select=id,step_no,name&build_id=eq.${bW.id}`).catch(() => [])).map((t) => [t.id, `${t.step_no}. ${t.name}`]));
-      let bodyW339 = null; try { if (bW.wh_sent_back_at || bW.body_done_at) bodyW339 = (await bodyStatus326([bW]))[0] || null; } catch (e) { bodyW339 = null; }   // reviewer: the banner's Body facts (the sent-back lock reads the steps)
+      // Block 356: the independent pieces of the crating page load SIDE BY SIDE (each only reads; none needs another's answer)
+      const [stWA, notesW340, idleW342, bodyNames340, bodyW339, trackingW, kitDataW] = await Promise.all([
+        whStatus327([bW], true),
+        stepNotes340(bW.id),   // Block 340: the step's notes + Notes from Body
+        (async () => { try { if (bW.started_at && bW.left_production_at) return idleLine342((await loadCabLife342([bW], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bW.id]); } catch (e) { /* the idle line is optional */ } return ""; })(),
+        db(`body_task?select=id,step_no,name&build_id=eq.${bW.id}`).catch(() => []).then((rows) => Object.fromEntries(rows.map((t) => [t.id, `${t.step_no}. ${t.name}`]))),
+        (async () => { try { if (bW.wh_sent_back_at || bW.body_done_at) return (await bodyStatus326([bW]))[0] || null; } catch (e) { /* the banner's Body facts are optional */ } return null; })(),   // reviewer: the banner's Body facts (the sent-back lock reads the steps)
+        (async () => { try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); return ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { return ""; } })(),
+        ["upcoming", "active", "awaiting_inspection", "rework"].includes(String(bW.state)) ? whQueueData328(empW, meW).catch((eK) => { console.error("warehouse kit section:", eK && eK.message); return null; }) : null,
+      ]);
+      const [stW] = stWA;
       const sinceW341 = whPhotoSince341(bW, stW && stW.task); const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false${sinceW341 ? `&created_at=gte.${encodeURIComponent(sinceW341)}` : ""}&order=created_at.asc&limit=100`);   // reviewer: this round's photos
-      let trackingW = ""; try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); trackingW = ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { trackingW = ""; }
       // Block 328: the KIT work (verify / short / note / build sooner-later / pull / deliver / panel prep) lives HERE now —
       // the same whRow288 actions the Home used to carry, with the line context around them; a cab started short carries
       // the Parts-arrived tap. The queue data is the Home's own assembly (whQueueData328).
       let kit328 = null, owed328 = null; const canAct328 = clockedW || meW.role === "manager" || meW.role === "admin";
       if (["upcoming", "active", "awaiting_inspection", "rework"].includes(String(bW.state))) {
         try {
-          const dW = await whQueueData328(empW, meW);
+          const dW = kitDataW; if (!dW) throw new Error("no queue data");   // Block 356: loaded above, side by side
           const rW = dW.rowsW.find((r) => r.line.id === bW.line_id) || null; const qW = dW.buildsW.find((x) => x.id === bW.id) || null;
           if (rW && qW) {
             if (bW.state === "upcoming") {
