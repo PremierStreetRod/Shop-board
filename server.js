@@ -3385,7 +3385,7 @@ const whLinePrep347 = (r) => { const holder = whLineHolder347(r);
 const whTabCounts337 = (rows, builds, wh327, canPrep) => {
   const kits = rows.reduce((n, r) => n + whLineKitCount347(r), 0);
   const prep = canPrep ? rows.reduce((n, r) => n + whLinePrep347(r).open, 0) : 0;   // Block 347: on the line + on deck once pulled, not done (max 2 a line)
-  const fin = (wh327 || []).filter((st) => !st.gone && !st.back && !(st.task && st.task.state === "complete")).length;
+  const fin = (wh327 || []).filter((st) => !st.gone && !st.back && !st.inBody && !(st.task && st.task.state === "complete")).length;   // Block 359: a cab still in Body is not finish-out work yet
   return { kits, prep, fin };
 };
 // the open/close line card shared by both tabs. The toggle is a self-contained attribute (survives any in-place redraw) and
@@ -3459,16 +3459,18 @@ function whFinishTab337(stats) {
     <div><span class="o">Order ${esc(s.b.order_number)}</span> <span class="m">${s.b.cab_number ? `Cab #${esc(s.b.cab_number)} · ` : ""}${esc(s.family || s.b.part_number || "")}${s.b.customer_name ? ` · ${esc(s.b.customer_name)}` : ""}</span> <span style="float:right">${whModeChip327(s)} ${whChip327(s)}</span></div>
     <div class="s">${esc(s.status)}${s.b.body_done_at && !s.gone ? ` <span class="m">· in from Body ${esc(phxDate(new Date(s.b.body_done_at).getTime()))}</span>` : ""}</div>
   </a>`;
-  const todo = stats.filter((s) => !s.gone && !(s.task && s.task.state === "complete"));
+  const todo = stats.filter((s) => !s.gone && !s.inBody && !(s.task && s.task.state === "complete"));
   const waiting = stats.filter((s) => !s.gone && s.task && s.task.state === "complete");
   const gone = stats.filter((s) => s.gone);
+  const inBody359 = stats.filter((s) => s.inBody);   // Block 359: choose how they leave before they arrive
   const fold = (id, title, list) => list.length ? `<div class="fold326" onclick="var b=document.getElementById('${id}');b.style.display=b.style.display==='none'?'':'none'">&#9656; ${title} (${list.length})</div><div id="${id}" style="display:none">${list.map(card).join("")}</div>` : "";
   return `<div id="whlist327">
     <h2 style="margin:6px 0 6px">&#128230; In from Body — to finish out <span style="opacity:.6;font-size:.6em;font-weight:400">— ${todo.length} cab${todo.length === 1 ? "" : "s"}</span></h2>
     ${todo.length ? todo.map(card).join("") : `<div class="lane" style="opacity:.6">Nothing waiting — the next cab appears here the moment Body taps Done in primer.</div>`}
-    <div style="opacity:.5;font-size:.8rem;margin-top:6px">Tap a cab: Start the step, check every item while the clock runs, add a photo, Finish, then Shipped or Picked up. Pickup or ship comes from the Coyote order.</div>
+    <div style="opacity:.5;font-size:.8rem;margin-top:6px">Tap a cab: pick how it leaves (Pickup, Crate, Base or Pallet — the board's guess from the Coyote order is lit), Start the step, check every item while the clock runs, add a photo, Finish, then Shipped or Picked up.</div>
     <h2 style="margin:14px 0 6px">&#128666; Waiting to leave <span style="opacity:.6;font-size:.6em;font-weight:400">— ${waiting.length} crated or staged</span></h2>
     ${waiting.length ? waiting.map(card).join("") : `<div class="lane" style="opacity:.6">Nothing crated and waiting.</div>`}
+    ${fold("whbody359", "In Body — coming next (choose how they leave early)", inBody359)}
     ${fold("whgone327", "Gone — shipped or picked up", gone)}
   </div>`;
 }
@@ -6663,9 +6665,9 @@ const bodyStdPanelHtml326 = (rows = []) => `  <p style="opacity:.5;font-size:.85
   ${rows.length ? `<table><tr><th>Cab family</th>${BODY_STEPS326.map((s) => `<th>${s.no}. ${s.name}</th>`).join("")}<th></th></tr>
   ${rows.map((r) => `<tr><td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>${r.steps.map((st) => `<td><input class="num" id="bh-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}-${st.no}" value="${st.hours}" inputmode="decimal" step="0.25" style="width:4.5em"> ${st.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${st.median} &middot;${st.n}</span>` : `<span style="opacity:.4">${st.n ? st.n + " so far" : "—"}</span>`}</td>`).join("")}
     <td><button class="b" onclick="saveBodyStd326('${String(r.family).replace(/'/g, "\\'")}','${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td></tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}`;
-const whStdPanelHtml327 = (rows = []) => `  <p style="opacity:.5;font-size:.85rem">After Body: <b>Crating</b> for a cab we ship (Truck Freight in Coyote) and <b>Stage for pickup</b> for a cab the customer collects (Will Call). One number each per cab family; 2 h and 1 h to start. <b>Median actual</b> = the middle of the last 12 finished steps, from Warehouse punches (gray until 2). Changing a number applies to cabs that come out of Body from now on.</p>
-  ${rows.length ? `<table><tr><th>Cab family</th><th>Crating</th><th>Stage for pickup</th><th></th></tr>
-  ${rows.map((r) => `<tr><td><b>${String(r.family).replace(/</g, "&lt;")}</b></td>${["crate", "stage"].map((k) => { const st = r[k]; return `<td><input class="num" id="wh-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}-${k}" value="${st.hours}" inputmode="decimal" step="0.25" style="width:4.5em"> ${st.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${st.median} &middot;${st.n}</span>` : `<span style="opacity:.4">${st.n ? st.n + " so far" : "—"}</span>`}</td>`; }).join("")}
+const whStdPanelHtml327 = (rows = []) => `  <p style="opacity:.5;font-size:.85rem">After Body, by how the cab leaves (Block 359): <b>Pickup</b> (staged for the customer — Will Call), <b>Crate</b>, <b>Base</b> or <b>Pallet</b>. Hours allowed per cab family; the <b>sheet metal kit</b> rows (any -SMK part) crate in 4 h because the boxed panels go in the crate too. Eric's numbers (11/5): pickup 0.5 · crate 2 (kit 4) · base 1 · pallet 0.5. <b>Median actual</b> = the middle of the last 12 finished steps (gray until 2).</p>
+  ${rows.length ? `<table><tr><th>Cab family</th>${WH_HANDLING359.map((h) => `<th>${h.label}</th>`).join("")}<th></th></tr>
+  ${rows.map((r) => `<tr><td><b>${String(r.family).replace(/ SMK$/, "").replace(/</g, "&lt;")}</b>${/ SMK$/.test(r.family) ? ` <span style="opacity:.7">sheet metal kit</span>` : ""}</td>${WH_HANDLING359.map((h) => { const st = r[h.key]; return `<td><input class="num" id="wh-${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}-${h.key}" value="${st.hours}" inputmode="decimal" step="0.25" style="width:4.5em"> ${st.median != null ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800">${st.median} &middot;${st.n}</span>` : `<span style="opacity:.4;font-size:.8rem">${st.n ? st.n + " so far" : ""}</span>`}</td>`; }).join("")}
     <td><button class="b" onclick="saveWhStd327('${String(r.family).replace(/'/g, "\\'")}','${String(r.family).replace(/[^A-Za-z0-9]/g, "_")}',this)">Save</button></td></tr>`).join("")}</table>` : `<div style="opacity:.6">No cab families in the catalog yet.</div>`}`;
 const prepPanelHtml324 = (prep301 = []) => `  <p style="opacity:.5;font-size:.85rem">Laser-stripping the weld areas, done by whoever has <b>Panel prep</b> checked under People (Eric). One number per cab family; 3.0 h to start. <b>Median actual</b> = the middle of the last 12 cabs marked ready (gray until 2 cabs). Punches set the actuals — nothing is typed.</p>
   ${prep301.length ? `<table><tr><th>Cab family</th><th>Hours allowed</th><th>Median actual</th><th>Last cab</th><th></th></tr>
@@ -7143,7 +7145,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   }
   function saveHours(btn){ post("/api/admin/shop-hours", { open: Number(v("sh-open")), close: Number(v("sh-close")) }, btn); }
   function saveBodyStd326(family, key, btn){ post("/api/admin/body-standard", { family: family, hours: [1, 2, 3].map(function (n) { return Number(v("bh-" + key + "-" + n)); }) }, btn); }   // Block 326
-  function saveWhStd327(family, key, btn){ post("/api/admin/wh-standard", { family: family, crate: Number(v("wh-" + key + "-crate")), stage: Number(v("wh-" + key + "-stage")) }, btn); }   // Block 327
+  function saveWhStd327(family, key, btn){ var hrs = {}; ${JSON.stringify(WH_HANDLING359.map((h) => h.key))}.forEach(function(k){ hrs[k] = Number(v("wh-" + key + "-" + k)); }); post("/api/admin/wh-standard", { family: family, hours: hrs }, btn); }   // Block 327 · 359: every handling
   // Q91: shop calendar + day-start nudge times.
   function saveNudge(btn){ post("/api/admin/nudge-times", { mon: v("ng-mon"), tue: v("ng-tue"), wed: v("ng-wed"), thu: v("ng-thu"), fri: v("ng-fri") }, btn); }
   function saveCalendar(isOpen, btn){ post("/api/admin/calendar", { action: "set", cal_date: v("cal-date"), is_open: isOpen, reason: v("cal-reason") }, btn); }
@@ -7613,6 +7615,57 @@ const WH_FIXED_ALIAS352 = { "ALL Parts for this Shipment are Present": ["Hardwar
 const WH_CHECK_PREFIX327 = "WH: ";
 // pickup vs ship, read from the latest Coyote push (order.ship_method): "Will Call" = the customer picks it up; anything else we crate & ship
 const shipModeOf327 = (sm) => /will\s*call|pick\s*up|pickup/i.test(String(sm || "")) ? "pickup" : "ship";
+// ===== Block 359 (Daniel 11/5 09:31–10:08, Plan 83): HOW A CAB LEAVES — Pickup / Crate / Base / Pallet =====
+// ONE list. A 5th handling later = one more line here + its hours row in Admin → Warehouse hours. `cab` / `smk` = the
+// default hours allowed (Eric's numbers, 10:04/10:08) when a family has no row yet; a sheet metal kit (any -SMK part) is its own row set.
+const WH_HANDLING359 = [
+  { key: "stage",  label: "Pickup", icon: "&#128663;", mode: "pickup", name: "Stage for pickup", cab: 0.5, smk: 0.5, photo: "staged for pickup", past: "Staged" },
+  { key: "crate",  label: "Crate",  icon: "&#128230;", mode: "ship",   name: "Crating",          cab: 2,   smk: 4,   photo: "crated",            past: "Crated" },
+  { key: "base",   label: "Base",   icon: "&#129717;", mode: "ship",   name: "Build a base",     cab: 1,   smk: 1,   photo: "on its base",       past: "On its base" },
+  { key: "pallet", label: "Pallet", icon: "&#129521;", mode: "ship",   name: "Put on a pallet",  cab: 0.5, smk: 0.5, photo: "on its pallet",     past: "On its pallet" },
+];
+const WH_PENDING359 = { key: "pending", name: "Choose how it leaves", photo: "ready to leave", past: "Ready" };
+const whH359 = (k) => WH_HANDLING359.find((h) => h.key === k) || null;
+const whModeOfKind359 = (k) => (whH359(k) || {}).mode || "ship";
+const isSmk359 = (pn, prod) => Boolean((prod && prod.is_smk) || /-SMK\b/i.test(String(pn || "")));
+const whStdFamily359 = (fam, smk) => (smk ? `${fam} SMK` : fam);
+// hours allowed for one handling — wh_standard is in the 60 s shared memory (Block 356), so this costs no trip when warm
+async function whAllowed359(fam, smk, key) {
+  const h = whH359(key); if (!h) return 0;
+  const std = fam ? await db(`wh_standard?select=family,kind,hours&order=family,kind`).catch(() => []) : [];
+  const r = std.find((x) => x.family === whStdFamily359(fam, smk) && x.kind === key);
+  return r ? Number(r.hours) : (smk ? h.smk : h.cab);
+}
+// the board's first guess: Coyote's ship method + the order note (where the office really writes it). Pure — no trips.
+const WH_KW359 = [["crate", /\bcrat(?:e|es|ed|ing)\b(?!\s*(?:engine|motor))/gi], ["base", /\b(?:skid|base)\b(?!\s*-?\s*coat)/gi], ["pallet", /\bpallet(?:s|ed|ized?)?\b/gi]];   // Fable audit: "crate engine" and "base coat" are not handling
+function whGuess359(sm, note) {
+  const s = String(sm || "").trim(), n = String(note || "").replace(/\s+/g, " ").trim();
+  const hits = [];
+  for (const [k, re] of WH_KW359) { re.lastIndex = 0; let m; while ((m = re.exec(n))) {
+    const before = n.slice(Math.max(0, m.index - 24), m.index);
+    hits.push({ k, neg: /\b(?:no|not|don'?t|dont|without|w\/o|never|skip|instead of)\b[\s\w'-]{0,14}$/i.test(before), snip: n.slice(Math.max(0, m.index - 28), m.index + m[0].length + 28).trim() }); } }
+  const pos = [...new Set(hits.filter((x) => !x.neg).map((x) => x.k))];
+  const negOf = (k) => hits.some((x) => x.k === k && x.neg);
+  const snip = (k) => { const x = hits.find((y) => y.k === k && !y.neg) || hits.find((y) => y.k === k); return x ? `“…${x.snip}…”` : ""; };
+  const lab = (k) => (whH359(k) || {}).label || k;
+  const smTxt = s ? `Coyote says ${s}` : "no ship method on the Coyote order";
+  const willCall = /will\s*call|pick\s*-?\s*up|pickup/i.test(s);
+  const third = /\b3rd\b|third\s*party/i.test(s) || /customer\b[^.]{0,40}\barrang|\barrang\w*\s+(?:their|his|her|its|the(?:ir)? own)\b[^.]{0,30}\bship/i.test(n);
+  if (willCall) return pos.length ? { key: null, why: `${smTxt}, but the note mentions ${pos.map(lab).join(" + ").toLowerCase()} ${snip(pos[0])} — pick one` } : { key: "stage", why: smTxt };
+  if (pos.length > 1) return { key: null, why: `The note mentions ${pos.map(lab).join(" and ").toLowerCase()} — pick one` };
+  if (pos.length === 1) return negOf(pos[0]) ? { key: null, why: `The note says ${lab(pos[0]).toLowerCase()} both ways ${snip(pos[0])} — pick one` } : { key: pos[0], why: `The note says ${snip(pos[0])}` };
+  if (hits.length) return { key: null, why: `The note rules out ${[...new Set(hits.map((x) => lab(x.k)))].join(" / ").toLowerCase()} ${snip(hits[0].k)} — pick one` };
+  if (third) return { key: null, why: `${s && /\b3rd\b|third\s*party/i.test(s) ? smTxt : "The note says the customer arranges shipping"} — nothing says crate, base or pallet` };
+  return { key: "crate", why: smTxt };
+}
+// ship method + note for many orders in ONE read (the ship-method read the warehouse already made, one more column)
+async function shipInfo359(roots) {
+  const want = [...new Set(roots.filter(Boolean).map(String))];
+  const out = { sm: {}, note: {} }; if (!want.length) return out;
+  const rows = await db(`coyote_intake?select=order_number,received_at,sm:payload->order->>ship_method,nt:payload->order->>invoice_note&order_number=in.(${want.map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
+  for (const r of rows) if (!(r.order_number in out.sm)) { out.sm[r.order_number] = String(r.sm || "").trim(); out.note[r.order_number] = String(r.nt || ""); }
+  return out;
+}
 function whBucket327(evs) {
   const open = {}, byBuild = {}, byTask = {}, onNow = {}, lastOff = {}, now = Date.now();   // Block 338: lastOff[task]
   const close = (emp, t) => { const o = open[emp]; if (o) { if (o.line === WH_LINE_ID && o.fix && o.task) { byBuild[o.fix] = (byBuild[o.fix] || 0) + (t - o.start); byTask[o.task] = (byTask[o.task] || 0) + (t - o.start); lastOff[o.task] = emp; } open[emp] = null; } };
@@ -7640,28 +7693,29 @@ async function whHours327(buildIds) {
   return out;
 }
 // the latest ship_method per order root (same read as coyoteStatusFor323, one more column)
-async function shipMethodFor327(roots) {
-  const want = [...new Set(roots.filter(Boolean).map(String))];
-  if (!want.length) return {};
-  const rows = await db(`coyote_intake?select=order_number,received_at,sm:payload->order->>ship_method&order_number=in.(${want.map((r) => encodeURIComponent(r)).join(",")})&order=received_at.desc&limit=3000`);
-  const out = {};
-  for (const r of rows) if (!(r.order_number in out)) out[r.order_number] = String(r.sm || "").trim();
-  return out;
-}
+async function shipMethodFor327(roots) { return (await shipInfo359(roots)).sm; }   // Block 359: the same single read now also brings the order note
 // The one step for a cab, created when Body signs it out (Done in primer). Idempotent — a cab sent back to Body and
 // signed out again keeps the step (and its hours). Hours allowed freeze from wh_standard by family.
 async function ensureWhTask327(b, actorId) {
-  const have = await db(`wh_task?select=id,round&build_id=eq.${b.id}&order=round.desc&limit=1`);
-  const bodyR = await db(`body_task?select=round&build_id=eq.${b.id}&order=round.desc&limit=1`).catch(() => []);
+  // Block 359: every read this needs goes out together (was 5 in a row); the handling = Eric's choice, else the guess, else "pending"
+  const root = rootOf323(b);
+  const [have, bodyR, prods, info, bh] = await Promise.all([
+    db(`wh_task?select=id,round&build_id=eq.${b.id}&order=round.desc&limit=1`),
+    db(`body_task?select=round&build_id=eq.${b.id}&order=round.desc&limit=1`).catch(() => []),
+    db("product?select=part_number,family,is_smk").catch(() => []),
+    shipInfo359([root]),
+    db(`build?select=wh_handling&id=eq.${b.id}`).catch(() => []),
+  ]);
   const round = bodyR[0] ? Number(bodyR[0].round || 1) : 1;
   if (have.length && Number(have[0].round || 1) >= round) return false;   // Block 341: a fresh Body round (after a fix) gets a fresh crating step; otherwise idempotent as before
-  const [prod] = b.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(b.part_number)}`) : [null];
-  const fam = prod && prod.family ? prod.family : "";
-  const sm = (await shipMethodFor327([rootOf323(b)]))[rootOf323(b)] || "";
-  const mode = shipModeOf327(sm); const k = WH_KIND327[mode];
-  const std = fam ? await db(`wh_standard?select=kind,hours&family=eq.${encodeURIComponent(fam)}&kind=eq.${k.kind}`) : [];
-  await db("wh_task", { method: "POST", body: JSON.stringify([{ build_id: b.id, round, kind: k.kind, name: k.name, state: "not_started", hours_allowed: std[0] ? Number(std[0].hours) : k.dflt }]) });
-  logEvent("wh.entered", actorId || null, { build_id: b.id, order_number: b.order_number, family: fam, mode, ship_method: sm || null, step: k.name, round });
+  const prod = prods.find((x) => String(x.part_number).toUpperCase() === String(b.part_number || "").toUpperCase()) || null;
+  const fam = prod && prod.family ? prod.family : ""; const smk = isSmk359(b.part_number, prod);
+  const sm = info.sm[root] || ""; const guess = whGuess359(sm, info.note[root]);
+  const chosen = bh[0] && whH359(bh[0].wh_handling) ? bh[0].wh_handling : null;
+  const key = chosen || guess.key || "pending"; const h = whH359(key) || WH_PENDING359;
+  const allowed = key === "pending" ? 0 : await whAllowed359(fam, smk, key);
+  await db("wh_task", { method: "POST", body: JSON.stringify([{ build_id: b.id, round, kind: key, name: h.name, state: "not_started", hours_allowed: allowed }]) });
+  logEvent("wh.entered", actorId || null, { build_id: b.id, order_number: b.order_number, family: fam, mode: key === "pending" ? shipModeOf327(sm) : whModeOfKind359(key), sheet_metal_kit: smk, handling: key, chosen: Boolean(chosen), guess: guess.key, why: guess.why, ship_method: sm || null, step: h.name, round });
   return true;
 }
 // the done-right checklist: every sold line (cab lines + the kit panels) + the fixed checks; evidence = the inspection
@@ -7682,15 +7736,17 @@ async function whChecklist327(b) {
 async function whStatus327(builds, withChecks = false) {
   const ids = builds.map((b) => b.id);
   if (!ids.length) return [];
-  const [tasks, hrs, prods, sms] = await Promise.all([
+  const [tasks, hrs, prods, info359] = await Promise.all([
     dbAll252(`wh_task?select=id,build_id,round,kind,name,hours_allowed,state,started_by,started_at,completed_by,completed_at,created_at&build_id=in.(${ids.join(",")})&order=round.desc,created_at.desc`),   // Block 341: the latest round first
     whHours327(ids),
-    db("product?select=part_number,family"),
-    shipMethodFor327(builds.map(rootOf323)),
+    db("product?select=part_number,family,is_smk"),   // Block 359: is_smk rides the same cached read
+    shipInfo359(builds.map(rootOf323)),   // Block 359: ship method + note, the same single read
   ]);
+  const sms = info359.sm, notes359 = info359.note;
   const famOf = Object.fromEntries(prods.map((p) => [String(p.part_number).toUpperCase(), p.family]));
+  const prodOf359 = Object.fromEntries(prods.map((p) => [String(p.part_number).toUpperCase(), p]));
   const checksAll = withChecks ? await Promise.all(builds.map((b) => whChecklist327(b))) : null;
-  const who = new Set(); for (const t of tasks) { if (t.started_by) who.add(t.started_by); if (t.completed_by) who.add(t.completed_by); } for (const b of builds) { if (b.shipped_by) who.add(b.shipped_by); if (b.body_done_by) who.add(b.body_done_by); }
+  const who = new Set(); for (const t of tasks) { if (t.started_by) who.add(t.started_by); if (t.completed_by) who.add(t.completed_by); } for (const b of builds) { if (b.shipped_by) who.add(b.shipped_by); if (b.body_done_by) who.add(b.body_done_by); if (b.wh_handling_by) who.add(b.wh_handling_by); }
   if (checksAll) for (const rows of checksAll) for (const r of rows) { if (r.check && r.check.checked_by) who.add(r.check.checked_by); if (r.evidence && r.evidence.by) who.add(r.evidence.by); }
   const extra = [...who].filter((id) => !hrs.names[id]);
   if (extra.length) for (const p of await db(`employee?select=id,first_name,last_name&id=in.(${extra.join(",")})`)) hrs.names[p.id] = `${p.first_name} ${p.last_name ? p.last_name[0] + "." : ""}`.trim();
@@ -7698,28 +7754,41 @@ async function whStatus327(builds, withChecks = false) {
   return builds.map((b, i) => {
     const t0 = tasks.find((t) => t.build_id === b.id) || null;
     const task = t0 ? { ...t0, hours: Math.round((hrs.byTask[t0.id] || 0) * 10) / 10, on: (hrs.onNow[t0.id] || []).map((o) => ({ id: o.emp, name: hrs.names[o.emp] || "someone", since: o.since })), lastOff: (hrs.lastOff || {})[t0.id] || null } : null;   // Block 338
-    const sm = sms[rootOf323(b)] || ""; const mode = b.ship_mode || (b.shipped_at ? "ship" : shipModeOf327(sm));
+    const sm = sms[rootOf323(b)] || "";
+    // Block 359: the handling — Eric's choice, else a started step's kind, else the board's guess (ship method + note), else pending
+    const guess = whGuess359(sm, notes359[rootOf323(b)]);
+    const chosenK = whH359(b.wh_handling) ? b.wh_handling : null;
+    const stepK = task && whH359(task.kind) && task.state !== "not_started" ? task.kind : null;
+    const hKey = chosenK || stepK || (task && whH359(task.kind) ? task.kind : null) || guess.key || null;
+    const pending = !b.shipped_at && !hKey;
+    const smk = isSmk359(b.part_number, prodOf359[String(b.part_number || "").toUpperCase()]);
+    const handling = { key: hKey, chosen: Boolean(chosenK), by: b.wh_handling_by || null, at: b.wh_handling_at || null, guess: guess.key, why: guess.why, pending, smk,
+      drift: !b.shipped_at && guess.key && hKey && guess.key !== hKey && (chosenK || stepK) ? guess.key : null };   // Coyote / the note now suggest something else — say so, never override
+    const mode = b.ship_mode || (b.shipped_at ? "ship" : hKey ? whModeOfKind359(hKey) : shipModeOf327(sm));
     const checks = checksAll ? checksAll[i] : null;
     const checked = checks ? checks.filter((r) => r.check).length : (shipCounts[b.id] || 0);
     const total = checks ? checks.length : null;
     const hours = task ? task.hours : 0;   // Block 341 (reviewer): the latest round's step, not every round's punches
     const gone = Boolean(b.shipped_at); const back = Boolean(b.wh_sent_back_at && !b.body_done_at);
     const locked = checks ? whCheckLocked336(b, checks) : false;   // Block 336
-    const modeMismatch = Boolean(task && !gone && task.state !== "not_started" && WH_KIND327[mode] && task.kind !== WH_KIND327[mode].kind);   // Block 336 (F5): Coyote changed its mind after the step started
-    const status = gone ? `${mode === "pickup" ? "picked up" : "shipped"} ${phxDate(new Date(b.shipped_at).getTime())}` : back ? "sent back to Body" : !task ? "waiting — no step yet"
+    const modeMismatch = Boolean(!gone && handling.drift);   // Block 336 (F5) → 359: the step was started / chosen and Coyote or the note now suggest another handling
+    const status = gone ? `${mode === "pickup" ? "picked up" : "shipped"} ${phxDate(new Date(b.shipped_at).getTime())}` : back ? "sent back to Body" : !task ? (b.body_done_at ? "waiting — no step yet" : "in Body — not out yet")
+      : task.kind === "pending" ? "choose how it leaves — Pickup, Crate, Base or Pallet"   // Block 359
       : task.state === "complete" ? `${task.name.toLowerCase()} finished — ${task.hours} h · ready for the ${mode === "pickup" ? "pickup" : "ship"} tap` : task.state === "in_progress" ? `${task.name.toLowerCase()} — ${task.hours} of ${Number(task.hours_allowed)} h${task.on.length ? ` · ${task.on.map((o) => o.name).join(" + ")} on it` : " · paused"} · ${checked}${total != null ? " of " + total : ""} checked` : `not started · tap Start, then check every item`;   // Block 336: the check is worked on the clock
-    return { b, family: famOf[String(b.part_number || "").toUpperCase()] || "", task, mode, shipMethod: sm, hours, allowed: task ? Number(task.hours_allowed) : 0, checks, checked, total, gone, back, status, names: hrs.names, onNames: task ? [...new Set(task.on.map((o) => o.name))] : [], locked, modeMismatch };
+    return { b, family: famOf[String(b.part_number || "").toUpperCase()] || "", task, mode, handling, inBody: !gone && !back && !b.body_done_at, shipMethod: sm, hours, allowed: task ? Number(task.hours_allowed) : 0, checks, checked, total, gone, back, status, names: hrs.names, onNames: task ? [...new Set(task.on.map((o) => o.name))] : [], locked, modeMismatch };
   });
 }
 // the finish-out list: every cab out of Body and not gone (oldest first), the cabs sent back (so the list says so), and the last 15 gone
 async function whFinishList327() {
-  const cols = "id,order_number,cab_number,part_number,coyote_root,customer_name,state,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_sent_back_reason";
-  const [here, gone] = await Promise.all([
+  const cols = "id,order_number,cab_number,part_number,coyote_root,customer_name,state,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_sent_back_reason,wh_handling,wh_handling_by,wh_handling_at";
+  // Block 359: + the cabs still IN BODY (so Eric can choose how they leave early) — a third read in the SAME parallel load, no extra wait
+  const [here, gone, inBody] = await Promise.all([
     dbAll252(`build?select=${cols}&state=in.(production_complete,complete)&body_moved_to_build_at=is.null&shipped_at=is.null&or=(body_done_at.not.is.null,wh_sent_back_at.not.is.null)&order=body_done_at.asc.nullslast,left_production_at.asc.nullslast,id.asc`),
     db(`build?select=${cols}&shipped_at=not.is.null&order=shipped_at.desc&limit=15`),
+    db(`build?select=${cols}&state=in.(production_complete,complete)&body_moved_to_build_at=is.null&shipped_at=is.null&body_done_at=is.null&wh_sent_back_at=is.null&order=left_production_at.asc.nullslast,id.asc&limit=40`).catch(() => []),
   ]);
   const seen = new Set(); const all = [];
-  for (const b of here.concat(gone)) { if (seen.has(b.id)) continue; seen.add(b.id); if (b.stage === "shipped" && !b.shipped_at) continue; all.push(b); }
+  for (const b of here.concat(gone, inBody)) { if (seen.has(b.id)) continue; seen.add(b.id); if (b.stage === "shipped" && !b.shipped_at) continue; all.push(b); }
   return whStatus327(all);
 }
 // the clock stint helpers — a pause / finish puts the person back where they came from
@@ -7941,25 +8010,33 @@ async function voidShipChecks341(buildId, orderNumber, actorId, because) {
 }
 // Block 336 (F5): while the step has NOT started, Coyote's ship method rules — if it changed since the cab left Body the
 // step swaps Crating <-> Stage for pickup (with that kind's hours allowed); once started the step stays and the page shows the disagreement.
-async function whReconcileMode336(b, task, sm, actorId) {
+async function whReconcileMode336(b, task, sm, actorId, note) {
   if (!task || task.state !== "not_started") return task;
-  const mode = shipModeOf327(sm); const k = WH_KIND327[mode];
-  if (task.kind === k.kind) return task;
-  const [prod] = b.part_number ? await db(`product?select=family&part_number=eq.${encodeURIComponent(b.part_number)}`).catch(() => [null]) : [null];
-  const fam = prod && prod.family ? prod.family : "";
-  const std = fam ? await db(`wh_standard?select=kind,hours&family=eq.${encodeURIComponent(fam)}&kind=eq.${k.kind}`).catch(() => []) : [];
-  const patch = { kind: k.kind, name: k.name, hours_allowed: std[0] ? Number(std[0].hours) : k.dflt };
+  // Block 359: Eric's choice (build.wh_handling) wins and is never re-guessed; otherwise the guess from ship method + note, else "pending"
+  const chosen = whH359(b.wh_handling) ? b.wh_handling : null;
+  const guess = whGuess359(sm, note);
+  const key = chosen || guess.key || "pending";
+  if (task.kind === key) return task;
+  const [prods] = await Promise.all([db("product?select=part_number,family,is_smk").catch(() => [])]);
+  const prod = prods.find((x) => String(x.part_number).toUpperCase() === String(b.part_number || "").toUpperCase()) || null;
+  const fam = prod && prod.family ? prod.family : ""; const smk = isSmk359(b.part_number, prod);
+  const h = whH359(key) || WH_PENDING359;
+  const patch = { kind: key, name: h.name, hours_allowed: key === "pending" ? 0 : await whAllowed359(fam, smk, key) };
   await db(`wh_task?id=eq.${task.id}&state=eq.not_started`, { method: "PATCH", body: JSON.stringify(patch) });   // reviewer: never a started step (a Start between the read and this write)
-  logEvent("wh.mode_swapped", actorId || null, { build_id: b.id, order_number: b.order_number, from: task.name, to: k.name, ship_method: sm || null });
+  logEvent("wh.mode_swapped", actorId || null, { build_id: b.id, order_number: b.order_number, from: task.name, to: h.name, handling: key, chosen: Boolean(chosen), guess: guess.key, why: guess.why, ship_method: sm || null });
   return { ...task, ...patch };
 }
-const whModeChip327 = (st) => st.mode === "pickup" ? `<span class="chip" style="background:#3a2f10;color:#ffd60a">&#128663; PICKUP</span>` : `<span class="chip" style="background:#10233a;color:#5eaeff">&#128230; SHIP</span>`;
+const whModeChip327 = (st) => { const hd = st.handling || {}; const h = whH359(hd.key);   // Block 359: the handling, not just pickup/ship
+  if (!h && hd.pending) return `<span class="chip" style="background:#3a2410;color:#ff9f0a">&#10067; Choose how it leaves</span>`;
+  if (!h) return st.mode === "pickup" ? `<span class="chip" style="background:#3a2f10;color:#ffd60a">&#128663; PICKUP</span>` : `<span class="chip" style="background:#10233a;color:#5eaeff">&#128230; SHIP</span>`;
+  return `<span class="chip" style="${h.mode === "pickup" ? "background:#3a2f10;color:#ffd60a" : "background:#10233a;color:#5eaeff"}">${h.icon} ${h.label.toUpperCase()}${hd.smk ? " · SHEET METAL KIT" : ""}</span>`; };
 const whChip327 = (st) => st.gone ? `<span class="chip ok">&#10003; ${st.mode === "pickup" ? "Picked up" : "Shipped"}</span>` : st.back ? `<span class="chip" style="background:#3a1520;color:#ff8fa3">Back in Body</span>` : st.task && st.task.state === "complete" ? `<span class="chip" style="background:#173a2b;color:#5edb84">${st.mode === "pickup" ? "Staged" : "Crated"}</span>` : st.task && st.task.state === "in_progress" && st.task.on.length ? `<span class="chip" style="background:#10233a;color:#5eaeff">&#9881; In progress</span>` : st.task && st.task.state === "in_progress" ? `<span class="chip" style="background:#2c2c2e;color:#c7c7cc">&#9208; Paused</span>` : `<span class="chip unv">Waiting</span>`;
 // the lists — cards only, no buttons (the department pattern)
 function whList327(stats, forHome) {
   const esc = escH;
-  const inWh = stats.filter((s) => !s.gone);   // a cab sent back to Body stays on the list with its chip — Eric sees where it went
+  const inWh = stats.filter((s) => !s.gone && !s.inBody);   // a cab sent back to Body stays on the list with its chip — Eric sees where it went
   const gone = stats.filter((s) => s.gone);
+  const inBody359 = stats.filter((s) => s.inBody);   // Block 359
   const card = (s) => `<a class="bcard" href="/warehouse/${encodeURIComponent(s.b.order_number)}">
     <div><span class="o">Order ${esc(s.b.order_number)}</span> <span class="m">${s.b.cab_number ? `Cab #${esc(s.b.cab_number)} · ` : ""}${esc(s.family || s.b.part_number || "")}${s.b.customer_name ? ` · ${esc(s.b.customer_name)}` : ""}</span> <span style="float:right">${whModeChip327(s)} ${whChip327(s)}</span></div>
     <div class="s">${esc(s.status)}${s.b.body_done_at && !s.gone ? ` <span class="m">· in from Body ${esc(phxDate(new Date(s.b.body_done_at).getTime()))}</span>` : ""}</div>
@@ -7968,6 +8045,7 @@ function whList327(stats, forHome) {
   return `<div id="whlist327">
     <h2 style="margin:${forHome ? "18px" : "6px"} 0 6px">&#128230; In from Body — to finish out <span style="opacity:.6;font-size:.6em;font-weight:400">— ${inWh.length} cab${inWh.length === 1 ? "" : "s"}</span></h2>
     ${inWh.length ? inWh.map(card).join("") : `<div class="lane" style="opacity:.6">Nothing waiting — the next cab appears here the moment Body taps Done in primer.</div>`}
+    ${fold("whbody359", "In Body — coming next (choose how they leave early)", inBody359)}
     ${fold("whgone327", "Gone — shipped or picked up", gone)}
   </div>`;
 }
@@ -8014,9 +8092,26 @@ const whCabPage327 = (emp, st, opts) => {
     ? (o.canShip ? `<button class="b mv" onclick="arm(this,()=>whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'reopen'},this))">Reopen</button>` : "")
     : mineOn
       ? `<button class="b grn big" id="finish352" data-photo-ok="${photoOk ? "1" : "0"}" ${allChecked && photoOk ? "" : "disabled"} title="${allChecked && photoOk ? "" : esc(finishWhy)}" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'done'},this)">&#10003; Finish</button> <button class="b" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'pause'},this)">&#9208; Pause</button> <button class="b mv" onclick="document.getElementById('wpf327').click()">&#128247; Photo</button> ${noteBox340("/api/wh/note", b.id, t.id)}<input type="file" id="wpf327" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpm327')"><span id="wpm327" class="msg"></span>`
+      : t.kind === "pending" ? `<button class="b grn" disabled title="Pick how it leaves first">&#9654; Start</button> <span style="opacity:.7;font-size:.9rem">Pick how it leaves first (above)</span>`   // Block 359
       : `<button class="b grn" onclick="whPost('/api/wh/step',{build_id:'${b.id}',task_id:'${t.id}',action:'start'},this)">${t.state === "in_progress" ? "&#9654; " + (t.on.length ? "Join" : t.lastOff === emp.id ? "Resume" : "Pick it up") : "&#9654; Start"}</button>`;   // Block 338 (H3)
   const stepDone = t && t.state === "complete";
   const shipWord = st.mode === "pickup" ? "Picked up" : "Shipped";
+  // Block 359 (Plan 83): HOW IT LEAVES — four big buttons; the current one lit; the board's guess + why under them; one tap to change
+  const hd = st.handling || {}; const hNow = whH359(hd.key);
+  const canHandle359 = Boolean(o.canShip && !st.gone && !st.back);
+  const sibs359 = Number(o.siblings || 0);
+  const hBtn = (h) => `<button class="b${hd.key === h.key ? " grn" : ""}" style="flex:1 1 120px;min-height:56px;font-size:1.05rem;${hd.key === h.key ? "outline:2px solid #30d158;" : ""}" ${canHandle359 ? `onclick="${hd.key === h.key ? "" : `${stepStarted ? "arm(this,()=>" : ""}whPost('/api/wh/handling',{build_id:'${b.id}',handling:'${h.key}'},this)${stepStarted ? ")" : ""}`}"` : "disabled"}>${h.icon} ${h.label}</button>`;
+  const guessLine = hd.chosen
+    ? `Set by ${esc(nm(hd.by) || "the warehouse")}${hd.at ? " " + esc(phxDate(new Date(hd.at).getTime())) : ""}${hd.guess && hd.guess !== hd.key ? ` · the board had guessed ${esc((whH359(hd.guess) || {}).label || "")}` : ""}`
+    : hd.pending ? `<b style="color:#ff9f0a">Choose how it leaves.</b> ${esc(hd.why || "")}`
+    : `Board's guess: <b>${esc(hNow ? hNow.label : "")}</b> — ${esc(hd.why || "")}. Tap another if it's wrong.`;
+  const driftLine = hd.drift ? `<div style="color:#ffd60a;margin-top:6px">Coyote / the order note now suggest <b>${esc((whH359(hd.drift) || {}).label || hd.drift)}</b> — check with the office; your choice stays until you change it.</div>` : "";
+  const handlingLane359 = st.gone ? "" : `<div class="lane" style="border-color:${hd.pending ? "#ff9f0a" : "var(--line)"}"><b>How it leaves</b>${hd.smk ? ` <span style="opacity:.7">· sheet metal kit</span>` : ""}${o.tracking ? ` <span style="opacity:.6">· tracking ${esc(o.tracking)}</span>` : ""}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px">${WH_HANDLING359.map(hBtn).join("")}</div>
+    <div style="opacity:.8;font-size:.9rem">${guessLine}</div>${driftLine}
+    ${canHandle359 && sibs359 > 0 && hNow ? `<div style="margin-top:8px"><button class="b mv" onclick="arm(this,()=>whPost('/api/wh/handling',{build_id:'${b.id}',handling:'${hNow.key}',all_cabs:true},this))">Same for all ${sibs359 + 1} cabs on this order — ${hNow.label}</button></div>` : ""}
+    ${!canHandle359 && !st.back ? `<div style="opacity:.55;font-size:.85rem;margin-top:4px">The warehouse or an admin sets this.</div>` : ""}
+  </div>`;
   const missing = [];
   if (!allChecked) missing.push(`${rows.length - nChecked} item${rows.length - nChecked === 1 ? "" : "s"} not checked`);
   if (!stepDone) missing.push(t ? `${t.name.toLowerCase()} not finished` : "no step on this cab");
@@ -8046,13 +8141,12 @@ const whCabPage327 = (emp, st, opts) => {
   <div style="opacity:.7;margin-bottom:8px">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(st.family || b.part_number || "")}${b.customer_name ? ` · ${esc(b.customer_name)}` : ""} · <a href="/order/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">order page</a></div>
   ${o.kit ? `<div class="lane" style="border-color:#3d6ea8;padding:12px"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:4px">&#128230; KIT &mdash; ${esc(o.kit.lineName)}</div><div style="opacity:.7;font-size:.9rem;margin-bottom:8px">${o.kit.context}</div>${o.kit.html}<div class="msg err" id="err"></div></div>` : ""}
   ${o.owed ? whOwedLane344(b, o.owed, o.canAct) : ""}
-  ${o.kit && !b.body_done_at ? "" : `${bar352}<div class="lane" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>${st.mode === "pickup" ? "<b>Customer pickup</b> — Coyote says Will Call" : `<b>We crate &amp; ship</b>${st.shipMethod ? ` — Coyote says ${esc(st.shipMethod)}` : " — no ship method on the Coyote order yet"}`}${o.tracking ? ` · tracking ${esc(o.tracking)}` : ""}</span>${b.body_done_at ? `<span style="opacity:.6">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</span>` : ""}</div>
+  ${o.kit && !b.body_done_at ? "" : `${bar352}${handlingLane359}${b.body_done_at ? `<div style="opacity:.6;font-size:.9rem;margin:-4px 0 6px;text-align:right">in from Body ${esc(phxDate(new Date(b.body_done_at).getTime()))}${b.body_done_by && nm(b.body_done_by) ? " — " + esc(nm(b.body_done_by)) : ""}</div>` : ""}
   ${st.back ? `<div class="lane" style="border-color:#ff8fa3"><b>Sent back to Body</b> ${b.wh_sent_back_at ? esc(phxDate(new Date(b.wh_sent_back_at).getTime())) : ""}${b.wh_sent_back_reason ? ` — ${esc(b.wh_sent_back_reason)}` : ""} · the cab comes back here when Body taps Done in primer again.</div>` : ""}
-  ${st.modeMismatch ? `<div class="lane" style="border-color:#ffd60a;color:#ffd60a">Coyote now says <b>${esc(st.shipMethod || "?")}</b> but this cab's step is <b>${esc(t ? t.name : "")}</b> — check with the office before it leaves.</div>` : ""}
   ${(o.notes || []).some((n) => n.body_task_id) ? `<div class="lane" style="border-color:#bf5af2"><b>&#128221; Notes from Body</b> <span style="opacity:.6;font-size:.9rem">— what Isaac and Jason wrote on the steps</span>${noteList340((o.notes || []).filter((n) => n.body_task_id).map((n) => ({ ...n, note: `${(o.bodyStepNames || {})[n.body_task_id] ? (o.bodyStepNames || {})[n.body_task_id] + ": " : ""}${n.note}` })))}</div>` : ""}
   <div class="lane"><b>&#9745; Done-right check</b> <span style="opacity:.6;font-size:.9rem">— ${nChecked} of ${rows.length}${allChecked ? ` · <span style="color:#5edb84">&#10003; complete</span>` : stepDone ? ` · <span style="color:#ffd60a">step finished with items open — Reopen it above</span>` : stepStarted ? " · tick each one standing at the cab, then Save" : " · worked on the clock — tap ▶ Start above first"}</span>${o.canShip && !stepStarted && !st.gone && !st.back && t ? `<div style="opacity:.7;font-size:.85rem;margin-top:4px">Tap <b>&#9654; Start</b> at the top, then tick every item while the clock runs and Save. Finish waits for the last check.</div>` : ""}${can && !o.canShip && stepStarted ? `<div style="opacity:.6;font-size:.85rem;margin-top:4px">The check is the warehouse's — you can run the clock and tap Finish once their list is complete.</div>` : ""}${locked && o.isAdmin ? `<div style="margin-top:6px"><button class="b mv" onclick="arm(this,()=>whPost('/api/wh/unlock',{build_id:'${b.id}'},this))">Unlock the check (admin)</button></div>` : ""}${groups || `<div style="opacity:.6;margin-top:6px">No order lines came through for this cab.</div>`}</div>
   ${t ? `<div class="bstep${t.state === "in_progress" && t.on.length ? " on" : t.state === "complete" ? " done" : ""}"><h3>&#9201; ${esc(t.name)}</h3><div class="hrs">${t.hours} of ${Number(t.hours_allowed)} h allowed · ${stepLabel}</div>${noteList340((o.notes || []).filter((n) => n.wh_task_id === t.id))}</div>` : `<div class="lane" style="opacity:.6">No crating step on this cab yet.</div>`}
-  <div class="lane"><b>Photos</b> <span style="opacity:.6;font-size:.9rem">— the ${st.mode === "pickup" ? "staged" : "crated"} cab, ${WH_PHOTO_MIN336} needed before Finish (${photos.length})</span>${can ? ` <button class="b mv" onclick="document.getElementById('wpfC').click()">&#128247; Add photo</button><input type="file" id="wpfC" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpmC')"><span id="wpmC" class="msg"></span>` : ""}<div>${photos.map(pic).join("")}</div></div>
+  <div class="lane"><b>Photos</b> <span style="opacity:.6;font-size:.9rem">— the cab ${esc((hNow || { photo: st.mode === "pickup" ? "staged" : "crated" }).photo)}, ${WH_PHOTO_MIN336} needed before Finish (${photos.length})</span>${can ? ` <button class="b mv" onclick="document.getElementById('wpfC').click()">&#128247; Add photo</button><input type="file" id="wpfC" accept="image/*" capture="environment" multiple style="display:none" onchange="whPhoto327('${b.id}',this,'wpmC')"><span id="wpmC" class="msg"></span>` : ""}<div>${photos.map(pic).join("")}</div></div>
   ${o.canShip && !st.gone && !st.back ? `<div class="lane" style="border-color:${allChecked && stepDone ? "#30d158" : "var(--line)"}">
     <div style="opacity:.75;font-size:.9rem">${allChecked && stepDone ? `Everything is checked and ${t ? t.name.toLowerCase() : "the step"} is finished — tap <b>${shipWord}</b> at the top. It marks the cab ${shipWord.toLowerCase()} on Order Tracking.` : `${shipWord}: not yet — ${missing.join(" · ")}.`}</div>
     <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
@@ -8069,7 +8163,7 @@ const whCabPage327 = (emp, st, opts) => {
   async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
     if (!(await flush352(payload && payload.build_id))) { if (btn) btn.disabled = false; return; }   /* Block 352 (Fable audit): unsaved ticks are SAVED first, never lost or prompted away */
     try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
-      var j = await r.json(); if (j && j.ok) { if (url === "/api/wh/step" || url === "/api/wh/check") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
+      var j = await r.json(); if (j && j.ok) { if (url === "/api/wh/step" || url === "/api/wh/check" || url === "/api/wh/handling") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
     catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
   function whCheck327(bid, btn, on){ whPost("/api/wh/check", { build_id: bid, key: btn.getAttribute("data-key"), on: on }, btn); }
   /* Block 352: ticks live on the phone until ONE Save sends them all; leaving with unsaved ticks asks first */
@@ -8106,6 +8200,7 @@ const whLane327 = (st, isAdmin) => { if (!st || (!st.task && !st.b.shipped_at)) 
   return `<div class="lane" style="border-color:#5eaeff">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><b>&#128230; WAREHOUSE — crating &amp; shipping</b> ${whModeChip327(st)} ${whChip327(st)} <span style="opacity:.7;font-size:.9em">${st.hours} of ${st.allowed} h${st.total != null ? ` · ${st.checked} of ${st.total} checked` : ""}${b.body_done_at ? ` · in from Body ${escH(phxDate(new Date(b.body_done_at).getTime()))}` : ""}${b.shipped_at ? ` · ${st.mode === "pickup" ? "picked up" : "shipped"} ${escH(phxDate(new Date(b.shipped_at).getTime()))}${b.shipped_by && st.names[b.shipped_by] ? " — " + escH(st.names[b.shipped_by]) : ""}` : ""}</span></div>
     ${t ? `<div style="padding:6px 0;border-top:1px solid var(--line);font-size:.95rem"><b>${escH(t.name)}</b> <span style="opacity:.75">· ${t.hours} of ${Number(t.hours_allowed)} h · ${t.state === "complete" ? `finished${t.completed_by && st.names[t.completed_by] ? " — " + escH(st.names[t.completed_by]) : ""}${t.completed_at ? " " + escH(phxDate(new Date(t.completed_at).getTime())) : ""}` : t.state === "in_progress" ? (t.on.length ? `${escH(t.on.map((o) => o.name).join(" + "))} on it` : "paused") : "not started"}</span></div>` : ""}
+    ${(() => { const hd = st.handling || {}; const h = whH359(hd.key); if (!h && !hd.pending) return ""; return `<div style="padding:6px 0;border-top:1px solid var(--line);font-size:.95rem">How it leaves: <b>${h ? escH(h.label) : "not chosen yet"}</b>${hd.chosen ? ` — set by ${escH(st.names[hd.by] || "the warehouse")}${hd.at ? " " + escH(phxDate(new Date(hd.at).getTime())) : ""}${hd.guess && hd.guess !== hd.key ? ` (the board had guessed ${escH((whH359(hd.guess) || {}).label || "")})` : ""}` : ` — the board's guess: ${escH(hd.why || "")}`}</div>`; })()}   <!-- Block 359 (Fable audit) -->
     ${b.wh_sent_back_at ? `<div style="padding:6px 0;border-top:1px solid var(--line)">Sent back to Body ${escH(phxDate(new Date(b.wh_sent_back_at).getTime()))}${b.wh_sent_back_reason ? ` — ${escH(b.wh_sent_back_reason)}` : ""}</div>` : ""}
     <div style="margin-top:6px"><a href="/warehouse/${encodeURIComponent(b.order_number)}" style="color:#8e8e93">open the Crating page</a>${isAdmin ? ` · <span style="opacity:.6">checks and the step are undone from the Crating page; hours are punches (Time corrections under the Manager console)</span>` : ""}</div>
   </div>`; };
@@ -10348,7 +10443,7 @@ function whereNow339(b, ctx) {
     if (sg.key === "build") return W("build", "Build department", b.body_build_reason || "moved out of Body to the Build department", b.body_moved_to_build_at, 3, "#c7c7cc");
     if (sg.key === "crating") {
       const wh = c.wh; const t = wh && wh.task;
-      const det = !t ? "in from Body — no step yet" : t.state === "complete" ? `✓ ${t.kind === "stage" ? "Staged" : "Crated"} · waiting to leave · ${wh.mode === "pickup" ? "customer pickup" : wh.shipMethod ? "📦 " + wh.shipMethod : "📦 ship"}` : t.state === "in_progress" ? `${t.name} · ${wh.checked}${wh.total != null ? " of " + wh.total : ""} checked${t.on && t.on.length ? ` · ${t.on.map((o) => o.name).join(" + ")} on it` : " · paused"}` : `to verify and ${t.kind === "stage" ? "stage" : "crate"} · ${wh.mode === "pickup" ? "customer pickup" : wh.shipMethod ? "📦 " + wh.shipMethod : "📦 ship"}`;
+      const det = !t ? "in from Body — no step yet" : t.state === "complete" ? `✓ ${(whH359(t.kind) || { past: "Crated" }).past} · waiting to leave · ${wh.mode === "pickup" ? "customer pickup" : wh.shipMethod ? "📦 " + wh.shipMethod : "📦 ship"}` : t.state === "in_progress" ? `${t.name} · ${wh.checked}${wh.total != null ? " of " + wh.total : ""} checked${t.on && t.on.length ? ` · ${t.on.map((o) => o.name).join(" + ")} on it` : " · paused"}` : `to verify and ${t.kind === "stage" ? "stage" : "crate"} · ${wh.mode === "pickup" ? "customer pickup" : wh.shipMethod ? "📦 " + wh.shipMethod : "📦 ship"}`;
       return W(t && t.state === "complete" ? "waiting" : "crating", "Crating & shipping", det, t && t.state === "complete" ? t.completed_at : b.body_done_at, 4, "#5eaeff");
     }
     const bd = c.body; const cur = bd && bd.steps ? (bd.steps.find((t) => t.state === "in_progress") || bd.steps.find((t) => t.state === "not_started")) : null;
@@ -14133,13 +14228,13 @@ const handleRequest355 = async (req, res) => {
     // the send-back are the warehouse's (Eric) + admins.
     // Block 357: the crating check's certain reads (cab, last punch, the step, the ticks) go out in one round trip
     const whCheckPre357 = (build_id, emp) => { if (isUuid(build_id) && isUuid(emp)) prefetch356([
-      `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`,
+      `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at,wh_handling&id=eq.${build_id}`,
       `clock_event?select=kind&voided=is.false&employee_id=eq.${emp}&order=claimed_at.desc&limit=1`,
       `wh_task?select=id,state,round&build_id=eq.${build_id}&order=round.desc`,
       `option_check?select=gate,item_text,checked_by,checked_at,voided&build_id=eq.${build_id}&order=checked_at.asc`]); };
     const whCab327 = async (build_id) => {
       if (!isUuid(build_id)) return [null, json(400, { ok: false, error: "That cab reference isn't valid" })];
-      const [bW] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`);
+      const [bW] = await db(`build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at,wh_handling&id=eq.${build_id}`);
       if (!bW) return [null, json(404, { ok: false, error: "Cab not found" })];
       if (bW.shipped_at || bW.stage === "shipped") return [null, json(400, { ok: false, error: `This cab already ${bW.ship_mode === "pickup" ? "was picked up" : "shipped"}` })];
       if (bW.state === "fix_job" || bW.state === "rework") return [null, json(400, { ok: false, error: "This cab is back in production for a fix — it comes back through Body first" })];   // Block 341
@@ -14215,13 +14310,14 @@ const handleRequest355 = async (req, res) => {
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
       if (!["start", "pause", "done", "reopen"].includes(action)) return json(400, { ok: false, error: "Which tap?" });
       if (isUuid(build_id)) prefetch356([   // Block 357: the step tap's certain reads in one round trip
-        `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at&id=eq.${build_id}`,
+        `build?select=id,order_number,cab_number,part_number,coyote_root,state,body_done_at,body_done_by,body_moved_to_build_at,shipped_at,shipped_by,ship_mode,stage,wh_sent_back_at,wh_check_unlocked_at,wh_handling&id=eq.${build_id}`,
         `wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed,round,created_at&id=eq.${task_id}&build_id=eq.${build_id}`,
         `wh_task?select=id&build_id=eq.${build_id}&order=round.desc,created_at.desc&limit=1`,
         `clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`]);
       const [bS, badS] = await whCab327(build_id); if (badS) return badS;
       const [t] = await db(`wh_task?select=id,kind,name,state,started_by,started_at,completed_by,completed_at,hours_allowed,round,created_at&id=eq.${task_id}&build_id=eq.${build_id}`);
       if (!t) return json(404, { ok: false, error: "That step isn't on this cab" });
+      if (action === "start" && t.kind === "pending") return json(400, { ok: false, error: "Pick how it leaves first — Pickup, Crate, Base or Pallet" });   // Block 359
       const [latestT] = await db(`wh_task?select=id&build_id=eq.${build_id}&order=round.desc,created_at.desc&limit=1`);   // reviewer: a stale tab can't tap an older round's step
       if (latestT && latestT.id !== t.id) return json(400, { ok: false, error: "That step is from an earlier round — refresh" });
       const whenS0 = new Date(p.claimed_at || Date.now()); if (isNaN(whenS0.getTime())) return json(400, { ok: false, error: "Bad time" });
@@ -14290,19 +14386,58 @@ const handleRequest355 = async (req, res) => {
       logEvent("wh.check_unlocked", eU, { build_id, order_number: bU.order_number, items: rowsU.length });
       return json(200, { ok: true });
     }
+    // Block 359 (Plan 83): HOW IT LEAVES — Eric (warehouse) or an admin picks Pickup / Crate / Base / Pallet for a cab (or every cab
+    // on the order), any time from the moment it leaves production until the final tap. The cab keeps the choice (a fix round's new
+    // step reads it); the latest-round step follows it (kind, name, hours allowed — hours already worked stay). Audited.
+    if (url.pathname === "/api/wh/handling" && req.method === "POST") {
+      const [eG, failG, meG] = await bodyAuth326(); if (failG) return failG;
+      if (!canShip327(meG)) return json(403, { ok: false, error: "Only the warehouse or an admin can set how a cab leaves" });
+      const p = await body(req); const build_id = String(p.build_id || ""); const key = String(p.handling || "");
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const hG = whH359(key); if (!hG) return json(400, { ok: false, error: "Pick Pickup, Crate, Base or Pallet" });
+      const colsG = "id,order_number,cab_number,part_number,coyote_root,state,shipped_at,stage,wh_handling,body_moved_to_build_at";
+      const [bG] = await db(`build?select=${colsG}&id=eq.${build_id}`);
+      if (!bG) return json(404, { ok: false, error: "Cab not found" });
+      const okState = (x) => ["production_complete", "complete"].includes(String(x.state)) && !x.shipped_at && x.stage !== "shipped" && !x.body_moved_to_build_at;
+      if (!okState(bG)) return json(400, { ok: false, error: bG.shipped_at || bG.stage === "shipped" ? "This cab already left" : "Choose once the cab is out of production" });
+      const rootG = rootOf323(bG);
+      // every read at once: the other cabs on the order (when asked), the products (cached), the steps
+      const [sibs, prods] = await Promise.all([
+        p.all_cabs === true ? db(`build?select=${colsG}&or=(coyote_root.eq.${encodeURIComponent(rootG)},order_number.eq.${encodeURIComponent(rootG)})&shipped_at=is.null&limit=50`).catch(() => []) : [],
+        db("product?select=part_number,family,is_smk").catch(() => []),
+      ]);
+      const targets = [bG, ...sibs.filter((x) => x.id !== bG.id && okState(x))];
+      const ids = targets.map((x) => x.id);
+      const tasksG = await db(`wh_task?select=id,build_id,round,kind,name,state,created_at&build_id=in.(${ids.join(",")})&order=round.desc,created_at.desc`);
+      const latest = {}; for (const t of tasksG) if (!latest[t.build_id]) latest[t.build_id] = t;
+      const whenG = new Date().toISOString();
+      await db(`build?id=in.(${ids.join(",")})`, { method: "PATCH", body: JSON.stringify({ wh_handling: key, wh_handling_by: eG, wh_handling_at: whenG }) });
+      const prodOf = Object.fromEntries(prods.map((x) => [String(x.part_number).toUpperCase(), x]));
+      await Promise.all(targets.map(async (x) => {   // independent rows — side by side
+        const t = latest[x.id]; if (!t || t.kind === key) return;
+        const pr = prodOf[String(x.part_number || "").toUpperCase()] || null;
+        const allowed = await whAllowed359(pr && pr.family ? pr.family : "", isSmk359(x.part_number, pr), key);
+        await db(`wh_task?id=eq.${t.id}`, { method: "PATCH", body: JSON.stringify({ kind: key, name: hG.name, hours_allowed: allowed }) });
+      }));
+      for (const x of targets) logEvent("wh.handling_set", eG, { build_id: x.id, order_number: x.order_number, from: x.wh_handling || null, step_from: latest[x.id] ? latest[x.id].kind : null, to: key, step_state: latest[x.id] ? latest[x.id].state : null, all_cabs: p.all_cabs === true, count: targets.length });
+      return json(200, { ok: true, handling: key, cabs: targets.length });
+    }
     if (url.pathname === "/api/wh/ship" && req.method === "POST") {
       const [eH, failH, meH] = await bodyAuth326(); if (failH) return failH;
       if (!canShip327(meH)) return json(403, { ok: false, error: "Only the warehouse or an admin can mark a cab shipped or picked up" });
       const p = await body(req); const build_id = String(p.build_id || "");
       const [bH, badH] = await whCab327(build_id); if (badH) return badH;
-      const [rows, tasksH] = await Promise.all([whChecklist327(bH), db(`wh_task?select=id,name,state,round&build_id=eq.${build_id}&order=round.desc`).then((all) => all.filter((t) => Number(t.round || 1) === Number(all[0] ? all[0].round || 1 : 1)))]);   // Block 341: the latest round
+      const [rows, tasksH] = await Promise.all([whChecklist327(bH), db(`wh_task?select=id,name,state,round,kind&build_id=eq.${build_id}&order=round.desc`).then((all) => all.filter((t) => Number(t.round || 1) === Number(all[0] ? all[0].round || 1 : 1)))]);   // Block 341: the latest round · Block 359: + kind
       const openC = rows.filter((r) => !r.check);
       if (openC.length) return json(400, { ok: false, error: `${openC.length} item${openC.length === 1 ? "" : "s"} not checked: ${openC.slice(0, 3).map((r) => r.label).join(" · ")}${openC.length > 3 ? " …" : ""}` });
       if (!tasksH.length) return json(400, { ok: false, error: "This cab has no crating step" });
       const openT = tasksH.filter((t) => t.state !== "complete");
       if (openT.length) return json(400, { ok: false, error: `${openT[0].name} isn't finished — tap Finish on it first` });
       const whenH = new Date(p.claimed_at || Date.now()); if (isNaN(whenH.getTime())) return json(400, { ok: false, error: "Bad time" });
-      const sm = (await shipMethodFor327([rootOf323(bH)]))[rootOf323(bH)] || ""; const mode = shipModeOf327(sm);
+      // Block 359: the handling actually done decides it (Eric's choice, else the step's kind) — Coyote is only read when neither says
+      const kindH = whH359(bH.wh_handling) ? bH.wh_handling : (tasksH[0] && whH359(tasksH[0].kind) ? tasksH[0].kind : null);
+      if (!kindH && tasksH[0] && tasksH[0].kind === "pending") return json(400, { ok: false, error: "Pick how it leaves first — Pickup, Crate, Base or Pallet" });
+      const sm = kindH ? "" : ((await shipMethodFor327([rootOf323(bH)]))[rootOf323(bH)] || ""); const mode = kindH ? whModeOfKind359(kindH) : shipModeOf327(sm);
       // close any open stint still on this cab (someone forgot to pause) — their time stops here
       const onH = (await whHours327([build_id])).onNow; const stuck = Object.values(onH).flat().filter((o) => o.build === build_id);   // reviewer: only the stints on THIS cab (a person crating another cab keeps their clock)
       for (const o of stuck) { const [mO] = await db(`employee?select=id,department&id=eq.${o.emp}`); const backO = await whLineAfter327(o.emp, mO);
@@ -14310,7 +14445,7 @@ const handleRequest355 = async (req, res) => {
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: o.emp, line_id: backO, kind: "clock_in", claimed_at: new Date(whenH.getTime() + 1000).toISOString() }) }); }
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ shipped_at: whenH.toISOString(), shipped_by: eH, ship_mode: mode }) });
       const hrsAll = (await whHours327([build_id])).byBuild[build_id] || 0;
-      logEvent("wh.shipped", eH, { build_id, order_number: bH.order_number, mode, ship_method: sm || null, hours: Math.round(hrsAll * 100) / 100, checks: rows.length, released: stuck.length });
+      logEvent("wh.shipped", eH, { build_id, order_number: bH.order_number, mode, handling: kindH || null, ship_method: sm || null, hours: Math.round(hrsAll * 100) / 100, checks: rows.length, released: stuck.length });
       try { void notify("wh.shipped", await adminIds225(), `Order ${bH.order_number}${bH.cab_number ? ` (Cab #${bH.cab_number})` : ""} ${mode === "pickup" ? "was picked up" : "shipped"}`, `${meH.first_name} checked every sold item on the cab and tapped ${mode === "pickup" ? "Picked up" : "Shipped"} (${Math.round(hrsAll * 10) / 10} h to ${mode === "pickup" ? "stage" : "crate"}). It reads ${mode === "pickup" ? "Picked up" : "Shipped"} on Order Tracking.`, "/order/" + encodeURIComponent(bH.order_number)); } catch (e) { console.error("ship notify:", e && e.message); }
       return json(200, { ok: true, mode, hours: Math.round(hrsAll * 10) / 10 });
     }
@@ -14399,15 +14534,18 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/api/admin/wh-standard" && req.method === "POST") {
       const eS = await liveSession(req); if (!eS) return json(401, { ok: false, error: "Signed out" });
       const [mS] = await db(`employee?select=role&id=eq.${eS}`); if (!mS || mS.role !== "admin") return json(403, { ok: false, error: "Admin only" });
-      const { family, crate, stage } = await body(req);
-      const famS = String(family || "").trim().slice(0, 80); const hs = { crate: Number(crate), stage: Number(stage) };
+      const { family, crate, stage, hours } = await body(req);
+      // Block 359: any handling on the one list (Pickup / Crate / Base / Pallet); the old {crate, stage} body still works
+      const famS = String(family || "").trim().slice(0, 80);
+      const src = hours && typeof hours === "object" ? hours : { crate, stage };
+      const hs = {}; for (const h of WH_HANDLING359) if (src[h.key] !== undefined && src[h.key] !== null && src[h.key] !== "") hs[h.key] = Number(src[h.key]);
       if (!famS) return json(400, { ok: false, error: "Which cab family?" });
-      if (Object.values(hs).some((h) => !Number.isFinite(h) || h < 0 || h > 40)) return json(400, { ok: false, error: "Two numbers between 0 and 40" });
+      if (!Object.keys(hs).length || Object.values(hs).some((h) => !Number.isFinite(h) || h < 0 || h > 40)) return json(400, { ok: false, error: "Hours between 0 and 40" });
       const cur = await db(`wh_standard?select=kind,hours&family=eq.${encodeURIComponent(famS)}`);
-      for (const k of ["crate", "stage"]) { const row = cur.find((r) => r.kind === k);
-        if (row) await db(`wh_standard?family=eq.${encodeURIComponent(famS)}&kind=eq.${k}`, { method: "PATCH", body: JSON.stringify({ hours: hs[k], updated_by: eS, updated_at: new Date().toISOString() }) });
-        else await db("wh_standard", { method: "POST", body: JSON.stringify({ family: famS, kind: k, hours: hs[k], updated_by: eS }) }); }
-      logEvent("config.wh_hours", eS, { family: famS, from: { crate: (cur.find((x) => x.kind === "crate") || {}).hours ?? null, stage: (cur.find((x) => x.kind === "stage") || {}).hours ?? null }, to: hs });
+      await Promise.all(Object.keys(hs).map((k) => { const row = cur.find((r) => r.kind === k);   // independent rows — side by side
+        return row ? db(`wh_standard?family=eq.${encodeURIComponent(famS)}&kind=eq.${k}`, { method: "PATCH", body: JSON.stringify({ hours: hs[k], updated_by: eS, updated_at: new Date().toISOString() }) })
+          : db("wh_standard", { method: "POST", body: JSON.stringify({ family: famS, kind: k, hours: hs[k], updated_by: eS }) }); }));
+      logEvent("config.wh_hours", eS, { family: famS, from: Object.fromEntries(Object.keys(hs).map((k) => [k, (cur.find((x) => x.kind === k) || {}).hours ?? null])), to: hs });
       return json(200, { ok: true });
     }
     if (url.pathname === "/api/admin/prep-standard" && req.method === "POST") {
@@ -16116,9 +16254,10 @@ const handleRequest355 = async (req, res) => {
       const [bW] = await db(`build?select=*&order_number=eq.${encodeURIComponent(ordW)}`);
       if (!bW) return send(404, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shop Board</title>${style}</head><body><div class="wrap" style="text-align:center"><h2>No order "${escH(ordW)}" at crating</h2><p><a href="/warehouse" style="color:#8e8e93">← Crating &amp; shipping</a></p></div></body></html>`);
       // Block 336 (F5): before the step starts, Coyote's latest ship method decides Crating vs Stage for pickup
-      try { const [tW] = await db(`wh_task?select=id,kind,name,state,hours_allowed&build_id=eq.${bW.id}&order=round.desc,created_at.desc&limit=1`); if (tW && tW.state === "not_started" && !bW.shipped_at) { const smW = (await shipMethodFor327([rootOf323(bW)]))[rootOf323(bW)] || ""; await whReconcileMode336(bW, tW, smW, empW); } } catch (eF5) { console.error("wh mode reconcile:", eF5 && eF5.message); }
+      try { const [[tW], infoW] = await Promise.all([db(`wh_task?select=id,kind,name,state,hours_allowed&build_id=eq.${bW.id}&order=round.desc,created_at.desc&limit=1`), shipInfo359([rootOf323(bW)])]);   // Block 359: side by side (the info read is the same one whStatus makes below → served from the per-request memory)
+        if (tW && tW.state === "not_started" && !bW.shipped_at) await whReconcileMode336(bW, tW, infoW.sm[rootOf323(bW)] || "", empW, infoW.note[rootOf323(bW)]); } catch (eF5) { console.error("wh mode reconcile:", eF5 && eF5.message); }
       // Block 356: the independent pieces of the crating page load SIDE BY SIDE (each only reads; none needs another's answer)
-      const [stWA, notesW340, idleW342, bodyNames340, bodyW339, trackingW, kitDataW] = await Promise.all([
+      const [stWA, notesW340, idleW342, bodyNames340, bodyW339, trackingW, kitDataW, sibsW359] = await Promise.all([
         whStatus327([bW], true),
         stepNotes340(bW.id),   // Block 340: the step's notes + Notes from Body
         (async () => { try { if (bW.started_at && bW.left_production_at) return idleLine342((await loadCabLife342([bW], await shopHours(), openDayFn316(await calendarOverrides()), Date.now()))[bW.id]); } catch (e) { /* the idle line is optional */ } return ""; })(),
@@ -16126,6 +16265,7 @@ const handleRequest355 = async (req, res) => {
         (async () => { try { if (bW.wh_sent_back_at || bW.body_done_at) return (await bodyStatus326([bW]))[0] || null; } catch (e) { /* the banner's Body facts are optional */ } return null; })(),   // reviewer: the banner's Body facts (the sent-back lock reads the steps)
         (async () => { try { const [ciW] = await db(`coyote_intake?select=tn:payload->order->>tracking_number&order_number=eq.${encodeURIComponent(rootOf323(bW))}&order=received_at.desc&limit=1`); return ciW && ciW.tn ? String(ciW.tn).slice(0, 60) : ""; } catch (e) { return ""; } })(),
         ["upcoming", "active", "awaiting_inspection", "rework"].includes(String(bW.state)) ? whQueueData328(empW, meW).catch((eK) => { console.error("warehouse kit section:", eK && eK.message); return null; }) : null,
+        db(`build?select=id&or=(coyote_root.eq.${encodeURIComponent(rootOf323(bW))},order_number.eq.${encodeURIComponent(rootOf323(bW))})&shipped_at=is.null&id=neq.${bW.id}&limit=50`).catch(() => []),   // Block 359: the other cabs on this order ("Same for all")
       ]);
       const [stW] = stWA;
       const sinceW341 = whPhotoSince341(bW, stW && stW.task); const photosW = await db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${bW.id}&kind=eq.crate&hidden=is.false${sinceW341 ? `&created_at=gte.${encodeURIComponent(sinceW341)}` : ""}&order=created_at.asc&limit=100`);   // reviewer: this round's photos
@@ -16151,7 +16291,7 @@ const handleRequest355 = async (req, res) => {
         } catch (eK) { console.error("warehouse kit section:", eK && eK.message); kit328 = null; }
       }
       if (bW.kit_status === "short" && bW.state !== "upcoming" && bW.state !== "cancelled") owed328 = { kit_note: bW.kit_note || "" };
-      return send(200, "text/html; charset=utf-8", whCabPage327(meW, stW, { clockedIn: clockedW, canShip: canShip327(meW), isAdmin: meW.role === "admin", notes: notesW340, bodyStepNames: bodyNames340, idle: idleW342, where: whereNow339(bW, { wh: stW, body: bodyW339, names: stW.names, lineName: kit328 ? { [bW.line_id]: kit328.lineName } : null }), photos: photosW, tracking: trackingW, kit: kit328, owed: owed328, canAct: canAct328 }));
+      return send(200, "text/html; charset=utf-8", whCabPage327(meW, stW, { clockedIn: clockedW, canShip: canShip327(meW), isAdmin: meW.role === "admin", siblings: (sibsW359 || []).length, notes: notesW340, bodyStepNames: bodyNames340, idle: idleW342, where: whereNow339(bW, { wh: stW, body: bodyW339, names: stW.names, lineName: kit328 ? { [bW.line_id]: kit328.lineName } : null }), photos: photosW, tracking: trackingW, kit: kit328, owed: owed328, canAct: canAct328 }));
     }
     if (url.pathname === "/reconcile") {
       const empId = await liveSession(req);
@@ -18324,14 +18464,14 @@ self.addEventListener("notificationclick", (e) => {
         return json(200, { ok: true, which, html: bodyStdPanelHtml326(rowsB) });
       }
       if (which === "wh") {   // Block 327
-        const [stdW, prodsW, tasksW] = await Promise.all([db("wh_standard?select=family,kind,hours&order=family,kind"), db("product?select=part_number,family&order=family"), dbAll252("wh_task?select=id,build_id,kind,state,completed_at&state=eq.complete&order=completed_at.desc,id.asc")]);
-        const famsW = [...new Set([...stdW.map((r) => r.family), ...prodsW.map((p) => p.family).filter(Boolean)])].sort();
+        const [stdW, prodsW, tasksW] = await Promise.all([db("wh_standard?select=family,kind,hours&order=family,kind"), db("product?select=part_number,family,is_smk&order=family"), dbAll252("wh_task?select=id,build_id,kind,state,completed_at&state=eq.complete&order=completed_at.desc,id.asc")]);
+        const famsW = [...new Set([...stdW.map((r) => r.family), ...prodsW.map((p) => p.family).filter(Boolean), ...prodsW.filter((p) => p.family && isSmk359(p.part_number, p)).map((p) => whStdFamily359(p.family, true))])].sort();   // Block 359: + the sheet metal kit rows
         const bidsW = [...new Set(tasksW.map((t) => t.build_id))].slice(0, 200);
         const buildsW = bidsW.length ? await db(`build?select=id,part_number&id=in.(${bidsW.join(",")})`) : [];
-        const famOfW = Object.fromEntries(prodsW.map((p) => [String(p.part_number).toUpperCase(), p.family])); const famOfBuildW = Object.fromEntries(buildsW.map((b) => [b.id, famOfW[String(b.part_number || "").toUpperCase()] || ""]));
+        const famOfW = Object.fromEntries(prodsW.map((p) => [String(p.part_number).toUpperCase(), whStdFamily359(p.family, isSmk359(p.part_number, p))]));   /* Block 359: a kit's actuals land on its own row */ const famOfBuildW = Object.fromEntries(buildsW.map((b) => [b.id, famOfW[String(b.part_number || "").toUpperCase()] || ""]));
         const hrsW = bidsW.length ? await whHours327(bidsW) : { byTask: {} };
         const medW = {}; for (const t of tasksW) { const f = famOfBuildW[t.build_id]; if (!f) continue; const k = f + "|" + t.kind; (medW[k] = medW[k] || []).push(Math.round((hrsW.byTask[t.id] || 0) * 100) / 100); }
-        const rowsW = famsW.map((f) => { const row = { family: f }; for (const k of ["crate", "stage"]) { const r = stdW.find((x) => x.family === f && x.kind === k); const xs = (medW[f + "|" + k] || []).slice(0, 12); row[k] = { hours: r ? Number(r.hours) : (k === "crate" ? 2 : 1), n: xs.length, median: xs.length >= 2 ? median301(xs) : null }; } return row; });
+        const rowsW = famsW.map((f) => { const row = { family: f }; for (const k of WH_HANDLING359.map((h) => h.key)) { const r = stdW.find((x) => x.family === f && x.kind === k); const xs = (medW[f + "|" + k] || []).slice(0, 12); row[k] = { hours: r ? Number(r.hours) : (/ SMK$/.test(f) ? whH359(k).smk : whH359(k).cab), n: xs.length, median: xs.length >= 2 ? median301(xs) : null }; } return row; });
         return json(200, { ok: true, which, html: whStdPanelHtml327(rowsW) });
       }
       if (which === "prep") {
