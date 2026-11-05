@@ -5379,6 +5379,34 @@ const fold295 = (id, title, blurb, body, count) => `
     <summary><span><b>${title}</b>${count != null ? ` <span class="cnt">${count}</span>` : ""}<span class="blurb">${blurb}</span></span><span class="tog">+ Show</span></summary>
     <div class="fbody">${body}</div>
   </details>`;
+// ===== Block 360 (Daniel 11/5 11:01, Plan 84): the ADMIN's Manager console folds every list (title + count + one line + Show/Hide,
+// remembered per device — Michael's fold295 look). on=false → the section exactly as before (every other manager is untouched).
+const af360 = (on, id, title, blurb, count, html, open) => (!on || !String(html || "").trim()) ? html
+  : `<details class="fold295 a360" id="f360-${id}" data-fold="a360-${id}"${open ? " open" : ""}><summary><span><b>${title}</b>${count != null ? ` <span class="cnt">${count}</span>` : ""}<span class="blurb">${blurb}</span></span><span class="tog">+ Show</span></summary><div class="fbody">${html}</div></details>`;
+// a LINE card folds with a one-line summary and loads only when opened (?part=line99-N) — its per-cab checklist + fix status are
+// the console's heaviest work. Returns "" when the card itself should render (not an admin, or this is the requested part).
+const af360Line = (o, r) => {
+  if (!o || !o.fold || o.part === "line99-" + r.line.id) return "";
+  const a = r.active, n = (x) => (x || []).length;
+  const bits = [r.line.manually_closed ? "CLOSED" : "", r.line.down_today ? "Down today" : "",
+    a ? `ORDER ${escH(a.order_number)}${a.cab_number ? ` · Cab #${escH(a.cab_number)}` : ""}` : "no cab on the line",
+    n(r.awaiting) ? `${n(r.awaiting)} at inspection` : "", n(r.rework) ? `${n(r.rework)} in rework` : "", `${n(r.queue)} waiting to start`].filter(Boolean);
+  return `<details class="fold295 a360" id="f360-line99-${r.line.id}" data-fold="a360-line99-${r.line.id}" data-lazy360="line99-${r.line.id}"><summary><span><b>${escH(r.line.name)}</b><span class="blurb">${bits.join(" · ")}</span></span><span class="tog">+ Show</span></summary><div class="fbody"><div class="lz360" style="opacity:.6;padding:6px 0">Loading the line…</div></div></details>`;
+};
+const A360_JS = `<style>.a360 .fbody>.lane>h3:first-child{display:none}.a360[data-lazy360] .fbody>.lane>h3:first-child{display:block}</style>
+<script>(function(){
+  function load(d){ if (!d || d.dataset.done360) return; d.dataset.done360 = "1"; var id = d.dataset.lazy360, body = d.querySelector(".fbody");
+    var u = location.pathname + (location.search ? location.search + "&" : "?") + "part=" + encodeURIComponent(id);
+    fetch(u, { credentials: "same-origin", cache: "no-store" }).then(function(r){ if (!r.ok || r.redirected) throw 0; return r.text(); }).then(function(h){
+      var lane = new DOMParser().parseFromString(h, "text/html").getElementById(id); if (!lane) throw 0;
+      body.innerHTML = ""; body.appendChild(document.importNode(lane, true)); })
+    .catch(function(){ d.dataset.done360 = ""; body.innerHTML = '<div style="opacity:.75;padding:6px 0">Could not load this line &mdash; <a href="#" onclick="location.reload();return false" style="color:#8e8e93">reload the page</a></div>'; }); }
+  document.addEventListener("toggle", function(e){ var d = e.target; if (d && d.dataset && d.dataset.lazy360 && d.open) load(d); }, true);
+  document.addEventListener("click", function(e){ var a = e.target && e.target.closest ? e.target.closest('a[href^="#"]') : null; if (!a) return;
+    var id = a.getAttribute("href").slice(1); if (!id) return; var t = document.getElementById(id);
+    var d = t ? (t.tagName === "DETAILS" ? t : t.closest("details.a360")) : document.getElementById("f360-" + id);
+    if (d && !d.open) { d.open = true; if (!t) { e.preventDefault(); d.scrollIntoView(); } } }, true);
+})();</script>`;
 const FOLD_CSS_295 = `<style>
   .fold295{border:1px solid var(--line);border-radius:14px;margin-bottom:10px;background:var(--card)}
   .fold295>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px}
@@ -5424,7 +5452,7 @@ const ahLane300 = (afterHours, isAdmin, insp188, acct189) => `  ${!insp188 && !a
     <div style="opacity:.5;font-size:.85rem">${isAdmin ? "Approve puts the hours on the timecard; Deny needs one typed line and the person is told. One tap each." : "Confirming says the named approval was real. An ADMIN approves — that releases the hours onto the timecard; until then they're HELD and flagged."}</div>
   </div>` : ""}
 `;
-const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = [], canInsp321 = isAdmin) => `<!doctype html>
+const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], longRunners = [], recentDone = [], showReports = false, afterHours = [], canCloseLines = false, tc = null, downReasons = [], timeoff = { pending: [], upcoming: [], emps: [], reasons: [] }, fixjob = { open: [], completed: [], reasons: [], lines: [] }, proj = {}, insp188 = false, acct189 = false, tcard191 = null, odd215 = [], canInsp321 = isAdmin, o360 = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board — Manager</title>${style}
@@ -5469,10 +5497,10 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
   </div>`}
   <style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <h2>Manager${insp188 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— inspection</span>` : acct189 ? ` <span style="opacity:.5;font-size:1rem;font-weight:400">— time &amp; pay</span>` : ""}</h2>
-  ${!isAdmin && !insp188 && !acct189 ? FOLD_CSS_295 + `<div class="x295">Your lines, the cab on each, and anything waiting on you. The other lists are folded below &mdash; tap <b>+ Show</b> to open one; the tablet remembers.</div>` : ""}
+  ${o360.fold ? FOLD_CSS_295 + A360_JS /* Block 360: the admin's folds — on the same line so every other manager's page stays byte-identical */ : ""}${!isAdmin && !insp188 && !acct189 ? FOLD_CSS_295 + `<div class="x295">Your lines, the cab on each, and anything waiting on you. The other lists are folded below &mdash; tap <b>+ Show</b> to open one; the tablet remembers.</div>` : ""}
   ${isAdmin ? ahLane300(afterHours, isAdmin, insp188, acct189) : ""}   <!-- Block 300: a pay decision waits at the top, not the 4th lane -->
-  ${isAdmin && !insp188 && !acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM · Block 295: the Production manager gets it FOLDED at the bottom (prodLanes295) -->
-  ${isAdmin && !insp188 && !acct189 && longRunners.length ? `
+  ${isAdmin && !insp188 && !acct189 ? af360(o360.fold, "oc", "On the clock", "Who's punched in right now — the Clock out button is for the tap somebody forgot", onClock.length, ocLane293(onClock)) : ""}   <!-- Block 293: Accounting gets this lane at the BOTTOM · Block 295: the Production manager gets it FOLDED at the bottom (prodLanes295) -->
+  ${isAdmin && !insp188 && !acct189 && longRunners.length ? af360(o360.fold, "rl", "Running long", "Steps open well past their usual time — a nudge, not a verdict", longRunners.length, `
   <!-- RUNNING LONG (Q107): a step In Progress 4+ hrs, no completion. Not an
        alarm — a glance. Usually it's "went to help elsewhere" or a parts
        run; the who + since makes it self-explanatory. -->
@@ -5480,8 +5508,8 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${longRunners.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
       <span style="opacity:.6">— started by ${t.who} at ${t.hhmm}, still open</span></div>`).join("")}
     <div style="opacity:.5;font-size:.85rem">Steps in progress 4+ hours. Worth a glance — nothing here changes any math.</div>
-  </div>` : ""}
-  ${isAdmin && !insp188 && !acct189 && recentDone.length ? `
+  </div>`) : ""}
+  ${isAdmin && !insp188 && !acct189 && recentDone.length ? af360(o360.fold, "recent", "Recently checked off", "The last steps tapped done — undo one that was tapped by mistake", recentDone.length, `
   <!-- RECENTLY CHECKED OFF (Q107): the shared undo. A step completed out
        from under a partner comes back here — audited, and the engine's
        earned-value math nets it out automatically (earned = completed
@@ -5490,7 +5518,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${recentDone.map((t) => `<div class="qrow"><b>${t.line || "—"}</b> · ORDER ${t.order_number} · step ${t.display_no} ${t.name}
       <span style="opacity:.6">— ${t.who ? `by <b>${t.who}</b>` : "no tap on record (seeded test data)"} at ${t.hhmm}</span>
       <button class="btn gray" style="padding:6px 12px;margin-left:10px" onclick="undoTask('${t.id}',this)">Un-complete</button></div>`).join("")}
-  </div>` : ""}
+  </div>`) : ""}
   ${isAdmin ? "" : ahLane300(afterHours, isAdmin, insp188, acct189)}   <!-- Block 300: admins see this lane at the TOP instead -->
   ${!acct189 && rows.some((r) => r.active && r.active.ready194 && r.active.ready194.allDone) ? `
   <!-- Block 194: cabs whose every step is checked but that haven't been SENT
@@ -5535,7 +5563,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       </div>
     </div>`)).join("")}
   </div>` : ""}
-  ${acct189 || (!isAdmin && !insp188) ? "" : `
+  ${acct189 || (!isAdmin && !insp188) ? "" : af360(o360.fold, "sendback", "Left production recently", "Cabs that just went to Body — one tap sends one back if the fixes aren\'t right", null, `
   <!-- Block 207 (owner ruling, Sat 8/22): the ONE-TAP Body send-back — the
        safety valve of the one-inspection system. After rework the crew
        pushes their own cab to Body; if the fixes aren't right, ONE tap
@@ -5549,7 +5577,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${(fixjob.sendback || []).length ? fixjob.sendback.map((c) => `<div class="qrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span><b>ORDER ${c.order}</b>${c.cab ? ` · Cab #${c.cab}` : ""}</span>
       <button class="btn" style="margin-left:auto;margin-top:0;padding:8px 16px" onclick="sendBack207('${c.id}',this)">Send back to production</button></div>`).join("") : `<div style="opacity:.6">No cabs have left production recently.</div>`}
     <div style="opacity:.5;font-size:.85rem;margin-top:6px">One tap opens a kickback fix job — off the line, its own hours; the crew grabs it from the Open-fixes lane. It re-inspects through the normal sign-off when fixed.</div>
-  </div>`}
+  </div>`)}
   ${isAdmin && timeoff.pending.length ? `
   <!-- Q92: time-off requests waiting on you. One tap approves or denies; a
        denial can carry a short note back to the person. Approved time shows
@@ -5561,7 +5589,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="toDecide('${t.id}','deny',this)">Deny</button></div>`).join("")}
   </div>` : ""}
   <div id="lines99"></div>
-  ${acct189 || insp188 ? "" : rows.map((r) => `
+  ${acct189 || insp188 ? "" : rows.map((r) => af360Line(o360, r) || `
     <div class="lane" id="line99-${r.line.id}">
       <h3>${r.line.name}${r.line.manually_closed ? ' <span style="color:#8e8e93;font-size:1rem">· CLOSED</span>' : ""}${r.line.down_today ? ` <span style="color:#9db4c8;font-size:1rem">· DOWN: ${r.line.down_reason}</span>` : ""}
         ${canCloseLines ? `<button class="btn gray" style="float:right;padding:6px 12px;margin-top:0;font-size:.85rem" onclick="armM(this,()=>lineClosed(${r.line.id},${r.line.manually_closed ? "false" : "true"}))">${r.line.manually_closed ? "Reopen line" : "Close line"}</button>` : ""}</h3>
@@ -5648,7 +5676,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
        the jump-nav above mirrors this exact order. -->
   <!-- Q92: enter time off for anyone directly (lands already approved) + the
        upcoming "who's out and when" list. -->
-  ${insp188 || acct189 || !isAdmin ? "" : `
+  ${insp188 || acct189 || !isAdmin ? "" : af360(o360.fold, "to99", "Time off", "Who is out and when — and add time off for someone", (timeoff.upcoming || []).length, `
   <div class="lane" id="to99"><h3>Time off</h3>
     ${isAdmin ? `<p style="margin:0 0 8px">Add for someone:
       <select id="toa-emp">${(timeoff.emps || []).map((e) => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join("")}</select>
@@ -5658,7 +5686,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ${timeoff.upcoming.length ? `<div style="margin-top:6px"><div style="opacity:.6;margin-bottom:4px">Who's out (approved, upcoming)</div>
       ${timeoff.upcoming.map((t) => `<div class="qrow">${t.who} · ${t.dates}${t.reason ? ` · ${t.reason}` : ""}</div>`).join("")}</div>`
       : `<div style="opacity:.6">Nobody's out on the books ahead.</div>`}
-  </div>`}
+  </div>`)}
   ${acct189 ? `
   <!-- Block 215 (Daniel: "ANY oddities you find within regards to payroll or
        punches should be displayed... so accounting KNOWS to fix it"): the
@@ -5772,7 +5800,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
     ` : `<div style="opacity:.6;font-size:1.05rem">Pick a person to see this pay period and last pay period of hours.</div>`}
   </div>` : ""}
   ${acct189 ? ocLane293(onClock) : ""}   <!-- Block 293: Kailey's On-the-clock lane lives at the bottom -->
-  ${!insp188 && (isAdmin || acct189) && tc ? `   /* Block 295: the Production manager loses the punch-level corrector (accounting/admin thing); admins + Accounting keep it */
+  ${!insp188 && (isAdmin || acct189) && tc ? af360(o360.fold, "tc", "Time corrections", "Move, void or add a punch — every change needs a note and is audited", null, `   /* Block 295: the Production manager loses the punch-level corrector (accounting/admin thing); admins + Accounting keep it */
   <!-- Q111 pt 2: the missed-punch corrector — the reason the physical punch
        clock can retire. Pick a person and a Phoenix day; MOVE a punch that
        has the wrong time, VOID one that shouldn't exist, ADD a forgotten
@@ -5802,12 +5830,12 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <p>Why: <input id="tc-note" style="min-width:280px" placeholder="required — e.g. forgot to clock out"></p>
       <p style="opacity:.5;font-size:.85rem">Times are Phoenix. Every change is audited and shows on the timecard — nothing is silent. Managers reach back 14 days (accounting: through all of last pay period); older belongs to an admin. A change must leave the day's punches alternating IN/OUT or it's refused.</p>
     ` : `<div style="opacity:.6">Pick a person and a day to see their punches.</div>`}
-  </div>` : ""}
+  </div>`, o360.tcOpen) : ""}
   <!-- Q85 FIX JOB: a signed-off cab came back (Body Shop kickback / customer
        return). Opening one re-opens its ORIGINAL record as a fix job (own
        deadline + hours bucket, re-inspection to close) and logs a sign-off
        escape. It "runs alongside" — it doesn't force-pause a live build. -->
-  ${insp188 || acct189 ? "" : `
+  ${insp188 || acct189 ? "" : af360(o360.fold, "fixjob", "Returned for fix", "Kickbacks and customer returns — open a fix job, track it to re-inspection", (fixjob.open || []).length, `
   <div class="lane" style="border-color:#4a90d9" id="fixjob"><h3>Returned for fix — kickbacks & customer returns</h3>
     <div style="opacity:.6;font-size:.9rem;margin:-6px 0 10px">A cab that came back after leaving production &mdash; from the Body Shop or from a customer. Open a fix job and the crew grabs it from their screens; its hours stay off every line's pace.</div>
     ${fixjob.open.length ? fixjob.open.map((f) => `<div class="qrow"><b>${f.order}</b>${f.cab ? ` · Cab #${f.cab}` : ""} · ${f.kind === "kickback" ? "Body Shop kickback" : "customer return"} · ${f.reason || ""}${f.spent ? ` · ${f.spent.toFixed(1)} hr logged` : ""} · ${(f.on || []).length ? `<b style="color:#4a90d9">on it: ${f.on.join(" · ")}</b>` : `<span style="opacity:.55">nobody on it right now</span>`}
@@ -5837,7 +5865,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <details style="margin-top:10px"><summary style="cursor:pointer;color:#8e8e93;font-size:.85rem;list-style:none">How fix jobs work &#9656;</summary>
       <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span></details>
     </div>
-  </div>`}
+  </div>`)}
   ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
@@ -15376,6 +15404,11 @@ const handleRequest355 = async (req, res) => {
       // No cab lines, no inspection — she thinks in punches, not lines.
       const acct189 = me.role === "manager" && me.department === "Accounting";
       const insp188 = me.role === "manager" && me.department !== "Production" && !acct189;
+      // Block 360 (Daniel 11/5 11:01, Plan 84): an ADMIN's console folds every section; the four line cards load only when opened
+      // (?part=line99-N fetches one). A line card's per-cab work (the sign-off checklist, the fix status) is skipped until then.
+      const fold360 = me.role === "admin";
+      const partRaw360 = String(url.searchParams.get("part") || ""); const part360 = /^line99-\d+$/.test(partRaw360) ? partRaw360 : null;
+      const needLine360 = (lineId) => !fold360 || part360 === "line99-" + lineId;
       // Block 212 (v201 SPEED): this cockpit had grown to ~45 db round-trips
       // asked ONE AT A TIME (~6 s render, Daniel's audit ask). Same queries,
       // same data, same assembly — now fired in TWO PARALLEL WAVES: wave 1 is
@@ -15470,11 +15503,13 @@ const handleRequest355 = async (req, res) => {
       }
       // Block 255 (order 23109): the sign-off OPTION CHECKLIST — one list per
       // active/awaiting cab, straight from the live Coyote order (≤ 8 cabs).
-      const sign255 = builds.filter((b) => b.state === "active" || b.state === "awaiting_inspection");
+      // Block 360: the awaiting cabs always (the open inspection lane needs them); an active cab only when its line card is shown;
+      // and every cab's list is built SIDE BY SIDE (was one cab after another — the console's biggest wait)
+      const sign255 = builds.filter((b) => b.state === "awaiting_inspection" || (b.state === "active" && needLine360(b.line_id)));
       if (sign255.length) {
         const prodsOC255 = await db("product?select=part_number");
         const allowOC255 = new Set(prodsOC255.map((p) => String(p.part_number).toUpperCase()));
-        for (const b255 of sign255) b255.opts255 = await optionList255(b255, allowOC255);
+        await Promise.all(sign255.map(async (b255) => { b255.opts255 = await optionList255(b255, allowOC255); }));
       }
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const latestCk = {};
@@ -15497,7 +15532,7 @@ const handleRequest355 = async (req, res) => {
       // inspects note + photos together).
       // Block 321: the rework cards name who is on the fix and the Fix-work hours so far (punches).
       const fix321 = {};
-      for (const bR of builds.filter((b) => b.state === "rework")) { try { fix321[bR.id] = await fixStatus321(bR.id); } catch (e321) { fix321[bR.id] = { on: [], hours: 0 }; } }
+      await Promise.all(builds.filter((b) => b.state === "rework" && needLine360(b.line_id)).map(async (bR) => { try { fix321[bR.id] = await fixStatus321(bR.id); } catch (e321) { fix321[bR.id] = { on: [], hours: 0 }; } }));   // Block 360: side by side; only for a line card that is shown
       const rows = lines.map((l) => ({ line: l,
         active: (() => { const a194 = builds.find((b) => b.line_id === l.id && b.state === "active") || null;
           return a194 ? { ...a194, ready194: ready194[a194.id] || null } : null; })(),
@@ -15581,6 +15616,8 @@ const handleRequest355 = async (req, res) => {
         // names ITS FIX in the corrector — "Fix work — 23109", never "line 15".
         const fxIds272 = [...new Set(tcRawP212.filter((p2) => p2.fix_build_id).map((p2) => p2.fix_build_id))];
         const fxNames272 = {};
+        const inIdsPre360 = tcRawP212.filter((p2) => p2.kind === "clock_in").map((p2) => p2.id);   // Block 360: the Shop-time notes + the open fixes ride with the fix names
+        prefetch356([inIdsPre360.length ? `work_log?select=clock_in_id,note&clock_in_id=in.(${inIdsPre360.join(",")})` : null, "build?select=id,order_number,cab_number&state=eq.fix_job&order=fix_assigned_at"]);
         if (fxIds272.length) for (const bFx of await db(`build?select=id,order_number&id=in.(${fxIds272.join(",")})`)) fxNames272[bFx.id] = bFx.order_number;
         tcPunches = tcRawP212.map((p2) => ({ id: p2.id, kind: p2.kind, hhmm: phxHHMM(p2.claimed_at), line_id: p2.line_id,   // Block 297: line_id feeds the admin "Change line" control
           lineName: p2.line_id === FIX_LINE_ID ? "Fix work" + (fxNames272[p2.fix_build_id] ? " — " + fxNames272[p2.fix_build_id] : "")
@@ -15781,7 +15818,7 @@ const handleRequest355 = async (req, res) => {
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const { byOrder: mgrProj } = proj212;
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215, canInspect321(me)));   // Block 321: sign-off/send-back controls only for Body Shop managers + admins
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215, canInspect321(me), { fold: fold360, part: part360, tcOpen: Boolean(tcEmpSel) }));   // Block 360: the admin folds · Block 321: sign-off/send-back controls only for Body Shop managers + admins
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
