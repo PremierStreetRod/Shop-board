@@ -4960,7 +4960,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}
     ${b.state === "upcoming" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
-    ${b.promised_finish && detail && detail.order && detail.order.ship && String(b.promised_finish) > detail.order.ship ? `<div class="kv"><b>&#9888; Ship risk</b><span style="color:#ff453a">Sold to ship ${escH(detail.order.ship)} &mdash; standard hours land ${escH(b.promised_finish)}</span></div>` : ""}
+    ${"" /* Block 358: the retired "Ship risk" row's slot — kept so every order page stays byte-identical */}
     ${b.started_at ? `<div class="kv"><b>Started</b>${escH(String(b.started_at).slice(0, 10))}</div>` : ""}
     ${b.customer_name && b.customer_display !== false ? `<div class="kv"><b>Customer</b>${escH(b.customer_name)}</div>` : ""}
     ${b.destination ? `<div class="kv"><b>Destination</b>${escH(b.destination)}</div>` : ""}
@@ -12324,9 +12324,8 @@ async function freezeAndStart(b, empId, startedAt) {
   // frozen hours (stock + upgrades) over the family's own day budget (template
   // man-hours / template days — the crew basis is baked in) counted across
   // OPEN shop days. Fixed once set (Q103-6); no padding — honest capacity.
-  // If Coyote's SOLD ship date can't be met on standard hours, the conflict
-  // flags the day the cab starts (managers + admins, Q106-sandboxed) instead
-  // of surfacing the week it ships late. Wrapped: never blocks a start.
+  // (The Coyote ship-date conflict push that lived here was retired in
+  // Block 358 — see below.) Wrapped: never blocks a start.
   try {
     const frozen103 = await db(`task?select=man_hours,is_background&build_id=eq.${b.id}`);
     const totalMh103 = frozen103.filter((t2) => !t2.is_background).reduce((s2, t2) => s2 + Number(t2.man_hours || 0), 0);
@@ -12344,22 +12343,12 @@ async function freezeAndStart(b, empId, startedAt) {
       }
       if (promised103) {
         await db(`build?id=eq.${b.id}`, { method: "PATCH", body: JSON.stringify({ promised_finish: promised103, people_planned: people314, promised_days: daysNeeded103 }) });   // Block 314: frozen with the cab
-        const coyOrd103 = b.coyote_root || String(b.order_number || "").split(".")[0];
-        let ship103 = "";
-        if (coyOrd103) {
-          const [ci103] = await db(`coyote_intake?select=payload&order_number=eq.${encodeURIComponent(coyOrd103)}&order=received_at.desc&limit=1`);
-          const o103 = ci103 && ci103.payload && ci103.payload.order;
-          ship103 = o103 ? String(o103.ship_date || "").slice(0, 10) : "";
-        }
-        const conflict103 = Boolean(ship103 && promised103 > ship103);
+        // Block 358 (Daniel 11/5 08:47 "lets retire it"): the Coyote SHIP-DATE check is retired. Coyote's ship_date is blank on
+        // Queued orders and stamped with the order date once Processed — it was never a sold promise (one push in 35 starts, 23783,
+        // a hand-typed date that had passed before the cab reached the line), and it arrives as M/D/YYYY so the text compare was
+        // wrong anyway. The promise above (hours → finish day) is unchanged and still drives the board, days-left and on-time.
         logEvent("build.promised", empId, { build_id: b.id, order_number: b.order_number, promised: promised103,
-          ship_date: ship103 || null, days: daysNeeded103, total_mh: totalMh103, conflict: conflict103, people_planned: people314, plan_hours_per_day: hpd314 });   // Block 314
-        if (conflict103) {
-          const mg103 = await adminIds225();   // Block 225 (Daniel): ship-date risk is admin-only — rare, high-value, off the floor manager's bell
-          await notify("build.promise_conflict", mg103, `ORDER ${b.order_number} — can't make the sold ship date`,
-            `${totalMh103} allowed hours at ${people314} ${people314 === 1 ? "person" : "people"} × ${hpd314} h/day put the finish at ${promised103}; Coyote has it sold to ship ${ship103}. Upgrade hours are already in the math. Add crew, use an approved after-hours session, or move the customer date.`,
-            "/order/" + encodeURIComponent(b.order_number));
-        }
+          days: daysNeeded103, total_mh: totalMh103, people_planned: people314, plan_hours_per_day: hpd314 });   // Block 314
       }
     }
   } catch (e103) { logEvent("build.promise_error", null, { build_id: b.id, error: String((e103 && e103.message) || e103) }); }
@@ -18066,7 +18055,6 @@ self.addEventListener("notificationclick", (e) => {
         ["build.ready_inspection", "ORDER 23417 — ready for inspection", "Production finished its checklist on Line 1. Sign off in the Manager console, or send it back with a reason.", "/manager"],
         ["afterhours.claimed", "After hours: Jonathan is clocking in", "Reason: Making up hours — plan: finish crating 23445. Confirm in the Manager console if this is approved.", "/manager"],
         ["afterhours.wrapped", "After hours ended: Jonathan, 2.1h", "Wrap note: \"Finished the crate, swept bay 2.\" 1 photo attached. An ADMIN signs off in the Admin console before the hours count.", "/admin"],
-        ["build.promise_conflict", "ORDER 23536 — can't make the sold ship date", "The math says this cab finishes after the date it was sold to ship. Day one is the time to re-plan or re-promise.", "/order/23536"],
         ["pace.warn", "Line 2: TEST-23702 needs help", "This cab just crossed into RED — it's 4.5 hours behind its checklist. A look now beats a surprise at 4pm.", "/board"],
         ["option.flagged", "Order 23539: 2 upgrades need hours", "Coyote sent options the library doesn't price yet. Open the order and set hours (or tap Not production).", "/order/23539"],
       ];
