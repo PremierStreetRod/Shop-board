@@ -1878,12 +1878,13 @@ const style = `<style>
       a.href = "/inbox"; a.title = "Notifications";
       a.style.cssText = "position:fixed;top:10px;right:12px;z-index:60;text-decoration:none;background:#1c1c1e;border:1px solid #2c2c2e;border-radius:20px;padding:6px 12px;color:#fff;font-size:1.05rem;line-height:1";
       a.textContent = "\uD83D\uDD14";
-      if (d.count > 0) {
+      if (d.count > 0) {   // Block 362: the number = what NEEDS YOU (yellow); unread news = a small red dot
         var b = document.createElement("span");
         b.textContent = d.count > 99 ? "99+" : d.count;
-        b.style.cssText = "background:#C8102E;color:#fff;border-radius:10px;padding:1px 7px;margin-left:6px;font-size:.8rem;font-weight:700;vertical-align:top";
-        a.appendChild(b);
+        b.style.cssText = "background:#ffd60a;color:#000;border-radius:10px;padding:1px 7px;margin-left:6px;font-size:.8rem;font-weight:900;vertical-align:top";
+        a.appendChild(b); a.title = d.count + (d.count === 1 ? " thing needs" : " things need") + " you";
       }
+      if (d.news > 0) { var nd = document.createElement("span"); nd.style.cssText = "display:inline-block;width:8px;height:8px;background:#C8102E;border-radius:50%;margin-left:5px;vertical-align:top"; nd.title = "New news"; a.appendChild(nd); }
       document.body.appendChild(a);
       // Block 154 (owner-rep D8): the ⚙ gear rides beside the bell on every
       // app screen — the text "My settings" links are gone.
@@ -4025,8 +4026,89 @@ function bellLink234(n) {
 // first, and the Manager console lane for admins is the same one-tap pair.
 const DEPT_LINE_NAMES_300 = { 9: "Warehouse", 10: "Shop time", 12: "Build time", 13: "Body Shop time", 14: "Off the line", 15: "Fix work", 16: "Accounting time", 17: "Marketing — at the shop", 18: "Marketing — remote", 19: "Panel prep" };
 const lineName300 = (lineId, lines) => ((lines || []).find((l) => l.id === lineId) || {}).name || DEPT_LINE_NAMES_300[lineId] || (lineId ? "Line " + lineId : "");
-const NEEDS_YOU_300 = new Set(["build.ready_inspection", "timeoff.requested", "note.triage"]);   // a claimed (still-open) session is news until it wraps
+const NEEDS_YOU_300 = new Set(["build.ready_inspection", "timeoff.requested", "note.triage"]);   // a claimed (still-open) session is news until it wraps · Block 362: superseded by ACT362 (kept for reference — nothing reads it)
 const ahIdOf300 = (n) => { const m = /[?&]ah=([0-9a-f-]{36})/i.exec(String(n && n.link || "")); return m ? m[1] : null; };
+// ===== Block 362 (Daniel 11/6 08:10, Plan 86): THE BELL — "Needs you" is what is still OPEN, never just what is unread.
+// Rulings: (1) actionable = ready for inspection (the people who inspect), a time-off request, order-note items + upgrades that
+// need a ruling, a short kit, a long day / an auto clock-out (a time correction may be due), an after-hours wrap-up (admins);
+// (2) the bell's number = what needs you; (3) the Coyote part-sync notices leave the bell (their list lives on Lines & parts);
+// (4) a card clears for EVERYONE once anyone handles it — each card is judged by the real state (the cab, the request, the
+// flags, the punches), so nobody has to "mark" anything.
+const ACT362 = { "build.ready_inspection": "insp", "timeoff.requested": "to", "note.triage": "flags", "option.flagged": "flags", "kit.short": "kit", "kit.delivered_short": "kit", "timecard.long_day": "tc", "clock.auto_out": "tc", "afterhours.wrapped": "ah" };
+const OFFBELL362 = ["sync.iface_add", "sync.iface_drop"];
+const TC_FIX362 = ["punch.moved", "punch.voided", "punch.added", "punch.pair_voided", "punch.run_voided", "punch.relined"];
+// A long-day / auto-clock-out notice from BEFORE Daniel's ruling counts as already looked at (the old bell had no other way to say so).
+const TC_FROM362 = "2026-11-06T15:10:00.000Z";
+const actFor362 = (n, me) => { const k = ACT362[n && n.event_type]; if (!k) return false; if (k === "insp" && !canInspect321(me)) return false; if ((k === "ah" || k === "kit") && !(me && me.role === "admin")) return false; return true; };   // inspection: the people who inspect · after-hours + a short kit: admins (they decide / chase the parts) — anyone else gets it as news
+const notMine362 = (me) => OFFBELL362.concat(Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me)));   // event types that are NOT this person's news
+const key362 = (n) => {
+  const kind = ACT362[n && n.event_type]; if (!kind) return null;
+  const t = String(n.title || ""), body = String(n.body || ""), link = String(n.link || "");
+  if (kind === "insp") { const m = /^Order ([A-Za-z0-9.\-]+)/.exec(body); return m ? { kind, key: "insp|" + m[1], order: m[1] } : null; }
+  if (kind === "flags") { const m = /^Order ([A-Za-z0-9.\-]+):/.exec(t); return m ? { kind, key: "flags|" + m[1], order: m[1] } : null; }
+  if (kind === "kit") { const m = /order ([A-Za-z0-9.\-]+)\s*$/i.exec(t); return m ? { kind, key: "kit|" + m[1], order: m[1] } : null; }
+  if (kind === "to") { const m = /[?&]to362=([0-9a-f-]{36})/i.exec(link); return { kind, key: "to|" + (m ? m[1] : "n:" + n.id), reqId: m ? m[1] : null }; }
+  if (kind === "tc") { const e = /[?&]tc_emp=([0-9a-f-]{36})/i.exec(link); if (!e) return null; const d = /[?&]tc_date=(\d{4}-\d{2}-\d{2})/.exec(link);
+    const day = d ? d[1] : phxDate(new Date(n.created_at).getTime()); return { kind, key: `tc|${e[1]}|${day}`, emp: e[1], day }; }
+  if (kind === "ah") { const id = ahIdOf300(n); return id ? { kind, key: "ah|" + id, ah: id } : null; }
+  return null;
+};
+const tcDayOk362 = (p, day) => { const ds = ["from", "to", "at", "in_at", "out_at"].map((k) => p && p[k]).filter(Boolean); return !ds.length || ds.some((x) => { try { return phxDate(new Date(x).getTime()) === day; } catch (e) { return false; } }); };
+// One person's actionable notices (last 30 days, not just the latest 100) judged against the real state — two waves, side by side.
+async function bell362(me) {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const types = Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me));
+  const notes = types.length ? await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=400`) : [];
+  const items = []; for (const n of notes) { const k = key362(n); if (k) items.push({ n, ...k }); }
+  const orders = [...new Set(items.filter((i) => i.order).map((i) => i.order))], reqIds = [...new Set(items.filter((i) => i.reqId).map((i) => i.reqId))];
+  const toOld = items.filter((i) => i.kind === "to" && !i.reqId), tcs = items.filter((i) => i.kind === "tc" && i.n.created_at >= TC_FROM362), ahIds = [...new Set(items.filter((i) => i.ah).map((i) => i.ah))];
+  const minAt = (arr) => arr.reduce((m, i) => (i.n.created_at < m ? i.n.created_at : m), "9999");
+  const q = (x) => `"${String(x).replace(/"/g, "")}"`;
+  const [builds, reqs, reqsOld, evs, ahs, emps, flagsOpen] = await Promise.all([
+    orders.length ? db(`build?select=id,order_number,state,kit_status,kit_verified_by,kit_verified_at&order_number=in.(${orders.map(q).join(",")})`) : [],
+    reqIds.length ? db(`time_off_request?select=id,status,decided_by,decided_at&id=in.(${reqIds.join(",")})`) : [],
+    toOld.length ? db(`time_off_request?select=id,status,decided_by,decided_at,created_at&created_at=gte.${new Date(new Date(minAt(toOld)).getTime() - 600000).toISOString()}&limit=500`) : [],
+    tcs.length ? db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(${TC_FIX362.concat("bell.ok").join(",")})&at=gte.${minAt(tcs)}&order=at.asc&limit=3000`) : [],
+    ahIds.length ? db(`after_hours_session?select=id,started_at,ended_at,signed_off_by,declined_by&id=in.(${ahIds.join(",")})`) : [],
+    db(`employee?select=id,first_name,last_name`),
+    items.some((i) => i.kind === "flags") ? db(`option_flag?select=build_id&resolved=is.false&limit=5000`) : [],   // the still-open rulings are a short list — read beside the cabs, not after them
+  ]);
+  const nm = Object.fromEntries(emps.map((e) => [e.id, `${e.first_name} ${((e.last_name || "")[0] || "")}.`]));
+  const who = (id, at) => [nm[id] || "", at ? `${dayShort291(phxDate(new Date(at).getTime()))} ${phx12_290(at)}` : ""].filter(Boolean).join(", ");
+  const B = new Map(builds.map((b) => [String(b.order_number), b])), openFl = new Set(flagsOpen.map((f) => f.build_id)), R = new Map(reqs.map((r) => [r.id, r]));
+  const ahState = {}; for (const sRow of ahs) ahState[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
+  for (const it of items) {
+    let open = false, done = "";
+    if (it.kind === "insp") { const b = B.get(it.order); open = !!b && b.state === "awaiting_inspection"; done = b && ["rework", "fix_job"].includes(b.state) ? "✓ Sent back for a fix" : b && ["production_complete", "complete"].includes(b.state) ? "✓ Passed inspection" : "✓ No longer waiting"; }
+    else if (it.kind === "flags") { const b = B.get(it.order); open = !!b && openFl.has(b.id); done = "✓ Every item ruled"; }
+    else if (it.kind === "kit") { const b = B.get(it.order); open = !!b && b.kit_status === "short"; done = `✓ Parts confirmed${b && b.kit_verified_by ? " — " + who(b.kit_verified_by, b.kit_verified_at) : ""}`; }
+    else if (it.kind === "to") { let r = it.reqId ? R.get(it.reqId) : null;
+      if (!it.reqId) { const t0 = new Date(it.n.created_at).getTime(); r = reqsOld.map((x) => ({ x, d: Math.abs(new Date(x.created_at).getTime() - t0) })).filter((y) => y.d <= 300000).sort((a, z) => a.d - z.d).map((y) => y.x)[0] || null; }
+      open = !!r && r.status === "pending"; done = r && r.status !== "pending" ? `✓ ${r.status === "approved" ? "Approved" : "Denied"}${r.decided_by ? " — " + who(r.decided_by, r.decided_at) : ""}` : "✓ No longer pending"; }
+    else if (it.kind === "tc") { if (it.n.created_at < TC_FROM362) { open = false; done = "✓ Looked at"; } else {
+      const ok = evs.find((e) => e.event_type === "bell.ok" && e.payload && e.payload.key === it.key);
+      const fix = evs.find((e) => TC_FIX362.includes(e.event_type) && new Date(e.at).getTime() > new Date(it.n.created_at).getTime() && e.payload && e.payload.employee_id === it.emp && tcDayOk362(e.payload, it.day));   // event_log stamps "at"
+      open = !ok && !fix; done = fix ? `✓ Corrected — ${who(fix.actor_id, fix.at)}` : ok ? `✓ Checked, no change needed — ${who(ok.actor_id, ok.at)}` : ""; } }
+    else if (it.kind === "ah") { const st = ahState[it.ah]; open = !!st && !st.signed_off_by && !st.declined_by && !!st.ended_at; done = st && st.declined_by ? "✕ Denied" : st && st.signed_off_by ? "✓ Approved" : ""; }
+    it.open = open; it.done = done;
+  }
+  const byKey = new Map(); for (const it of items) if (!byKey.has(it.key)) byKey.set(it.key, it);   // newest notice per thing (notes are newest first)
+  const needs = [...byKey.values()].filter((it) => it.open);
+  const stateOf = new Map(items.map((it) => [it.n.id, it]));
+  return { needs, stateOf, ahState };
+}
+// The bell's number on every page = what needs you (+ a dot when there is unread news). Asked after the page has drawn, never
+// on its critical path; a 15-second memory per person keeps page-to-page taps from re-asking (wiped when the inbox opens or a
+// "no change needed" is tapped).
+const bellMem362 = new Map();
+async function bellCount362(me) {
+  const hit = bellMem362.get(me.id); if (hit && Date.now() - hit.at < 15000) return hit.val;
+  // Fable 11/6: the news filter runs in code (the unread list is small and capped) — no filter syntax this database hasn't seen
+  const skip = new Set(notMine362(me));
+  const [b, newsAll] = await Promise.all([bell362(me), db(`notification_log?select=id,event_type&intended_employee_id=eq.${me.id}&read_at=is.null&channel=eq.push&limit=400`)]);
+  const val = { needs: b.needs.length, news: newsAll.filter((n) => !skip.has(String(n.event_type))).length };
+  if (bellMem362.size > 500) bellMem362.clear(); bellMem362.set(me.id, { at: Date.now(), val }); return val;
+}
 // The wrap-up notice: who, when, how long, where, their words — and the session id in the link so the card can act.
 const ahWrapNotice300 = (name, s, lineName, wrap, nPhotos) => {
   const hrs = s.ended_at ? Math.round(Math.max(0, new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 360000) / 10 : null;
@@ -4034,7 +4116,7 @@ const ahWrapNotice300 = (name, s, lineName, wrap, nPhotos) => {
   const body = `${lineName}${wrap ? ` · "${wrap}"` : ""}${nPhotos ? ` + ${nPhotos} photo${nPhotos > 1 ? "s" : ""}` : ""}`;
   return { title, body, link: `/inbox?ah=${s.id}` };
 };
-const inboxPage = (emp, notes, ahState300 = {}) => `<!doctype html>
+const inboxPage = (emp, notes, ahState300 = {}, bell362o = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
@@ -4043,16 +4125,21 @@ const inboxPage = (emp, notes, ahState300 = {}) => `<!doctype html>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav -->
   <h2>Notifications</h2>
   ${(() => {
-    // Block 300: which cards NEED Ross — an undecided after-hours wrap-up (admin), or an unread ask.
-    if (!notes.length) return `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`;
+    // Block 362 (Daniel 11/6, Plan 86): NEEDS YOU — what is still OPEN (the newest notice per thing, judged by the real state:
+    // the cab, the request, the flags, the punches) — above NEWS (everything else, newest first). Replaces Block 300's
+    // "unread = needs you" (opening the page cleared it); the after-hours Approve / Deny card is unchanged.
+    const bl = bell362o || { needs: [], stateOf: new Map(), ahState: {} };
     const isAdmin300 = emp && emp.role === "admin";
-    const needs300 = (n) => { const ah = n.event_type === "afterhours.wrapped" ? ahIdOf300(n) : null;
-      if (ah && isAdmin300) { const st = ahState300[ah]; return !!st && !st.signed_off_by && !st.declined_by && !!st.ended_at; }
-      return !n.read_at && NEEDS_YOU_300.has(String(n.event_type)); };
-    const sorted300 = [...notes].map((n, i) => ({ n, i, need: needs300(n) })).sort((a, b) => (b.need - a.need) || (a.i - b.i));
-    for (const x of sorted300) { const ah = x.n.event_type === "afterhours.wrapped" ? ahIdOf300(x.n) : null; if (ah && isAdmin300 && ahState300[ah]) x.n.__ahState = ahState300[ah]; }
-    const nNeed = sorted300.filter((x) => x.need).length;
-    return (nNeed ? `<p style="text-align:center;margin:-6px 0 12px"><span id="needcnt300" style="background:#2a2200;border:1px solid #7a5900;color:#ffd60a;border-radius:10px;padding:4px 12px;font-weight:800">${nNeed} need${nNeed === 1 ? "s" : ""} you</span></p>` : "") + sorted300.map((x) => cardHtml300(x.n, x.need)).join("");
+    for (const it of bl.needs) if (it.kind === "ah") it.n.__ahState = ahState300[it.ah] || bl.ahState[it.ah];
+    const shown362 = new Set(bl.needs.map((it) => it.n.id));
+    const news362 = notes.filter((n) => !shown362.has(n.id));
+    for (const n of news362) { const ah = n.event_type === "afterhours.wrapped" ? ahIdOf300(n) : null; if (ah && isAdmin300 && (ahState300[ah] || bl.ahState[ah])) n.__ahState = ahState300[ah] || bl.ahState[ah]; }
+    if (!bl.needs.length && !news362.length) return `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`;
+    const h362 = (t, extra) => `<h3 style="margin:18px 0 10px;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;opacity:.85">${t}${extra || ""}</h3>`;
+    const needHtml = h362("Needs you", bl.needs.length ? ` <span id="needcnt300" style="background:#ffd60a;color:#000;border-radius:9px;padding:1px 9px;font-size:.85rem;font-weight:900;margin-left:4px">${bl.needs.length}</span>` : "")
+      + (bl.needs.length ? bl.needs.map((it) => it.kind === "tc" ? tcCard362(it) : cardHtml300(it.n, true, { noDot: true })).join("") : `<div style="opacity:.6;text-align:center;margin:0 0 6px">Nothing needs you right now.</div>`);
+    const newsHtml = news362.length ? h362("News") + news362.map((n) => { const it = bl.stateOf.get(n.id); return cardHtml300(n, false, it ? { noDot: true, line: it.open ? "Still open — it’s in Needs you above" : it.done, open: it.open } : {}); }).join("") : "";
+    return needHtml + newsHtml;
   })()}
   <p style="text-align:center;margin-top:20px">
     <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
@@ -4068,18 +4155,26 @@ const inboxPage = (emp, notes, ahState300 = {}) => `<!doctype html>
     try { var res = await fetch(what === "decline" ? "/api/afterhours/decline" : "/api/afterhours/signoff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       var out = await res.json();
       if (out.ok) { row.innerHTML = what === "decline" ? '<span style="color:#ff8a80;font-weight:800">\u2715 Denied \u2014 hours don\u2019t count. They\u2019ve been told.</span>' : '<span style="color:#30d158;font-weight:800">\u2713 Approved \u2014 the hours are on the timecard.</span>';
-        var tag = document.getElementById("ahtag-" + id); if (tag) tag.remove(); var cnt = document.getElementById("needcnt300"); if (cnt) cnt.remove(); return; }
+        var tag = document.getElementById("ahtag-" + id); if (tag) tag.remove(); less362(); return; }   // Block 362: the count goes down by one
       msg.textContent = out.error || "Something went wrong";
     } catch (e) { msg.textContent = "Network hiccup \u2014 try again"; }
     btn.disabled = false;
   }
+  // Block 362: "No change needed" on a long-day / auto-clock-out card — audited (event_log bell.ok), clears it for everyone.
+  function less362(){ var c = document.getElementById("needcnt300"); if (!c) return; var v = Number(c.textContent) - 1; if (v > 0) c.textContent = v; else c.remove(); }
+  async function bellOk362(key, btn){ var row = btn.closest("[data-k362]"), m = row.querySelector(".m362"); btn.disabled = true; m.textContent = "";
+    try { var r = await fetch("/api/bell/ok", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: key }) }); var j = await r.json();
+      if (j && j.ok) { row.querySelector(".r362").innerHTML = '<span style="color:#30d158;font-weight:800">✓ Checked — no change needed</span>'; var t = row.querySelector(".tag362"); if (t) t.remove(); row.style.borderColor = "var(--line)"; less362(); return; }
+      m.textContent = (j && j.error) || "Didn’t go through — try again"; }
+    catch (e) { m.textContent = "Network hiccup — try again"; }
+    btn.disabled = false; }
   function ahDeny300(id){ var d = document.getElementById("ahdeny-" + id); if (d) { d.style.display = "block"; var i = document.getElementById("ahrsn-" + id); if (i) i.focus(); } }
 </script>
 </body></html>`;
 // Block 300: one card. An after-hours wrap-up for an ADMIN is a DIV with Approve / Deny (or its verdict); everything else stays the whole-card link.
-const cardHtml300 = (n, need) => {
+const cardHtml300 = (n, need, o362 = {}) => {   // Block 362: o362 = { noDot, line, open } — an actionable notice shows its state, never an unread dot
     const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " ");
-    const unread = !n.read_at;
+    const unread = !n.read_at && !o362.noDot;
     // Block 233 (Ross): the WHOLE CARD is a link — tap a notification and land
     // where the action is. Block 234 (Daniel): the destination comes from
     // bellLink234 (stored link, or derived for pre-0056 rows); a notice with
@@ -4098,8 +4193,25 @@ const cardHtml300 = (n, need) => {
         <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
       </div>
       <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
+      ${o362.line ? `<div style="font-size:.86rem;margin-top:6px;font-weight:700;color:${o362.open ? "#ffd60a" : "#30d158"}">${String(o362.line).replace(/</g, "&lt;")}</div>` : ""}
       ${st ? `<div id="ahrow-${ahId}" style="margin-top:10px">${verdict}</div><div id="ahmsg-${ahId}" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>` : go234 ? `<div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>` : ""}
     </${go234 ? "a" : "div"}>`; };
+
+// Block 362: a long-day / auto-clock-out card in Needs you — a link to Time corrections + one audited "No change needed" tap.
+// It also clears by itself when anyone corrects that person's punches for that day.
+const tcCard362 = (it) => { const n = it.n; const when = new Date(new Date(n.created_at).getTime() - 7 * 3600000).toISOString().slice(0, 16).replace("T", " "); const go = bellLink234(n);
+  return `<div data-k362="${String(it.key).replace(/"/g, "")}" style="background:var(--card);border:1px solid #ffd60a;border-radius:12px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+        <b><span class="tag362" style="background:#ffd60a;color:#000;border-radius:7px;padding:1px 7px;font-size:.72rem;font-weight:900;letter-spacing:.04em;margin-right:6px;vertical-align:middle">NEEDS YOU</span>${String(n.title).replace(/</g, "&lt;")}</b>
+        <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
+      </div>
+      <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
+      <div class="r362" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        ${go ? `<a href="${String(go).replace(/"/g, "&quot;")}" style="background:#2c2c2e;border:1px solid #3a3a3c;border-radius:10px;color:#fff;font-weight:700;padding:10px 14px;text-decoration:none">Open Time corrections &rarr;</a>` : ""}
+        <button onclick="bellOk362('${String(it.key).replace(/'/g, "")}',this)" style="background:#1d5a2d;border:1px solid #30d158;border-radius:10px;color:#fff;font-weight:800;padding:10px 14px;font-size:.95rem;cursor:pointer">&#10003; No change needed</button>
+      </div>
+      <div class="m362" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>
+    </div>`; };
 
 // Q86 hand-off: the NO-LOGIN phone page. With a valid code it shows a photo
 // upload that posts straight to the code's one cab; without one it shows a
@@ -9727,6 +9839,27 @@ async function linesManagerData() {
   const occ122 = {}; for (const b of onLine122) if (b.line_id != null && !occ122[b.line_id]) occ122[b.line_id] = b.order_number;
   return { lines: lines.map((l) => ({ id: l.id, name: l.name, enabled: l.enabled, families: usage[l.id] || [], occupant: occ122[l.id] || null, people: Number(l.people_planned) > 0 ? Number(l.people_planned) : 1, roster: roster314[l.id] || 0 })), families, planHpd: await planHoursPerDay314() };
 }
+// Block 362 (Daniel 11/6, Plan 86): the Coyote part-sync notices left the bell; this is their list. A part Coyote calls a tracked
+// cab part that the library doesn't have yet (its orders can't place themselves), and a part Coyote unchecked that the library
+// still builds. Each part once, with its orders — and it drops off by itself once the library agrees with Coyote.
+function coyLane362(d) {
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const lib = new Map(); for (const f of d.families || []) for (const p of f.parts || []) lib.set(String(p.part_number).toUpperCase(), p);
+  const adds = new Map(), drops = new Map();
+  for (const e of d.coy362 || []) { const part = String((e.payload && e.payload.part) || "").toUpperCase(); if (!part) continue;
+    const inLib = lib.get(part), m = e.event_type === "sync.iface_add" ? adds : drops;
+    if (e.event_type === "sync.iface_add" ? inLib : !inLib || inLib.retired) continue;
+    const r = m.get(part) || { part, orders: new Set(), last: e.at }; if (e.payload.order_number) r.orders.add(String(e.payload.order_number)); if (e.at > r.last) r.last = e.at; m.set(part, r); }   // event_log stamps "at"
+  if (!adds.size && !drops.size) return "";
+  const when = (iso) => dayShort291(phxDate(new Date(iso).getTime()));
+  const ords = (r) => [...r.orders].slice(0, 8).join(", ") + (r.orders.size > 8 ? ` +${r.orders.size - 8} more` : "");
+  return `<div class="lane" id="coy362" style="border-color:#ffd60a">
+    <h3 style="margin:0 0 4px">From Coyote &mdash; cab parts waiting on you</h3>
+    <p class="muted" style="margin:0 0 10px;font-size:.88rem">These used to ring the bell. A part drops off this list by itself once the library below agrees with Coyote.</p>
+    ${[...adds.values()].map((r) => `<div style="padding:7px 0;border-top:1px solid var(--line)"><b>${esc(r.part)}</b> &mdash; Coyote marks it a tracked cab part, but it isn't in the library yet, so its orders can't place themselves. <span class="muted">Order${r.orders.size === 1 ? "" : "s"} ${esc(ords(r))} &middot; last seen ${esc(when(r.last))}</span><br><span style="font-size:.88rem">Add it below (family, line, build steps) and those orders place on the next sync.</span></div>`).join("")}
+    ${[...drops.values()].map((r) => `<div style="padding:7px 0;border-top:1px solid var(--line)"><b>${esc(r.part)}</b> &mdash; Coyote unchecked it, but the library still builds it. <span class="muted">Order${r.orders.size === 1 ? "" : "s"} ${esc(ords(r))} &middot; last seen ${esc(when(r.last))}</span><br><span style="font-size:.88rem">If that was on purpose, retire it below; if not, re-check the box in Coyote and re-push.</span></div>`).join("")}
+  </div>`;
+}
 function linesManagerPage(d) {
   const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const inp = "background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:inherit;font-size:.95rem";
@@ -9790,6 +9923,7 @@ function linesManagerPage(d) {
   <h2>Lines &amp; parts <span class="muted" style="font-size:.6em;font-weight:400">— production lines &amp; the cab part numbers Coyote routes to them</span></h2>
   <p class="muted" style="margin-top:-8px">Add or rename a line, move a cab family to a different line, and register the part numbers a cab is built from. Every part number here is <b>accepted Coyote push data</b> — a number not in this catalog is ignored when a push lands. Changes apply to the next push and to new placements; cabs already on the board don't move.</p>
 
+  ${coyLane362(d)}
   <div class="lane">
     <h3>Production lines</h3>
     <table><tr><th>#</th><th>Name</th><th>Status</th><th>People planned</th><th>Cabs routing here</th><th></th></tr>
@@ -10119,20 +10253,14 @@ async function syncRun(apply, actorId) {
     if (apply && it.ifaceAdds && it.ifaceAdds.length) for (const p176 of it.ifaceAdds) {
       const k176 = "add|" + it.orderNo + "|" + p176.toUpperCase();
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
-      try {
-        const adm176 = await adminIds225();   // Block 225: Coyote part-interface flags are admin plumbing
-        await notify("sync.iface_add", adm176, `Order ${it.orderNo}: new Coyote cab part ${p176}`, `Coyote marks ${p176} as a tracked cab part, but it is not in the board's part library yet, so this cab cannot place itself. Add ${p176} under Admin -> Lines & Parts (family, line, build steps) and the order places automatically on the next sync.`, "/reconcile");
-      } catch (eA176) { console.error("iface-add notify:", (eA176 && eA176.message) || eA176); }
+      // Block 362 (Daniel 11/6: "move them off the bell"): no bell / push any more — the event below feeds the list on Lines & parts
       logEvent("sync.iface_add", actorId || null, { order_number: it.orderNo, part: p176 });
       sum.flagged++; A(it.orderNo, "Coyote added a tracked part the board does not know", { part: p176 });
     }
     if (apply && it.ifaceDrops && it.ifaceDrops.length) for (const p176 of it.ifaceDrops) {
       const k176 = "drop|" + p176.toUpperCase();   // per PART: one unchecked box floods every order carrying it
       if (__ifaceNoticed176.has(k176)) continue; __ifaceNoticed176.add(k176);
-      try {
-        const adm176 = await adminIds225();   // Block 225: Coyote part-interface flags are admin plumbing
-        await notify("sync.iface_drop", adm176, `Coyote unchecked cab part ${p176}`, `Coyote now marks ${p176} as NOT part of the interface (its checkbox is off), so orders carrying it stop building cabs here. If that was intentional, retire it under Lines & Parts too; if not, re-check the box in Coyote and re-push.`, "/reconcile");
-      } catch (eD176) { console.error("iface-drop notify:", (eD176 && eD176.message) || eD176); }
+      // Block 362 (Daniel 11/6: "move them off the bell"): no bell / push any more — the event below feeds the list on Lines & parts
       logEvent("sync.iface_drop", actorId || null, { order_number: it.orderNo, part: p176 });
     }
     if (it.action === "park") {
@@ -14768,8 +14896,31 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/api/inbox/unread") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false });
-      const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&channel=eq.push&limit=200`);   // Block 233 (Ross): count ONLY the push-channel row — one per notice; the sms/email rows are delivery bookkeeping, not separate notifications
-      return json(200, { ok: true, count: un.length });
+      // Block 362 (Plan 86): the bell's number = what NEEDS YOU (still open, judged by the real state); news = a dot. Push-channel rows only
+      // (Block 233: one row per notice). Asked after the page draws; 15-second memory per person.
+      const [meB362] = await db(`employee?select=id,role,department&id=eq.${empId}`);
+      if (!meB362) return json(401, { ok: false });
+      try { const c362 = await bellCount362(meB362); return json(200, { ok: true, count: c362.needs, news: c362.news }); }
+      catch (eB362) {   // Fable 11/6: the bell must never vanish — fall back to the old unread count (red number) and say so in the log
+        console.error("bell362:", eB362 && eB362.message);
+        const un = await db(`notification_log?select=id&intended_employee_id=eq.${empId}&read_at=is.null&channel=eq.push&limit=200`);
+        return json(200, { ok: true, count: un.length, news: 0, fallback: true }); }
+    }
+
+    // Block 362 (Plan 86): "No change needed" on a long-day / auto-clock-out card. Only someone who got that notice can tap it;
+    // it is written to event_log (bell.ok — the audit record) and clears the card for everyone who got it.
+    if (url.pathname === "/api/bell/ok" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Sign in again" });
+      const { key } = await body(req);
+      const m362 = /^tc\|([0-9a-f-]{36})\|(\d{4}-\d{2}-\d{2})$/i.exec(String(key || ""));
+      if (!m362) return json(400, { ok: false, error: "Unknown card" });
+      const mine362 = await db(`notification_log?select=id,event_type,title,body,link,created_at&intended_employee_id=eq.${empId}&channel=eq.push&event_type=in.(timecard.long_day,clock.auto_out)&created_at=gte.${TC_FROM362}&order=created_at.desc&limit=200`);   // Fable 11/6: matched in code (key362), no like filter
+      const hit362 = mine362.find((n) => { const k = key362(n); return k && k.key === key; });
+      if (!hit362) return json(403, { ok: false, error: "That card isn't yours" });
+      await db("event_log", { method: "POST", body: JSON.stringify({ event_type: "bell.ok", actor_id: empId, payload: { key, kind: "tc", employee_id: m362[1], day: m362[2], notice_type: hit362.event_type } }) });
+      bellMem362.clear();
+      return json(200, { ok: true });
     }
 
     // Q120: the in-app notification inbox — a person's own history, newest
@@ -14779,16 +14930,23 @@ const handleRequest355 = async (req, res) => {
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      const notes = await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=100`);   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056). Block 234: event_type feeds bellLink234's fallback for pre-0056 rows
+      // Block 362 (Plan 86): the news list (the Coyote part-sync notices left the bell) and Needs you, side by side
+      const [notesAll, bell362o] = await Promise.all([
+        db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=120`),
+        bell362({ id: empId, role: emp.role, department: emp.department }).catch((eI362) => { console.error("bell362 inbox:", eI362 && eI362.message); return { needs: [], stateOf: new Map(), ahState: {}, failed: true }; }),   // Fable 11/6: a failure shows the page as plain news rather than a 500
+      ]);
+      const notes = notesAll.filter((n) => !OFFBELL362.includes(String(n.event_type))).slice(0, 100);   // Fable 11/6: the Coyote part-sync notices filtered in code   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056). Block 234: event_type feeds bellLink234's fallback for pre-0056 rows
       // Block 300: the after-hours cards act — read each session's verdict so the card shows Approve/Deny or the outcome.
       let ahState300 = {};
       if (emp.role === "admin") {
-        const ids300 = [...new Set(notes.map(ahIdOf300).filter(Boolean))];
+        const ids300 = [...new Set(notes.map(ahIdOf300).filter(Boolean))].filter((id) => !bell362o.ahState[id]);   // Block 362: Needs you already read these
         if (ids300.length) for (const sRow of await db(`after_hours_session?select=id,started_at,ended_at,signed_off_by,declined_by&id=in.(${ids300.join(",")})`))
           ahState300[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
       }
-      const html = inboxPage(emp, notes, ahState300);
-      const unreadIds = notes.filter((n) => !n.read_at).map((n) => n.id);
+      const html = inboxPage(emp, notes, ahState300, bell362o);
+      const meI362 = { id: empId, role: emp.role, department: emp.department };
+      const unreadIds = bell362o.failed ? [] : notes.filter((n) => !n.read_at && !actFor362(n, meI362)).map((n) => n.id);   // Block 362: opening the page reads the NEWS; what needs you stays until it is handled (Fable: nothing is marked read on a failed judge)
+      bellMem362.delete(empId);
       if (unreadIds.length)
         await db(`notification_log?id=in.(${unreadIds.join(",")})`, { method: "PATCH", body: JSON.stringify({ read_at: new Date().toISOString() }) });
       return send(200, "text/html; charset=utf-8", html);
@@ -16195,7 +16353,9 @@ const handleRequest355 = async (req, res) => {
       const [me] = await db(`employee?select=role,must_change_pin&id=eq.${empId}`);
       if (!me || me.role !== "admin") { res.writeHead(302, { Location: "/home" }); return res.end(); } // block 118: pages never dead-end
       if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
-      const data = await linesManagerData();
+      // Block 362 (Plan 86): the Coyote part-sync notices left the bell — their list lives here, read side by side with the page
+      const [data, ev362] = await Promise.all([linesManagerData(), db(`event_log?select=event_type,payload,at&event_type=in.(sync.iface_add,sync.iface_drop)&at=gte.${new Date(Date.now() - 90 * 86400000).toISOString()}&order=at.desc&limit=2000`).catch(() => [])]);
+      data.coy362 = ev362;
       return send(200, "text/html; charset=utf-8", linesManagerPage(data));
     }
 
@@ -17445,7 +17605,7 @@ const handleRequest355 = async (req, res) => {
       // Approvals are admin-only now, so the new-request heads-up goes to admins.
       const recips = (await db(`employee?select=id&role=eq.admin&active=is.true`)).map((e) => e.id);
       await notify("timeoff.requested", recips, "Time-off request",
-        `${meT ? meT.first_name + " " + meT.last_name : "Someone"} asked for ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.${rnote ? ` — "${rnote}"` : ""}`, "/manager");
+        `${meT ? meT.first_name + " " + meT.last_name : "Someone"} asked for ${start_date === end ? start_date : start_date + " → " + end}${rsn ? " · " + rsn : ""}.${rnote ? ` — "${rnote}"` : ""}`, row && row.id ? `/manager?to362=${row.id}` : "/manager");   // Block 362: the request rides the link so the bell knows when it's decided
       return json(200, { ok: true });
     }
 
