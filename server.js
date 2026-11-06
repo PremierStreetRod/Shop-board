@@ -3100,7 +3100,7 @@ function kitParts344(note) { return String(note == null ? "" : note).split(/[,;\
 function whOwedLane344(b, owed, canAct) {
   const parts = kitParts344(owed.kit_note);
   const rows = parts.map((pt) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #2c2c2e"><span style="font-weight:600">${whEsc288(pt)}</span>${canAct ? `<button class="b grn" data-part="${whEsc288(pt)}"${parts.length === 1 ? ' data-last="1"' : ""} onclick="partArrived344(this,'${b.id}')">&#10003; Arrived</button>` : ""}</div>`).join("");
-  return `<div class="lane" style="border-color:#ff9f0a"><b>Started short &mdash; parts still owed</b><div style="color:#ff9f0a;font-weight:700;margin:4px 0">Missing: ${whEsc288(owed.kit_note || "no note left")}</div>
+  return `<div class="lane" style="border-color:#ff9f0a"><b>${b && b.started_at ? "Started short" : "Kit short"} &mdash; parts still owed</b><div style="color:#ff9f0a;font-weight:700;margin:4px 0">Missing: ${whEsc288(owed.kit_note || "no note left")}</div>
     ${parts.length ? `<div style="opacity:.6;font-size:.85rem;margin:6px 0 2px">${parts.length === 1 ? "Tap Arrived when it comes in &mdash; that closes the loop." : `${parts.length} parts still owed &mdash; tap Arrived on each one as it comes in. The last one closes the loop.`}</div><div style="margin-bottom:8px;border-bottom:1px solid #2c2c2e">${rows}</div>` : ""}
     <div style="opacity:.6;font-size:.85rem;margin-bottom:8px">Everything came in at once? Tap All arrived.</div>${canAct ? `<button class="b grn" onclick="arm(this,()=>post('/api/kit/arrived',{build_id:'${b.id}'},this))">All arrived — kit complete &#10003;</button> <button class="b mv" onclick="openOwed344('${b.id}')">Edit the list</button>
     <div class="np" id="ko344-${b.id}" style="display:none;margin-top:10px"><div style="font-size:.85rem;opacity:.75">Fix a typo, add a part that turned up missing, or take one off. Separate parts with commas.</div><input id="kn344-${b.id}" maxlength="400" value="${whEsc288(owed.kit_note || "")}" data-was="${whEsc288(owed.kit_note || "")}"><button class="b grn" onclick="saveOwed344(this,'${b.id}')">Save the list</button> <button class="b mv" onclick="closeOwed344('${b.id}')">Cancel</button></div>` : `<span style="opacity:.6">Clock in to tap Arrived.</span>`}<div class="msg err" id="err"></div></div>`;
@@ -4004,6 +4004,10 @@ const LINK_FALLBACK_234 = {
   "afterhours.wrapped": "/manager", "afterhours.claimed": "/admin",
 };
 function bellLink234(n) {
+  // Block 363 (Daniel 11/6 08:49: "the kit short, needs you notice, when clicked, just takes me to the order queue … shouldnt it take
+  // us directly to the order"): a short-kit notice opens its cab — the cab page shows what warehouse said is missing. Old notices
+  // stored the Order Queue; the order is the last word of every short-kit title, so they open the cab too.
+  if (n && (n.event_type === "kit.short" || n.event_type === "kit.delivered_short")) { const mk363 = /\border\s+([A-Za-z]*\d[A-Za-z0-9.\-]*)\s*$/i.exec(String(n.title || "")); if (mk363) return "/order/" + encodeURIComponent(mk363[1]); }
   const stored = n.link && n.link !== "/home" ? String(n.link) : null;
   if (stored) return stored;
   const ev = String(n.event_type || "");
@@ -5208,7 +5212,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
       ${Number(d) === 0 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">REWORK / FIX</div>` : Object.keys(byDay).filter((k) => Number(k) > 0).length > 1 ? `<div style="opacity:.55;font-weight:700;margin-top:10px">DAY ${escH(d)}</div>` : ""}
       ${byDay[d].map((t) => `<div style="padding:2px 0;opacity:${t.state === "complete" ? ".55" : ".9"}">${mark(t.state)} ${escH(t.display_no)}. ${escH(t.name)} <span style="opacity:.5">(${Number(t.man_hours)}h)${t.day_end && t.day_end > t.day_no ? ` &middot; runs Days ${escH(t.day_no)}&ndash;${escH(t.day_end)}` : ""}</span></div>`).join("")}`).join("")}
   </div>` : `<div class="lane" style="opacity:.7">No task list yet — the step list freezes onto the cab when warehouse delivers the kit and the build starts.</div>`}`;
-  const attnKv361 = `${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}${b.state === "upcoming" && b.kit_status === "short" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}`;
+  const attnKv361 = `${b.coyote_status && b.coyote_status !== "Queued" && b.coyote_status !== "Processed" ? `<div class="kv"><b>&#9873; Coyote</b><span style="color:#ff8fa3">Order is ${escH(b.coyote_status)} in Coyote${b.started_at ? " — noted; this cab stays in production" : " — set aside until it returns to Queued"}</span></div>` : ""}${b.kit_status === "short" && b.state !== "cancelled" ? `<div class="kv"><b>Kit</b><span>SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}${b.started_at ? ` · started short — still owed since ${escH(dayShort291(phxDate(new Date(b.started_at).getTime())))}` : ""}${canFull || isAdmin97 ? `<br><a href="/warehouse/${encodeURIComponent(b.order_number)}" style="color:#8ec2f0">Warehouse page for this cab${b.started_at ? " — tap Arrived as each part comes in" : ""} &rarr;</a>` : ""}</span></div>` : ""}`;   /* Block 363 (Daniel 11/6): a short kit shows here in EVERY state (queue, on hold, on the line), not just the queue — what is missing, since when, and where it gets closed */
   const attn361 = (attnKv361.trim() ? `<div class="lane" id="attn361" style="border-color:#ffd60a"><div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS ATTENTION</div>${attnKv361}</div>` : "") + `  ${flags.length ? `<div class="lane" style="border-color:#ffd60a">
     <div style="font-weight:800;letter-spacing:.03em;margin-bottom:6px">&#9873; NEEDS A RULING \u2014 UPGRADE HOURS &amp; NOTE ITEMS</div>
     ${canHours
@@ -17265,7 +17269,7 @@ const handleRequest355 = async (req, res) => {
         void notify("kit.delivered_short", adminsMS254.map((a) => a.id),
           `Cab started SHORT — order ${b.order_number}`,
           `Management started this cab with parts still missing${b.kit_note ? `: "${String(b.kit_note).slice(0, 140)}"` : " (no note left)"}. It stays on the still-owed list until warehouse confirms the parts arrived.`,
-          "/reconcile");
+          `/order/${encodeURIComponent(b.order_number)}`);   // Block 363: opens the cab, not the Order Queue
       }
       return json(200, { ok: true });
     }
@@ -17382,7 +17386,7 @@ const handleRequest355 = async (req, res) => {
         void notify("kit.short", adminsK222.map((a) => a.id),
           `Kit SHORT — order ${b.order_number}`,
           `Warehouse marked this on-deck kit short${note ? `: "${String(note).slice(0, 140)}"` : " (no note left)"}. Parts are missing — the sooner they're chased, the less the line waits.`,
-          "/reconcile");
+          `/order/${encodeURIComponent(b.order_number)}`);   // Block 363: opens the cab, not the Order Queue
       }
       // Block 131 (L6): verifying a stuck pin can change who's on deck — revert any pull now stranded.
       await revertStrandedPull(b.line_id, whoId);
@@ -17468,7 +17472,7 @@ const handleRequest355 = async (req, res) => {
         void notify("kit.delivered_short", await floorMgrIds220(),
           `Kit delivered SHORT — order ${b.order_number}`,
           `Warehouse sent this cab to the line with parts still missing${b.kit_note ? `: "${String(b.kit_note).slice(0, 140)}"` : " (no note left)"}. Production can work around it; the cab stays on the still-owed list until warehouse confirms the parts arrived.`,
-          "/reconcile");
+          `/order/${encodeURIComponent(b.order_number)}`);   // Block 363: opens the cab, not the Order Queue
       }
       if (lnGateD && lnGateD.down_today) {
         // Block 133 (logic audit L9): the line is DOWN — warehouse drops the kit
