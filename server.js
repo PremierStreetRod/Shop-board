@@ -2975,46 +2975,75 @@ const whEsc288 = (x) => escH(x).split('"').join("&quot;");
 // does (Build sooner / Build later) and the first tap spells out the exact
 // swap (Build 23697 BEFORE 23659? Tap again) — same /api/kit/move call after.
 const whOrd289 = (o) => String(o == null ? "" : o).replace(/[^A-Za-z0-9. -]/g, "");
+// ===== Block 366 (Daniel 11/6 11:21 + 11:26 + 11:29, Plan 90): THE KIT IN 3 STEPS, PANEL PREP OPTIONAL. Eric couldn't see how
+// to get 23887 to Line 4: his missing parts sat in a NOTE (kit still "Not checked yet"), Pull + Deliver only appear once the kit
+// is checked, and the one button that looked like a next step was "Prep panels — start" — so he tapped through prep (0 h) and
+// only then marked it short. Now one card: 1 Check the kit (All parts here / Parts missing — mark it short; a note that lists
+// parts asks "are they missing?"), 2 Pull the kit, 3 Deliver to <line>. Done steps get a ✓ and their small undo; later steps
+// are grey. Panel prep is its own OPTIONAL box (never holds up delivery; opens once the pull starts — the 10/30 rule) with a
+// Skip tap. Same endpoints, same payloads, same rules as before (only the look + the new /api/prep/skip · /unskip).
+const PREP_QUICK_H366 = 5 / 60;   // Block 366 (#5): "Panels ready" under 5 minutes of prepping asks "did the crew do it instead?"
+const kitStep366 = (n, state, title, sub, body) => `<div class="st366 ${state}"><div class="sth366"><span class="stn366">${state === "done" ? "&#10003;" : n}</span><b>${title}</b></div>${sub ? `<div class="sts366">${sub}</div>` : ""}${body ? `<div class="stb366">${body}</div>` : ""}</div>`;
 const whRow288 = (q, i, r, canAct, canPrep301 = false, clockedIn301 = false) => {
   const dis = canAct ? "" : " disabled";
   const pullIdx = (r.queue[0] && r.queue[0].queue_pinned && r.queue[0].kit_status !== "verified") ? r.queue.findIndex((z) => z.kit_status === "verified") : 0;
-  const isNext = i === (pullIdx < 0 ? 0 : pullIdx);
+  const isNext = i === (pullIdx < 0 ? 0 : pullIdx), isPullTarget = i === pullIdx;
   const busy = r.active || r.awaiting[0] || r.rework[0];
-  const isShort = q.kit_status === "short", isOk = q.kit_status === "verified";
+  const isShort = q.kit_status === "short", isOk = q.kit_status === "verified", checked = isShort || isOk;
+  const lineShort = String((r.line && r.line.name) || "the line").split(" — ")[0];
+  const parts = kitParts344(q.kit_note), nParts = parts.length;
+  const noteTxt = whEsc288(q.kit_note || "");
+  // STEP 1 — check the kit
+  const s1 = !checked
+    ? kitStep366(1, "now", "Check the kit", q.kit_note ? `Your note lists: <b>${noteTxt}</b> &mdash; are these parts missing?` : "Are all the parts here?",
+        `<button class="b grn big"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All parts here</button>
+         <button class="b short366 big"${dis} onclick="openNote288('${q.id}',true)">Parts missing &mdash; mark it short</button>
+         ${q.kit_note ? "" : `<button class="b mv lnk366"${dis} onclick="openNote288('${q.id}',false)">+ Note (not missing parts)</button>`}`)
+    : isOk
+      ? kitStep366(1, "done", "Kit checked &mdash; all parts here", q.kit_note ? `Note: ${noteTxt}` : "",   // Fable audit: a plain note on a verified kit still shows
+          `<button class="b sm366"${dis} onclick="openNote288('${q.id}',true)">Parts missing after all</button> <button class="b sm366"${dis} onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo</button>`)
+      : kitStep366(1, "done", `Kit checked &mdash; SHORT${nParts ? ` ${nParts} part${nParts === 1 ? "" : "s"}` : ""}`, `<span class="miss366">${q.kit_note ? `Missing: ${noteTxt}` : "No list left &mdash; tap Edit list"}</span>`,
+          `<button class="b sm366"${dis} onclick="openNote288('${q.id}',false)">Edit list</button> <button class="b sm366"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">All arrived &mdash; verify kit</button> <button class="b sm366"${dis} onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo short</button>`);
+  // STEP 2 — pull the kit (only the on-deck cab may pull)
+  const s2 = q.kit_pull_started_at && isPullTarget   // Fable audit: a pull shows as done only on the on-deck cab (Block 131 — a stranded pull is reverted server-side; never offer Deliver on it)
+    ? kitStep366(2, "done", `Pull started ${whTime288(q.kit_pull_started_at)}`, "", `<button class="b sm366"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
+    : !isPullTarget
+      ? kitStep366(2, "wait", "Pull the kit", isNext ? "after step 1" : `opens when this cab is next up${r.queue[pullIdx < 0 ? 0 : pullIdx] ? ` &mdash; Order ${whEsc288(r.queue[pullIdx < 0 ? 0 : pullIdx].order_number)} goes first` : ""}`, "")
+      : !checked ? kitStep366(2, "wait", "Pull the kit", "after step 1", "")
+      : kitStep366(2, "now", "Pull the kit", "Tap when you begin gathering it.", `<button class="b grn big"${dis} onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">${isShort ? "Pull started — gathering what we have" : "Pull started — gathering the kit"}</button>`);
+  // STEP 3 — deliver (starts the cab)
+  const s3 = !(q.kit_pull_started_at && isPullTarget)
+    ? kitStep366(3, "wait", `Deliver to ${whEsc288(lineShort)} &mdash; starts the cab`, "after step 2", "")
+    : busy
+      ? kitStep366(3, "wait", `Deliver to ${whEsc288(lineShort)}`, `<span style="color:#ffd60a">Waits &mdash; Order ${whEsc288(busy.order_number)} is still on the line (${whEsc288(String(busy.state).replace(/_/g, " "))}). It stays until a manager signs it off.</span>`, "")
+      : kitStep366(3, "now", `Deliver to ${whEsc288(lineShort)}`, isShort ? `Starts the cab. It goes <b>SHORT</b> &mdash; the office is told and the ${nParts ? `${nParts} part${nParts === 1 ? "" : "s"}` : "missing parts"} stay on the owed list.` : "Starts the cab when it's all on the line.",
+          `<button class="b grn big"${dis} onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${isShort ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}</button>`);
+  const pinNote = isNext ? "" : (i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div class="qnote" style="color:#ffd60a">&#128204; Held by the office, but this kit isn't ready &mdash; the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : "");
+  const moves = `${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv sm366" title="Changes the build order: this cab moves one spot earlier" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} BEFORE ${whOrd289(r.queue[i - 1].order_number)}? Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this))"${dis}>&#9650; Build sooner</button>` : ""}${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv sm366" title="Changes the build order: this cab moves one spot later" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} AFTER ${whOrd289(r.queue[i + 1].order_number)}?${i === pullIdx && q.kit_pull_started_at ? " Cancels the pull." : ""} Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this))"${dis}>&#9660; Build later</button>` : ""}`;
+  const prepOpen = Boolean(q.kit_pull_started_at) || (q.prep && q.prep.state && q.prep.state !== "none");
   return `<div class="qr${isNext ? " next" : ""}">
-        <div class="qpos">${isNext ? "&#9654;" : i + 1}</div>
-        <div class="qinfo">${isNext ? `<span class="tag blu">NEXT UP</span>` : ""}<span class="o">Order ${q.order_number}</span>${q.family ? `<span class="f">${whEsc288(q.family)}</span>` : ""}
-          <span class="s">${q.cab_number ? `Cab #${q.cab_number}` : ""}${q.cab_number && q.part_number ? " &middot; " : ""}${q.part_number || ""}</span></div>
-        <div class="qst">${isOk ? '<span class="chip ok">&#10003; Kit verified</span>' : isShort ? '<span class="chip short">Short &mdash; parts missing</span>' : '<span class="chip unv">Not checked yet</span>'}${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; Held by the office</span>' : ""}</div>
-        <div class="qact">
-          ${!isOk ? `<button class="b grn"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'verified'},this)">${isShort ? "Parts are here &mdash; verify kit" : isNext ? "Verify kit &mdash; all parts here" : "Verify kit"}</button>` : ""}
-          ${isOk ? `<button class="b"${dis} onclick="arm(this,()=>post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this))">Undo verify</button>` : ""}
-          ${!isShort ? `<button class="b red"${dis} onclick="openNote288('${q.id}',true)">Mark short</button>` : `<button class="b"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'unverified'},this)">Re-check</button>`}
-          <button class="b mv"${dis} onclick="openNote288('${q.id}',false)">${q.kit_note ? "Edit note" : "Add note"}</button>
-          ${i > 0 && !q.queue_pinned && !r.queue[i - 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot earlier" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} BEFORE ${whOrd289(r.queue[i - 1].order_number)}? Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'up'},this))">&#9650; Build sooner</button>` : ""}
-          ${i < r.queue.length - 1 && !q.queue_pinned && !r.queue[i + 1].queue_pinned ? `<button class="b mv"${dis} title="Changes the build order: this cab moves one spot later" onclick="armMv288(this,'Build ${whOrd289(q.order_number)} AFTER ${whOrd289(r.queue[i + 1].order_number)}?${i === pullIdx && q.kit_pull_started_at ? " Cancels the pull." : ""} Tap again',()=>post('/api/kit/move',{build_id:'${q.id}',dir:'down'},this))">&#9660; Build later</button>` : ""}
-        </div>
-        ${prepStrip301(q, canPrep301, clockedIn301)}   <!-- Block 301: panel prep lives on the row Eric already works -->
-        ${q.kit_note ? `<div class="qnote${isShort ? " sh" : ""}">${isShort ? "Missing: " : "Note: "}${whEsc288(q.kit_note)}</div>` : ""}
-        ${i === 0 && q.queue_pinned && q.kit_status !== "verified" && r.queue.some((z, zi) => zi > 0 && z.kit_status === "verified") ? `<div class="qnote" style="color:#ffd60a">&#128204; Held by the office, but this kit isn't ready — the next ready cab goes ahead. This one keeps its spot and goes the moment its kit is verified.</div>` : ""}
+        <div class="qinfo">${isNext ? `<span class="tag blu">NEXT UP</span>` : `<span class="tag wt366">#${i + 1} WAITING</span>`}<span class="o">Order ${whEsc288(q.order_number)}</span>${q.family ? `<span class="f">${whEsc288(q.family)}</span>` : ""}
+          <span class="s">${q.cab_number ? `Cab #${whEsc288(q.cab_number)}` : ""}${q.cab_number && q.part_number ? " &middot; " : ""}${whEsc288(q.part_number || "")}</span>${q.queue_pinned ? ' <span class="chip" style="background:#3a2f10;color:#ffd60a" title="The front office pinned this spot — it can&#39;t be moved or crossed">&#128204; Held by the office</span>' : ""}</div>
+        <div class="steps366"><div class="stt366">&#128230; Get this cab to ${whEsc288(lineShort)} &mdash; 3 steps</div>${s1}${s2}${s3}</div>
         <div class="np" id="np-${q.id}" style="display:none">
-          <div class="nplab">What's missing, and when is it expected? <span style="opacity:.6">(stays with warehouse)</span></div>
-          <input id="kn-${q.id}" maxlength="200" value="${whEsc288(q.kit_note)}" placeholder="e.g. LH drip rail — due Thursday">
+          <div class="nplab">Which parts are missing? <span style="opacity:.6">(separate with commas &mdash; each gets its own Arrived tap later)</span></div>
+          <input id="kn-${q.id}" maxlength="200" value="${noteTxt}" placeholder="e.g. PSR-737, LH drip rail">
           <div class="npb">${!isShort ? `<button class="b redsolid nps"${dis} onclick="post('/api/kit/status',{build_id:'${q.id}',status:'short',note:val('kn-${q.id}')},this)">Mark short &mdash; alert the office</button>` : ""}
             <button class="b npn"${dis} onclick="post('/api/kit/note',{build_id:'${q.id}',note:val('kn-${q.id}')},this)">Save note</button>
             <button class="b mv" onclick="closeNote288('${q.id}')">Cancel</button></div>
         </div>
-        ${i === pullIdx && (q.kit_status === "verified" || q.kit_status === "short") ? `
-          <div class="pull"${isShort ? ' style="border-color:#ff9f0a"' : ""}>${isShort ? `<div style="color:#ff9f0a;font-weight:700;margin-bottom:8px">SHORT — parts still missing${q.kit_note ? `: ${String(q.kit_note).replace(/[&<>"]/g, "")}` : ""}. Delivering starts the cab anyway — management gets notified, and this cab stays on the still-owed list below until the parts arrive.</div>` : ""}${q.kit_pull_started_at
-            ? (busy
-              ? `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep" style="color:#ffd60a"><b>Step 2 waits</b> &mdash; line busy: ORDER ${busy.order_number} is still on it (${String(busy.state).replace(/_/g, " ")}). It stays on the line until a manager signs it off — then it moves to Body and this opens up.</div>
-               <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`
-              : `<div class="pstep"><b>Step 1 done</b> &mdash; pull started ${whTime288(q.kit_pull_started_at)}.</div><div class="pstep"><b>Step 2</b> &mdash; when it's all on the line:</div>
-               <button class="b grn big"${dis} onclick="arm(this,()=>post('/api/kit/deliver',{build_id:'${q.id}'},this))">${isShort ? "Delivered SHORT — start the cab" : "Delivered — start the cab"}${q.prep && q.prep.state !== "done" ? " (panels not prepped)" : ""}</button>
-               <button class="b"${dis} onclick="arm(this,()=>post('/api/kit/unpull',{build_id:'${q.id}'},this))">Undo pull</button>`)
-            : `<div class="pstep"><b>Step 1</b> &mdash; when you begin gathering this kit:</div><button class="b grn big"${dis} onclick="post('/api/kit/pull',{build_id:'${q.id}'},this)">${isShort ? "Pull started — gathering what we have" : "Pull started — gathering the kit"}</button>`}
-          </div>` : ""}
+        ${pinNote}
+        ${prepBox366(q, canPrep301, clockedIn301, prepOpen)}
+        ${moves ? `<div class="mv366"><span>Build order:</span>${moves}</div>` : ""}
       </div>`;
+};
+// Block 366: Panel prep, OPTIONAL — its own dashed box under the steps (and on the cab holding the line). Never holds up delivery.
+const prepBox366 = (b, canPrep, clockedIn, open) => {
+  const p = b.prep || { state: "none" };
+  const inner = !open && (!p.state || p.state === "none")
+    ? `<div class="pbs366">Never holds up delivery &mdash; the crew preps as they go. Opens once the pull starts.</div>`
+    : prepStrip301(b, canPrep, clockedIn);
+  return `<div class="pbox366"><div class="pbt366">&#128293; Panel prep <span class="opt366">OPTIONAL</span></div>${inner}</div>`;
 };
 // Block 292: in-place redraw after a punch (shared by the warehouse page and
 // the Build/Body/Accounting clock card). ack = immediate "✓ Clocked in 6:54 AM"
@@ -3053,14 +3082,16 @@ const prepStrip301 = (b, canPrep, clockedIn) => {
   const chip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready${p.hrs ? ` &middot; ${p.hrs}h` : ""}${p.by ? ` &middot; ${whEsc288(p.by)}` : ""}</span>`
     : p.state === "in_progress" && !p.mine && !p.active ? `<span class="chip" style="background:#2a2200;border-color:#7a5900;color:#ffd60a">&#9208; Panels paused &middot; ${p.hrs}h so far of ${p.std}h</span>`   // Block 305: parked, nobody on it
     : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;border-color:#7a5900;color:#ffd60a">&#9881; Panels in progress &middot; ${p.hrs}h of ${p.std}h</span>`
-    : `<span class="chip unv">Panels not prepped &middot; ${p.std}h allowed</span>`;
+    : p.state === "skipped" ? `<span class="chip" style="background:#2c2c2e;color:#c7c7cc">Skipped &mdash; crew preps as they go${p.by ? ` &middot; ${whEsc288(p.by)}` : ""}</span>`   // Block 366
+    : `<span class="chip unv">Not prepped &middot; ${p.std} h allowed</span>`;   // Block 366: plain words — optional, never a stop sign
   if (!canPrep || p.state === "done") return `<div class="prep301">${chip}</div>`;
   const dis = clockedIn ? "" : " disabled title=\"Clock in first\"";
+  if (p.state === "skipped") return `<div class="prep301">${chip} <button class="b sm366"${dis} onclick="post('/api/prep/unskip',{build_id:'${b.id}'},this)">Undo skip</button></div>`;   // Block 366
   if (p.mine) return `<div class="prep301 on"><b style="color:#ffd60a">&#9881; You're prepping this cab &middot; ${p.hrs}h</b>
       <button class="b grn"${dis} onclick="post('/api/prep/done',{build_id:'${b.id}'},this)">&#10003; Panels ready</button>
       <button class="b mv" onclick="document.getElementById('ppf-${b.id}').click()">&#128247; Photo</button><input type="file" id="ppf-${b.id}" accept="image/*" capture="environment" multiple style="display:none" onchange="prepPhoto302('${b.id}',this)">
       <button class="b mv"${dis} onclick="post('/api/prep/back',{build_id:'${b.id}'},this)">&#9208; Pause &mdash; back to warehouse</button><span id="ppm-${b.id}" style="font-size:.85rem;color:#ffd60a"></span></div>`;
-  return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "&#9654; Resume prepping" : "Prep panels &mdash; start"}</button></div>`;
+  return `<div class="prep301">${chip} <button class="b"${dis} style="border-color:#7a5900" onclick="post('/api/prep/start',{build_id:'${b.id}'},this)">${p.state === "in_progress" ? "&#9654; Resume prepping" : "Start prepping"}</button> <button class="b sm366"${dis} onclick="arm(this,()=>post('/api/prep/skip',{build_id:'${b.id}'},this))">Skip &mdash; crew will prep</button></div>`;   // Block 366: the honest skip
 };
 // Block 328 (Daniel 10/25 20:39: "build warehouses kit lanes to make it and body shop look and feel the same"): the
 // Home shows CARDS — one per waiting cab, no buttons; every action (verify / short / note / build sooner-later / pull /
@@ -3074,7 +3105,7 @@ const whQueueCard328 = (q, i, r, lineName) => {
   const isShort = q.kit_status === "short", isOk = q.kit_status === "verified";
   const kitChip = isOk ? '<span class="chip ok">&#10003; Kit verified</span>' : isShort ? '<span class="chip short">Short &mdash; parts missing</span>' : '<span class="chip unv">Not checked yet</span>';
   const p = q.prep || { state: "none" };
-  const prepChip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; You're prepping" : p.active ? "&#9881; Panels in progress" : "&#9208; Panels paused"} &middot; ${p.hrs}h</span>` : "";
+  const prepChip = p.state === "done" ? `<span class="chip ok">&#10003; Panels ready</span>` : p.state === "skipped" ? `<span class="chip unv">Prep skipped</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; You're prepping" : p.active ? "&#9881; Panels in progress" : "&#9208; Panels paused"} &middot; ${p.hrs}h</span>` : "";
   const status = q.kit_pull_started_at
     ? (busy ? `Pull started ${whTime288(q.kit_pull_started_at)} &middot; line busy &mdash; ORDER ${esc(busy.order_number)} is still on it` : `Pull started ${whTime288(q.kit_pull_started_at)} &middot; ready to deliver`)
     : isNext ? (isOk ? "Next up &mdash; ready to pull" : isShort ? "Next up &mdash; short, pull what we have or wait for parts" : "Next up &mdash; check the kit") : `#${i + 1} on ${esc(lineName)}${isOk ? " &middot; kit ready" : isShort ? " &middot; short" : " &middot; kit not checked"}`;
@@ -3106,7 +3137,7 @@ function whOwedLane344(b, owed, canAct) {
     <div class="np" id="ko344-${b.id}" style="display:none;margin-top:10px"><div style="font-size:.85rem;opacity:.75">Fix a typo, add a part that turned up missing, or take one off. Separate parts with commas.</div><input id="kn344-${b.id}" maxlength="400" value="${whEsc288(owed.kit_note || "")}" data-was="${whEsc288(owed.kit_note || "")}"><button class="b grn" onclick="saveOwed344(this,'${b.id}')">Save the list</button> <button class="b mv" onclick="closeOwed344('${b.id}')">Cancel</button></div>` : `<span style="opacity:.6">Clock in to tap Arrived.</span>`}<div class="msg err" id="err"></div></div>`;
 }
 // Block 328: the cab ON THE LINE, on its own page — the panel-prep strip with its buttons (the Home shows the chip only)
-const whOnLineLane328 = (q, canPrep, clockedIn) => `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${whEsc288(q.order_number)}</b>${q.cab_number ? ` &middot; Cab #${whEsc288(q.cab_number)}` : ""}${q.family ? ` &middot; ${whEsc288(q.family)}` : ""}${q.prep && q.prep.state !== "done" ? prepStrip301(q, canPrep, clockedIn) : `<div class="prep301"><span class="chip ok">&#10003; Panels ready${q.prep && q.prep.hrs ? ` &middot; ${q.prep.hrs}h` : ""}${q.prep && q.prep.by ? ` &middot; ${whEsc288(q.prep.by)}` : ""}</span></div>`}</div>`;
+const whOnLineLane328 = (q, canPrep, clockedIn) => `<div class="now"><span class="tag">ON THE LINE NOW</span><b>Order ${whEsc288(q.order_number)}</b>${q.cab_number ? ` &middot; Cab #${whEsc288(q.cab_number)}` : ""}${q.family ? ` &middot; ${whEsc288(q.family)}` : ""}${q.prep && q.prep.state !== "done" ? prepBox366(q, canPrep, clockedIn, true) : `<div class="prep301"><span class="chip ok">&#10003; Panels ready${q.prep && q.prep.hrs ? ` &middot; ${q.prep.hrs}h` : ""}${q.prep && q.prep.by ? ` &middot; ${whEsc288(q.prep.by)}` : ""}</span></div>`}</div>`;
 // Block 328: the warehouse queue data — one assembly shared by the Home (cards) and the cab page (the actions).
 // Moved verbatim out of the /home route (Blocks 97/212/254/288/301/305 inside); only the return is new.
 async function whQueueData328(empId, emp) {
@@ -3204,6 +3235,25 @@ const whCss288 = `<style>
   .pull{flex:1 1 100%;border:1px solid #30d158;border-radius:10px;padding:12px}
   .pstep{margin-bottom:8px;font-size:.92rem}
   .ro288{background:#3a2f10;color:#ffd60a;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-weight:700;text-align:center}
+  /* Block 366: the kit in 3 steps + Panel prep OPTIONAL */
+  .tag.wt366{color:#8e8e93}
+  .steps366{flex:1 1 100%;display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .stt366{font-weight:800;font-size:1rem}
+  .st366{border:1px solid #2c3442;background:#1a212c;border-radius:10px;padding:10px 12px}
+  .st366.now{border:2px solid #4c8dff;background:#16233a}.st366.wait{opacity:.55}
+  .sth366{display:flex;align-items:center;gap:10px;font-size:.98rem}
+  .stn366{flex:0 0 auto;width:26px;height:26px;border-radius:13px;background:#3a3a3c;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem}
+  .st366.now .stn366{background:#4c8dff;color:#fff}.st366.done .stn366{background:#1f7a35;color:#fff}
+  .sts366{margin:4px 0 0 36px;font-size:.88rem;color:#c7c7cc}.miss366{color:#ff9f0a;font-weight:600}
+  .stb366{margin:8px 0 0 36px;display:flex;flex-wrap:wrap;gap:6px}.stb366 .b{margin:0}
+  .st366.now .stb366 .b.big{flex:1 1 100%;min-height:46px}
+  .b.short366{background:#6a3d00;color:#fff}
+  .b.sm366{padding:6px 11px;font-size:.84rem;min-height:36px;margin:0}
+  .b.lnk366{border:none;padding:4px 2px;min-height:32px;font-size:.84rem;text-decoration:underline}
+  .pbox366{flex:1 1 100%;border:1px dashed #555;border-radius:10px;padding:10px 12px;background:#161719}
+  .pbt366{font-weight:700;margin-bottom:4px}.opt366{font-size:.68rem;font-weight:800;letter-spacing:.06em;background:#3a3a3c;color:#c7c7cc;border-radius:5px;padding:2px 6px;margin-left:6px;vertical-align:middle}
+  .pbs366{font-size:.86rem;color:#aeaeb2}.pbox366 .prep301{margin-top:4px}
+  .mv366{flex:1 1 100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:.8rem;color:#8e8e93}
 </style>`;
 const whPageScript328 = (ah) => `${netJs}
   // Same sturdy patterns as the consoles: two-tap arm on anything that
@@ -3226,6 +3276,12 @@ const whPageScript328 = (ah) => `${netJs}
     const n = p.querySelector(".npn"); if (n) n.textContent = asShort ? "Save note only" : "Save note";
     const i = document.getElementById("kn-" + id); if (i) i.focus(); }
   function closeNote288(id){ const p = document.getElementById("np-" + id); if (p) p.style.display = "none"; }
+  /* Block 366 (#5): "Panels ready" under 5 minutes of prepping — did the crew do it instead? Two plain choices, no reload. */
+  function quick366(btn, payload){ if (btn.parentNode.querySelector(".q366")) return; var box = document.createElement("div"); box.className = "q366"; box.style.cssText = "flex:1 1 100%;background:#2a2200;border:1px solid #7a5900;border-radius:10px;padding:10px;margin-top:6px";
+    var t = document.createElement("div"); t.style.cssText = "font-weight:700;margin-bottom:8px;color:#ffd60a"; t.textContent = "That was quick \u2014 did the crew do the prep instead?"; box.appendChild(t);
+    var a = document.createElement("button"); a.className = "b"; a.style.margin = "0 6px 6px 0"; a.textContent = "Mark as skipped \u2014 crew preps"; a.onclick = function(){ post("/api/prep/skip", { build_id: payload.build_id }, a); };
+    var b = document.createElement("button"); b.className = "b grn"; b.style.margin = "0 6px 6px 0"; b.textContent = "Yes, the panels are ready"; b.onclick = function(){ post("/api/prep/done", { build_id: payload.build_id, confirm: true }, b); };
+    box.appendChild(a); box.appendChild(b); btn.parentNode.appendChild(box); btn.style.display = "none"; }
   /* Block 344: one part of a short kit came in. The last part asks twice (it closes the kit). */
   function partArrived344(btn, id){ const go = function(){ document.querySelectorAll("button[data-part]").forEach(function(x){ x.disabled = true; }); post("/api/kit/part-arrived", { build_id: id, part: btn.dataset.part || "" }, btn); }; if (btn.dataset.last) arm(btn, go); else go(); }
   function saveOwed344(btn, id){ const i = document.getElementById("kn344-" + id); post("/api/kit/note", { build_id: id, note: i ? i.value.trim() : "", was: i ? (i.dataset.was || "") : "" }, btn); }
@@ -3254,7 +3310,7 @@ const whPageScript328 = (ah) => `${netJs}
         // every successful warehouse tap since v265 saved its data and then did NOTHING on screen.
         // Plain string tests now; NEVER write "\/" inside a page template.
         if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/switch") > -1 ? "Switched" : url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out");   // Block 292: clock taps redraw in place · Block 328: a switch is not a clock-out
-        if (url.indexOf("/api/prep/") === 0) return swapIn292(".wrap", url.indexOf("/start") > -1 ? "Prepping panels" : url.indexOf("/done") > -1 ? "Panels ready" : "Back on warehouse");   // Block 304
+        if (url.indexOf("/api/prep/") === 0) return swapIn292(".wrap", url.indexOf("/start") > -1 ? "Prepping panels" : url.indexOf("/done") > -1 ? "Panels ready" : url.indexOf("/unskip") > -1 ? "Skip undone" : url.indexOf("/skip") > -1 ? "Panel prep skipped" : "Back on warehouse");   // Block 304 · Block 366: skip / unskip
         return location.reload();   // every other action still reloads
       }
       // Block 124 (logic audit M6): if the tap failed because we're no longer
@@ -3263,6 +3319,7 @@ const whPageScript328 = (ah) => `${netJs}
       // a still-green "ON THE CLOCK" chip.
       if (/on the clock|clock in first/i.test(out.error || "")) { location.reload(); return; }
       if (out.stale) { showErr97(btn, out.error || "This changed — reloading"); setTimeout(function(){ location.reload(); }, 1500); return; }   /* Block 344: the list changed under you, show the truth */
+      if (out.quick && btn) { quick366(btn, payload); return; }   /* Block 366 (#5): Panels ready after only minutes — ask once */
       showErr97(btn, out.error || "Something went wrong");
     } catch (e) {
       if (tm304) clearTimeout(tm304);
@@ -3382,7 +3439,7 @@ const whLinePrep347 = (r) => { const holder = whLineHolder347(r);
   const od = r.queue[pullIdx < 0 ? 0 : pullIdx] || null, deck = od && od.kit_pull_started_at ? od : null;
   const items = [holder ? { b: holder, where: "On the line" } : null, deck ? { b: deck, where: "On deck — kit pulled" } : null].filter(Boolean);
   const next = deck ? null : od;   // D3: the next kit, not pulled yet — a note, not counted
-  return { items, next, open: items.filter((x) => !(x.b.prep && x.b.prep.state === "done")).length }; };
+  return { items, next, open: items.filter((x) => !(x.b.prep && (x.b.prep.state === "done" || x.b.prep.state === "skipped"))).length }; };   // Block 366: a skipped cab needs nothing
 const whTabCounts337 = (rows, builds, wh327, canPrep) => {
   const kits = rows.reduce((n, r) => n + whLineKitCount347(r), 0);
   const prep = canPrep ? rows.reduce((n, r) => n + whLinePrep347(r).open, 0) : 0;   // Block 347: on the line + on deck once pulled, not done (max 2 a line)
@@ -3412,13 +3469,13 @@ const whKitSummary348 = (r) => { const esc = whEsc288, h = whLineHolder347(r);
   return `${next}${toCheck ? ` &middot; ${toCheck} more kit${toCheck === 1 ? "" : "s"} to check` : ""}${owed}`; };
 // Block 348: Panel prep header — the first cab not done and its status, else the on-deck note
 const whPrepSummary348 = (P) => { const esc = whEsc288;
-  const first = P.items.find((x) => !(x.b.prep && x.b.prep.state === "done"));
+  const first = P.items.find((x) => !(x.b.prep && (x.b.prep.state === "done" || x.b.prep.state === "skipped")));   // Block 366
   if (first) { const p = first.b.prep || { state: "none" };
     const st = p.state === "in_progress" ? (p.mine ? "in progress — you" : p.active ? "in progress" : "paused") : "not started";
     return `<b>Order ${esc(first.b.order_number)} &mdash; ${esc(st)}</b> &middot; ${esc(first.where.toLowerCase())}`; }
   if (P.next) return `On deck: Order ${esc(P.next.order_number)} &mdash; pull the kit first`;
   return P.items.length ? "Panels ready" : "Nothing to prep"; };
-const whPrepChip347 = (b) => { const p = b.prep || { state: "none" }; return p.state === "done" ? `<span class="chip ok">&#10003; Done${p.by ? " — " + whEsc288(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; In progress — you" : p.active ? "&#9881; In progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
+const whPrepChip347 = (b) => { const p = b.prep || { state: "none" }; if (p.state === "skipped") return `<span class="chip unv">Skipped &mdash; crew preps</span>`; return p.state === "done" ? `<span class="chip ok">&#10003; Done${p.by ? " — " + whEsc288(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; In progress — you" : p.active ? "&#9881; In progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
 const whPrepTab347 = (rows) => {
   const card = (x) => `<a class="bcard${x.b.prep && x.b.prep.mine ? " next328" : ""}" href="/warehouse/${encodeURIComponent(x.b.order_number)}">
       <div><span class="o">Order ${whEsc288(x.b.order_number)}</span> <span class="m">${x.b.cab_number ? `Cab #${whEsc288(x.b.cab_number)} · ` : ""}${whEsc288(x.b.family || x.b.part_number || "")}</span> <span style="float:right">${whPrepChip347(x.b)}</span></div>
@@ -3441,8 +3498,8 @@ const whPrepList337 = (builds, rows, lnName) => {
   const esc = whEsc288;
   const order = []; for (const r of rows) { if (r.active) order.push(r.active); for (const a of r.awaiting) order.push(a); for (const a of r.rework) order.push(a); for (const q of r.queue) order.push(q); }
   const seen = new Set(); const list = order.filter((b) => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
-  const open = list.filter((b) => !b.prep || b.prep.state !== "done"), done = list.filter((b) => b.prep && b.prep.state === "done");
-  const chip = (b) => { const p = b.prep || { state: "none" }; return p.state === "done" ? `<span class="chip ok">&#10003; Panels ready${p.by ? " — " + esc(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; You're prepping" : p.active ? "&#9881; Panels in progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
+  const open = list.filter((b) => !b.prep || (b.prep.state !== "done" && b.prep.state !== "skipped")), done = list.filter((b) => b.prep && (b.prep.state === "done" || b.prep.state === "skipped"));   // Block 366
+  const chip = (b) => { const p = b.prep || { state: "none" }; if (p.state === "skipped") return `<span class="chip unv">Skipped &mdash; crew preps</span>`; return p.state === "done" ? `<span class="chip ok">&#10003; Panels ready${p.by ? " — " + esc(p.by) : ""}</span>` : p.state === "in_progress" ? `<span class="chip" style="background:#2a2200;color:#ffd60a">${p.mine ? "&#9881; You're prepping" : p.active ? "&#9881; Panels in progress" : "&#9208; Paused"} &middot; ${p.hrs}h</span>` : `<span class="chip unv">Not started</span>`; };
   const card = (b) => `<a class="bcard${b.prep && b.prep.mine ? " next328" : ""}" href="/warehouse/${encodeURIComponent(b.order_number)}">
     <div><span class="o">Order ${esc(b.order_number)}</span> <span class="m">${b.cab_number ? `Cab #${esc(b.cab_number)} · ` : ""}${esc(b.family || b.part_number || "")} · ${esc(lnName[b.line_id] || "")}</span> <span style="float:right">${chip(b)}</span></div>
     <div class="s">${b.state === "upcoming" ? "waiting to start" : esc(String(b.state || "").replace(/_/g, " "))}${b.prep ? ` · ${b.prep.hrs} of ${b.prep.std} h allowed` : ""}</div>
@@ -5193,7 +5250,7 @@ const orderPage = (b, family, lineName, tasks, detail = null, canFull = false, f
     ${(b.state === "production_complete" || b.state === "complete") ? (() => { const st323 = stageOf323(b); const parts323 = []; if (st323.hand && b.stage_set_at) parts323.push(`moved here by an admin ${escH(phxDate(new Date(b.stage_set_at).getTime()))}${b.stage_reason ? ` — ${escH(b.stage_reason)}` : ""}`); if (b.left_production_at) parts323.push(`left production ${escH(phxDate(new Date(b.left_production_at).getTime()))}`); if (b.shipped_at) parts323.push(`shipped ${escH(phxDate(new Date(b.shipped_at).getTime()))}`); if (isAdmin97) parts323.push(`<a href="/reconcile" style="color:#8e8e93">move it from Order Tracking</a>`); return `<div class="kv"><b>Stage</b>${stageChip323(st323)}<span style="opacity:.7;font-size:.9em;margin-left:8px">${parts323.join(" · ")}</span></div>`; })() : ""}
     ${detail && detail.order && detail.order.status === "Processed" ? `<div class="kv"><b>&#36; Paid</b>Final payment received in Coyote (Processed)${b.state !== "production_complete" && b.state !== "complete" ? " — the cab stays where it is; Processed is about the money, not the shipping" : ""}</div>` : ""}
     ${fixHrs > 0 ? `<div class="kv"><b>Fix labor</b>${fixHrs.toFixed(1)} hr on returns/kickbacks — this order's rework, on top of the build hours</div>` : ""}
-    ${b.prep301 && b.prep301.state !== "none" ? `<div class="kv"><b>Panel prep</b>${b.prep301.state === "done" ? `${b.prep301.hrs.toFixed(1)} hr${b.prep301.by ? ` — ${escH(b.prep301.by)}` : ""}${b.prep301.doneDs ? `, ${escH(b.prep301.doneDs)}` : ""} (${b.prep301.std} hr allowed)` : `in progress — ${b.prep301.hrs.toFixed(1)} hr so far (${b.prep301.std} hr allowed)`}</div>` : ""}   <!-- Block 301: laser-stripping hours, from punches -->
+    ${b.prep301 && b.prep301.state !== "none" ? `<div class="kv"><b>Panel prep</b>${b.prep301.state === "skipped" ? `Skipped &mdash; the crew preps as they go${b.prep301.by ? ` (${escH(b.prep301.by)}${b.prep301.doneDs ? `, ${escH(b.prep301.doneDs)}` : ""})` : ""}` : b.prep301.state === "done" ? `${b.prep301.hrs.toFixed(1)} hr${b.prep301.by ? ` — ${escH(b.prep301.by)}` : ""}${b.prep301.doneDs ? `, ${escH(b.prep301.doneDs)}` : ""} (${b.prep301.std} hr allowed)` : `in progress — ${b.prep301.hrs.toFixed(1)} hr so far (${b.prep301.std} hr allowed)`}</div>` : ""}   <!-- Block 301: laser-stripping hours, from punches -->
     ${"" /* Block 361: the Coyote-hold row moved up to Needs attention */}
     ${b.state === "upcoming" && b.kit_status !== "short" ? `<div class="kv"><b>Kit</b>${b.kit_status === "verified" ? "✓ verified — all parts accounted for" : b.kit_status === "short" ? `SHORT — missing parts${b.kit_note ? ` (${escH(b.kit_note)})` : ""}` : "not verified yet"}</div>` : ""}
     ${b.promised_finish ? `<div class="kv"><b>Promised</b>${escH(b.promised_finish)}</div>` : ""}
@@ -14787,19 +14844,23 @@ const handleRequest355 = async (req, res) => {
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eP, line_id: PREP_LINE_ID, kind: "clock_in", fix_build_id: build_id, claimed_at: new Date(whenP.getTime() + 1000).toISOString() }) });
       }
       const patchP = { prep_state: "in_progress" }; if (!bP.prep_state || bP.prep_state === "none") patchP.prep_started_at = whenP.toISOString();
+      if (bP.prep_state === "skipped") { patchP.prep_done_at = null; patchP.prep_done_by = null; }   // Block 366: starting after a skip = they're prepping after all
       await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify(patchP) });
       logEvent("prep.start", eP, { build_id, order_number: bP.order_number, from_line: lastP.line_id });
       return json(200, { ok: true });
     }
     if (url.pathname === "/api/prep/done" && req.method === "POST") {
       const [eD, failD, meD301] = await prepAuth301(); if (failD) return failD;
-      const { build_id, claimed_at } = await body(req);
+      const { build_id, claimed_at, confirm } = await body(req);
       if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
-      const [bD] = await db(`build?select=id,order_number,prep_state&id=eq.${build_id}`);
+      // Block 366: the cab, my last punch and the hours so far go out side by side (was two in a row)
+      const [[bD], [lastD], hrs0D] = await Promise.all([db(`build?select=id,order_number,prep_state&id=eq.${build_id}`), db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${eD}&order=claimed_at.desc&limit=1`), prepHours301([build_id]).catch(() => ({}))]);
       if (!bD) return json(404, { ok: false, error: "Cab not found" });
       if (bD.prep_state === "done") return json(400, { ok: false, error: "Already marked ready" });
+      // Block 366 (#5): "Panels ready" within 5 minutes of prepping is almost always a tap-through — ask once; a 0 h "ready"
+      // drags the family's median down. confirm:true = "yes, they're really ready".
+      if (!confirm && (hrs0D[build_id] || 0) < PREP_QUICK_H366) return json(200, { ok: false, quick: true, error: "That was quick" });
       const whenD = new Date(claimed_at || Date.now());
-      const [lastD] = await db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${eD}&order=claimed_at.desc&limit=1`);
       if (lastD && lastD.kind === "clock_in" && lastD.line_id === PREP_LINE_ID) {
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eD, line_id: PREP_LINE_ID, kind: "clock_out_early", reason: "Panels ready", claimed_at: whenD.toISOString() }) });
         await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eD, line_id: homeLine301(meD301), kind: "clock_in", claimed_at: new Date(whenD.getTime() + 1000).toISOString() }) });
@@ -14818,6 +14879,34 @@ const handleRequest355 = async (req, res) => {
       await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eB, line_id: PREP_LINE_ID, kind: "clock_out_early", reason: "Back to warehouse", claimed_at: whenB.toISOString() }) });
       await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eB, line_id: homeLine301(meB301), kind: "clock_in", claimed_at: new Date(whenB.getTime() + 1000).toISOString() }) });
       logEvent("prep.pause", eB, { build_id: lastB.fix_build_id });
+      return json(200, { ok: true });
+    }
+    // Block 366 (Daniel 11/6 11:29, Plan 90): SKIP panel prep — "Panel prep is a help to the production staff … they panel prep as
+    // they need them". Honest record (not a 0 h "done"): prep_state "skipped" + who/when, audited; off the Panel prep count; never in
+    // the median (that reads done only). If I'm clocked onto this cab's prep, my clock goes home like "Panels ready". Undo = back to
+    // not started (or paused, if hours were already poured in).
+    if ((url.pathname === "/api/prep/skip" || url.pathname === "/api/prep/unskip") && req.method === "POST") {
+      const [eS, failS, meS] = await prepAuth301(); if (failS) return failS;
+      const { build_id, claimed_at } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [[bS], [lastS], hrsS] = await Promise.all([db(`build?select=id,order_number,state,prep_state,prep_started_at&id=eq.${build_id}`), db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${eS}&order=claimed_at.desc&limit=1`), prepHours301([build_id]).catch(() => ({}))]);
+      if (!bS || !["upcoming", "active", "rework", "awaiting_inspection"].includes(bS.state)) return json(400, { ok: false, error: "That cab isn't on the board anymore — refresh" });
+      const whenS = new Date(claimed_at || Date.now()); if (isNaN(whenS.getTime())) return json(400, { ok: false, error: "Bad time" });
+      if (url.pathname === "/api/prep/unskip") {
+        if (bS.prep_state !== "skipped") return json(200, { ok: true });   // already undone — the truth is safe to show
+        const backTo = bS.prep_started_at || (hrsS[build_id] || 0) > 0 ? "in_progress" : "none";
+        await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ prep_state: backTo, prep_done_at: null, prep_done_by: null }) });
+        logEvent("prep.unskip", eS, { build_id, order_number: bS.order_number, back_to: backTo });
+        return json(200, { ok: true });
+      }
+      if (bS.prep_state === "skipped") return json(200, { ok: true });
+      if (bS.prep_state === "done") return json(400, { ok: false, error: "Those panels are already marked ready" });
+      if (lastS && lastS.kind === "clock_in" && lastS.line_id === PREP_LINE_ID && lastS.fix_build_id === build_id) {
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: PREP_LINE_ID, kind: "clock_out_early", reason: "Panel prep skipped", claimed_at: whenS.toISOString() }) });
+        await db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: eS, line_id: homeLine301(meS), kind: "clock_in", claimed_at: new Date(whenS.getTime() + 1000).toISOString() }) });
+      }
+      await db(`build?id=eq.${build_id}`, { method: "PATCH", body: JSON.stringify({ prep_state: "skipped", prep_done_at: whenS.toISOString(), prep_done_by: eS }) });
+      logEvent("prep.skip", eS, { build_id, order_number: bS.order_number, was: bS.prep_state || "none", hours: Math.round((hrsS[build_id] || 0) * 100) / 100 });
       return json(200, { ok: true });
     }
     // Admin: the per-family standard. Audited; applies to cabs not yet done.
