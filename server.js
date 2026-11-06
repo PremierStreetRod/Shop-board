@@ -4060,9 +4060,9 @@ const key362 = (n) => {
 const tcDayOk362 = (p, day) => { const ds = ["from", "to", "at", "in_at", "out_at"].map((k) => p && p[k]).filter(Boolean); return !ds.length || ds.some((x) => { try { return phxDate(new Date(x).getTime()) === day; } catch (e) { return false; } }); };
 // One person's actionable notices (last 30 days, not just the latest 100) judged against the real state — two waves, side by side.
 async function bell362(me) {
-  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const since = new Date(Date.now() - NEED_DAYS364 * 86400000).toISOString();   // Block 364: 90 days (was 30) — nothing still open falls off
   const types = Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me));
-  const notes = types.length ? await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=400`) : [];
+  const notes = types.length ? await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=1500`) : [];
   const items = []; for (const n of notes) { const k = key362(n); if (k) items.push({ n, ...k }); }
   const orders = [...new Set(items.filter((i) => i.order).map((i) => i.order))], reqIds = [...new Set(items.filter((i) => i.reqId).map((i) => i.reqId))];
   const toOld = items.filter((i) => i.kind === "to" && !i.reqId), tcs = items.filter((i) => i.kind === "tc" && i.n.created_at >= TC_FROM362), ahIds = [...new Set(items.filter((i) => i.ah).map((i) => i.ah))];
@@ -4101,6 +4101,19 @@ async function bell362(me) {
   const stateOf = new Map(items.map((it) => [it.n.id, it]));
   return { needs, stateOf, ahState };
 }
+// ===== Block 364 (Daniel 11/6 08:53 + 09:12, Plan 87): the bell page stays SHORT. News = the last 30 days, 20 to a page, with
+// First · Back · Page x of y · Next · Last; anything older lives in the ARCHIVE, month by month — read-only, never deleted (standing
+// rule). Needs you looks back 90 days, so nothing still open quietly falls off.
+const NEWS_DAYS364 = 30, PER364 = 20, NEED_DAYS364 = 90;
+const pager364 = (base, page, pages) => {
+  if (pages <= 1) return "";
+  const btn = (label, to, on) => on ? `<a href="${base}page=${to}" style="background:#2c2c2e;border:1px solid #3a3a3c;border-radius:10px;color:#fff;font-weight:700;padding:9px 12px;text-decoration:none;min-width:44px;text-align:center">${label}</a>`
+    : `<span style="border:1px solid #2c2c2e;border-radius:10px;color:#5a5a5e;font-weight:700;padding:9px 12px;min-width:44px;text-align:center">${label}</span>`;
+  return `<div class="pg364" style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;margin:10px 0">${btn("&laquo; First", 1, page > 1)}${btn("&lsaquo; Back", page - 1, page > 1)}<span style="opacity:.75;padding:0 6px;white-space:nowrap">Page ${page} of ${pages}</span>${btn("Next &rsaquo;", page + 1, page < pages)}${btn("Last &raquo;", pages, page < pages)}</div>`;
+};
+// A Phoenix calendar month as UTC bounds (Phoenix keeps UTC-7 all year).
+const month364 = (ym) => { const [y, m] = ym.split("-").map(Number); return { from: new Date(Date.UTC(y, m - 1, 1) + PHX_OFFSET_MS).toISOString(), to: new Date(Date.UTC(y, m, 1) + PHX_OFFSET_MS).toISOString() }; };
+const monthName364 = (ym) => { const [y, m] = ym.split("-").map(Number); return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1] + " " + y; };
 // The bell's number on every page = what needs you (+ a dot when there is unread news). Asked after the page has drawn, never
 // on its critical path; a 15-second memory per person keeps page-to-page taps from re-asking (wiped when the inbox opens or a
 // "no change needed" is tapped).
@@ -4109,7 +4122,7 @@ async function bellCount362(me) {
   const hit = bellMem362.get(me.id); if (hit && Date.now() - hit.at < 15000) return hit.val;
   // Fable 11/6: the news filter runs in code (the unread list is small and capped) — no filter syntax this database hasn't seen
   const skip = new Set(notMine362(me));
-  const [b, newsAll] = await Promise.all([bell362(me), db(`notification_log?select=id,event_type&intended_employee_id=eq.${me.id}&read_at=is.null&channel=eq.push&limit=400`)]);
+  const [b, newsAll] = await Promise.all([bell362(me), db(`notification_log?select=id,event_type&intended_employee_id=eq.${me.id}&read_at=is.null&channel=eq.push&created_at=gte.${new Date(Date.now() - NEWS_DAYS364 * 86400000).toISOString()}&limit=400`)   /* Block 364: the dot = unread news of the last 30 days (older is archive) */]);
   const val = { needs: b.needs.length, news: newsAll.filter((n) => !skip.has(String(n.event_type))).length };
   if (bellMem362.size > 500) bellMem362.clear(); bellMem362.set(me.id, { at: Date.now(), val }); return val;
 }
@@ -4120,7 +4133,7 @@ const ahWrapNotice300 = (name, s, lineName, wrap, nPhotos) => {
   const body = `${lineName}${wrap ? ` · "${wrap}"` : ""}${nPhotos ? ` + ${nPhotos} photo${nPhotos > 1 ? "s" : ""}` : ""}`;
   return { title, body, link: `/inbox?ah=${s.id}` };
 };
-const inboxPage = (emp, notes, ahState300 = {}, bell362o = null) => `<!doctype html>
+const inboxPage = (emp, notes, ahState300 = {}, bell362o = null, o364 = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Notifications — Shop Board</title>${style}</head>
@@ -4133,17 +4146,28 @@ const inboxPage = (emp, notes, ahState300 = {}, bell362o = null) => `<!doctype h
     // the cab, the request, the flags, the punches) — above NEWS (everything else, newest first). Replaces Block 300's
     // "unread = needs you" (opening the page cleared it); the after-hours Approve / Deny card is unchanged.
     const bl = bell362o || { needs: [], stateOf: new Map(), ahState: {} };
+    const h362All = (t, extra) => `<h3 style="margin:18px 0 10px;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;opacity:.85">${t}${extra || ""}</h3>`;   // Block 364: shared by the archive view
     const isAdmin300 = emp && emp.role === "admin";
     for (const it of bl.needs) if (it.kind === "ah") it.n.__ahState = ahState300[it.ah] || bl.ahState[it.ah];
     const shown362 = new Set(bl.needs.map((it) => it.n.id));
     const news362 = notes.filter((n) => !shown362.has(n.id));
     for (const n of news362) { const ah = n.event_type === "afterhours.wrapped" ? ahIdOf300(n) : null; if (ah && isAdmin300 && (ahState300[ah] || bl.ahState[ah])) n.__ahState = ahState300[ah] || bl.ahState[ah]; }
-    if (!bl.needs.length && !news362.length) return `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`;
+    // Block 364: the ARCHIVE view — months (newest first), one month's notices 20 to a page; read-only
+    const arcLink364 = `<p style="text-align:center;margin:18px 0 4px"><a href="/inbox?arch=1" style="color:#8e8e93">Archive &mdash; older than ${NEWS_DAYS364} days &rarr;</a></p>`;
+    if (o364.archive) { const A = o364.archive;
+      const chips = A.months.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:6px 0 12px">${A.months.map((ym) => `<a href="/inbox?arch=${ym}" style="border:1px solid ${ym === A.month ? "#ffd60a" : "#3a3a3c"};background:${ym === A.month ? "#2a2200" : "#1c1c1e"};color:#fff;border-radius:10px;padding:8px 12px;text-decoration:none;font-weight:700">${monthName364(ym)}</a>`).join("")}</div>` : `<div style="opacity:.6;text-align:center;margin:12px 0">Nothing older than ${NEWS_DAYS364} days yet.</div>`;
+      const body = !A.month ? (A.months.length ? `<div style="opacity:.6;text-align:center">Pick a month.</div>` : "")
+        : !notes.length ? `<div style="opacity:.6;text-align:center">Nothing in ${monthName364(A.month)}.</div>`
+        : h362All(`${monthName364(A.month)}`, ` <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;opacity:.7">${A.total} notice${A.total === 1 ? "" : "s"}</span>`) + pager364(`/inbox?arch=${A.month}&`, A.page, A.pages) + notes.map((n) => cardHtml300(n, false, { noDot: true })).join("") + pager364(`/inbox?arch=${A.month}&`, A.page, A.pages);
+      return `<p style="text-align:center;margin:-4px 0 6px"><a href="/inbox" style="color:#8e8e93">&larr; Back to notifications</a></p>${h362All("Archive", ` <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;opacity:.7">older than ${NEWS_DAYS364} days &middot; kept, never deleted</span>`)}${chips}${body}`; }
+    if (!bl.needs.length && !news362.length) return o364.page ? `<div style="opacity:.6;text-align:center;margin-top:24px">Nothing in the last ${NEWS_DAYS364} days.</div>${arcLink364}` : `<div style="opacity:.6;text-align:center;margin-top:24px">No notifications yet.</div>`;
     const h362 = (t, extra) => `<h3 style="margin:18px 0 10px;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;opacity:.85">${t}${extra || ""}</h3>`;
-    const needHtml = h362("Needs you", bl.needs.length ? ` <span id="needcnt300" style="background:#ffd60a;color:#000;border-radius:9px;padding:1px 9px;font-size:.85rem;font-weight:900;margin-left:4px">${bl.needs.length}</span>` : "")
+    const later364 = o364.page > 1;   // Block 364: Needs you sits on page 1; later pages show a one-line reminder
+    const needHtml = later364 ? (bl.needs.length ? `<p style="text-align:center;margin:6px 0 0"><a href="/inbox" style="color:#ffd60a;font-weight:800">${bl.needs.length} need${bl.needs.length === 1 ? "s" : ""} you &mdash; on page 1</a></p>` : "") : h362("Needs you", bl.needs.length ? ` <span id="needcnt300" style="background:#ffd60a;color:#000;border-radius:9px;padding:1px 9px;font-size:.85rem;font-weight:900;margin-left:4px">${bl.needs.length}</span>` : "")
       + (bl.needs.length ? bl.needs.map((it) => it.kind === "tc" ? tcCard362(it) : cardHtml300(it.n, true, { noDot: true })).join("") : `<div style="opacity:.6;text-align:center;margin:0 0 6px">Nothing needs you right now.</div>`);
-    const newsHtml = news362.length ? h362("News") + news362.map((n) => { const it = bl.stateOf.get(n.id); return cardHtml300(n, false, it ? { noDot: true, line: it.open ? "Still open — it’s in Needs you above" : it.done, open: it.open } : {}); }).join("") : "";
-    return needHtml + newsHtml;
+    const pg364 = o364.pages ? pager364("/inbox?", o364.page, o364.pages) : "";
+    const newsHtml = news362.length ? h362("News", o364.pages ? ` <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;opacity:.7">last ${NEWS_DAYS364} days &middot; ${o364.total}</span>` : "") + pg364 + news362.map((n) => { const it = bl.stateOf.get(n.id); return cardHtml300(n, false, it ? { noDot: true, line: it.open ? "Still open — it’s in Needs you above" : it.done, open: it.open } : {}); }).join("") + pg364 : (o364.pages ? `<div style="opacity:.6;text-align:center;margin:10px 0">No news in the last ${NEWS_DAYS364} days.</div>` : "");
+    return needHtml + newsHtml + (o364.pages ? arcLink364 : "");
   })()}
   <p style="text-align:center;margin-top:20px">
     <a href="/home" style="color:#8e8e93;margin-right:20px">Home</a>
@@ -14934,12 +14958,31 @@ const handleRequest355 = async (req, res) => {
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [emp] = await db(`employee?select=first_name,role,department&id=eq.${empId}`);   // Block 196: role+dept feed the shared nav
       if (!emp) { res.writeHead(302, { Location: "/login" }); return res.end(); }
-      // Block 362 (Plan 86): the news list (the Coyote part-sync notices left the bell) and Needs you, side by side
+      // Block 364 (Plan 87): page + archive. ?page=N pages the news (20 a page); ?arch=1 lists the months, ?arch=YYYY-MM shows one
+      // month (read-only — the archive never marks anything read and never deletes).
+      const win364 = new Date(Date.now() - NEWS_DAYS364 * 86400000).toISOString();
+      const pageAsk364 = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
+      const arch364 = String(url.searchParams.get("arch") || "");
+      if (arch364) {
+        const month364q = /^\d{4}-(0[1-9]|1[0-2])$/.test(arch364) ? arch364 : null;
+        const [oldest364, rows364] = await Promise.all([
+          db(`notification_log?select=created_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.asc&limit=1`),
+          month364q ? (() => { const mb = month364(month364q); const to = mb.to < win364 ? mb.to : win364; return mb.from >= win364 ? [] : db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&created_at=gte.${mb.from}&created_at=lt.${to}&order=created_at.desc&limit=3000`); })() : [],
+        ]);
+        const months364 = []; if (oldest364[0] && oldest364[0].created_at < win364) { const a = phxDate(new Date(oldest364[0].created_at).getTime()).slice(0, 7), z = phxDate(new Date(win364).getTime()).slice(0, 7); let [y, m] = a.split("-").map(Number); for (let g = 0; g < 600; g++) { const ym = `${y}-${String(m).padStart(2, "0")}`; months364.unshift(ym); if (ym >= z) break; m++; if (m > 12) { m = 1; y++; } } }
+        const list364 = rows364.filter((n) => !OFFBELL362.includes(String(n.event_type)));
+        const pagesA = Math.max(1, Math.ceil(list364.length / PER364)), pageA = Math.min(pageAsk364, pagesA);
+        return send(200, "text/html; charset=utf-8", inboxPage(emp, list364.slice((pageA - 1) * PER364, pageA * PER364), {}, null, { archive: { months: months364, month: month364q, page: pageA, pages: pagesA, total: list364.length } }));
+      }
+      // Block 362 (Plan 86): the news (the last 30 days — Block 364) and Needs you, side by side
       const [notesAll, bell362o] = await Promise.all([
-        db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&order=created_at.desc&limit=120`),
+        db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${empId}&channel=eq.push&created_at=gte.${win364}&order=created_at.desc&limit=1500`),
         bell362({ id: empId, role: emp.role, department: emp.department }).catch((eI362) => { console.error("bell362 inbox:", eI362 && eI362.message); return { needs: [], stateOf: new Map(), ahState: {}, failed: true }; }),   // Fable 11/6: a failure shows the page as plain news rather than a 500
       ]);
-      const notes = notesAll.filter((n) => !OFFBELL362.includes(String(n.event_type))).slice(0, 100);   // Fable 11/6: the Coyote part-sync notices filtered in code   // Block 233 (Ross): channel=push = exactly ONE row per notice (the doubles were the sms bookkeeping rows); link makes each card tappable (migration 0056). Block 234: event_type feeds bellLink234's fallback for pre-0056 rows
+      const needIds364 = new Set(bell362o.needs.map((it) => it.n.id));
+      const newsAll364 = notesAll.filter((n) => !OFFBELL362.includes(String(n.event_type)) && !needIds364.has(n.id));   // Fable 11/6: the Coyote part-sync notices filtered in code · Block 364: what's in Needs you isn't repeated in News
+      const pages364 = Math.max(1, Math.ceil(newsAll364.length / PER364)), page364 = Math.min(pageAsk364, pages364);
+      const notes = newsAll364.slice((page364 - 1) * PER364, page364 * PER364);   // Block 364: this page's 20
       // Block 300: the after-hours cards act — read each session's verdict so the card shows Approve/Deny or the outcome.
       let ahState300 = {};
       if (emp.role === "admin") {
@@ -14947,12 +14990,14 @@ const handleRequest355 = async (req, res) => {
         if (ids300.length) for (const sRow of await db(`after_hours_session?select=id,started_at,ended_at,signed_off_by,declined_by&id=in.(${ids300.join(",")})`))
           ahState300[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
       }
-      const html = inboxPage(emp, notes, ahState300, bell362o);
+      const html = inboxPage(emp, notes, ahState300, bell362o, { page: page364, pages: pages364, total: newsAll364.length });
       const meI362 = { id: empId, role: emp.role, department: emp.department };
-      const unreadIds = bell362o.failed ? [] : notes.filter((n) => !n.read_at && !actFor362(n, meI362)).map((n) => n.id);   // Block 362: opening the page reads the NEWS; what needs you stays until it is handled (Fable: nothing is marked read on a failed judge)
+      const unreadIds = bell362o.failed ? [] : newsAll364.filter((n) => !n.read_at && !actFor362(n, meI362)).map((n) => n.id);   // Block 364: opening the bell reads all of the last 30 days' news (the dot means "new since you looked"), not just this page   // Block 362: opening the page reads the NEWS; what needs you stays until it is handled (Fable: nothing is marked read on a failed judge)
       bellMem362.delete(empId);
-      if (unreadIds.length)
-        await db(`notification_log?id=in.(${unreadIds.join(",")})`, { method: "PATCH", body: JSON.stringify({ read_at: new Date().toISOString() }) });
+      if (unreadIds.length) {   // Fable 11/6 (Block 364): the window is 30 days now (was the latest 100) — write the ids in groups of 60 so one long URL can never fail the page
+        const at364 = new Date().toISOString();
+        for (let g = 0; g < unreadIds.length; g += 60) await db(`notification_log?id=in.(${unreadIds.slice(g, g + 60).join(",")})`, { method: "PATCH", body: JSON.stringify({ read_at: at364 }) });
+      }
       return send(200, "text/html; charset=utf-8", html);
     }
 
