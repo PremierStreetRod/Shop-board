@@ -4062,14 +4062,18 @@ const tcDayOk362 = (p, day) => { const ds = ["from", "to", "at", "in_at", "out_a
 async function bell362(me) {
   const since = new Date(Date.now() - NEED_DAYS364 * 86400000).toISOString();   // Block 364: 90 days (was 30) — nothing still open falls off
   const types = Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me));
-  const notes = types.length ? await db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=1500`) : [];
+  // Block 365 (Daniel 11/6 10:12): this person's Hide / Unhide taps ride beside the notices — same wave, no extra trip
+  const [notes, hideEv365] = await Promise.all([types.length ? db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=1500`) : [],
+    types.length ? db(`event_log?select=event_type,payload,at&actor_id=eq.${me.id}&event_type=in.(bell.hide,bell.unhide)&order=at.asc&limit=3000`).catch(() => []) : []]);
+  // Daniel 11/6 10:32: a hide covers the notices up to that moment — a NEWER notice about the same thing brings the card back
+  const hidden365 = new Map(); for (const e of hideEv365) { const k = e.payload && e.payload.key; if (!k) continue; if (e.event_type === "bell.hide") hidden365.set(k, new Date(e.at).getTime()); else hidden365.delete(k); }   // the last tap per card decides; a hide remembers WHEN
   const items = []; for (const n of notes) { const k = key362(n); if (k) items.push({ n, ...k }); }
   const orders = [...new Set(items.filter((i) => i.order).map((i) => i.order))], reqIds = [...new Set(items.filter((i) => i.reqId).map((i) => i.reqId))];
   const toOld = items.filter((i) => i.kind === "to" && !i.reqId), tcs = items.filter((i) => i.kind === "tc" && i.n.created_at >= TC_FROM362), ahIds = [...new Set(items.filter((i) => i.ah).map((i) => i.ah))];
   const minAt = (arr) => arr.reduce((m, i) => (i.n.created_at < m ? i.n.created_at : m), "9999");
   const q = (x) => `"${String(x).replace(/"/g, "")}"`;
   const [builds, reqs, reqsOld, evs, ahs, emps, flagsOpen] = await Promise.all([
-    orders.length ? db(`build?select=id,order_number,state,kit_status,kit_verified_by,kit_verified_at&order_number=in.(${orders.map(q).join(",")})`) : [],
+    orders.length ? db(`build?select=id,order_number,state,kit_status,kit_verified_by,kit_verified_at,shipped_at&order_number=in.(${orders.map(q).join(",")})`) : [],
     reqIds.length ? db(`time_off_request?select=id,status,decided_by,decided_at&id=in.(${reqIds.join(",")})`) : [],
     toOld.length ? db(`time_off_request?select=id,status,decided_by,decided_at,created_at&created_at=gte.${new Date(new Date(minAt(toOld)).getTime() - 600000).toISOString()}&limit=500`) : [],
     tcs.length ? db(`event_log?select=event_type,actor_id,payload,at&event_type=in.(${TC_FIX362.concat("bell.ok").join(",")})&at=gte.${minAt(tcs)}&order=at.asc&limit=3000`) : [],
@@ -4085,6 +4089,7 @@ async function bell362(me) {
     let open = false, done = "";
     if (it.kind === "insp") { const b = B.get(it.order); open = !!b && b.state === "awaiting_inspection"; done = b && ["rework", "fix_job"].includes(b.state) ? "✓ Sent back for a fix" : b && ["production_complete", "complete"].includes(b.state) ? "✓ Passed inspection" : "✓ No longer waiting"; }
     else if (it.kind === "flags") { const b = B.get(it.order); open = !!b && openFl.has(b.id); done = "✓ Every item ruled"; }
+    else if (it.kind === "kit" && B.get(it.order) && B.get(it.order).shipped_at && B.get(it.order).kit_status === "short") { open = false; done = "Shipped — parts still marked missing"; }   // Block 365 (Daniel 11/6: "some of these will go all the way to shipped and still show parts missing"): a shipped cab's short kit leaves Needs you for everyone
     else if (it.kind === "kit") { const b = B.get(it.order); open = !!b && b.kit_status === "short"; done = `✓ Parts confirmed${b && b.kit_verified_by ? " — " + who(b.kit_verified_by, b.kit_verified_at) : ""}`; }
     else if (it.kind === "to") { let r = it.reqId ? R.get(it.reqId) : null;
       if (!it.reqId) { const t0 = new Date(it.n.created_at).getTime(); r = reqsOld.map((x) => ({ x, d: Math.abs(new Date(x.created_at).getTime() - t0) })).filter((y) => y.d <= 300000).sort((a, z) => a.d - z.d).map((y) => y.x)[0] || null; }
@@ -4097,9 +4102,12 @@ async function bell362(me) {
     it.open = open; it.done = done;
   }
   const byKey = new Map(); for (const it of items) if (!byKey.has(it.key)) byKey.set(it.key, it);   // newest notice per thing (notes are newest first)
-  const needs = [...byKey.values()].filter((it) => it.open);
+  for (const it of byKey.values()) it.hidden = hidden365.has(it.key) && new Date(it.n.created_at).getTime() <= hidden365.get(it.key);   // Block 365: hidden by THIS person — unless a newer notice came after the hide
+  for (const it of items) it.hidden = Boolean(byKey.get(it.key) && byKey.get(it.key).hidden);   // every notice of the thing reads the same way
+  const needs = [...byKey.values()].filter((it) => it.open && !it.hidden);
+  const hiddenNeeds = [...byKey.values()].filter((it) => it.open && it.hidden);   // Block 365: still open, hidden by you — "Show hidden"
   const stateOf = new Map(items.map((it) => [it.n.id, it]));
-  return { needs, stateOf, ahState };
+  return { needs, hiddenNeeds, stateOf, ahState };
 }
 // ===== Block 364 (Daniel 11/6 08:53 + 09:12, Plan 87): the bell page stays SHORT. News = the last 30 days, 20 to a page, with
 // First · Back · Page x of y · Next · Last; anything older lives in the ARCHIVE, month by month — read-only, never deleted (standing
@@ -4164,9 +4172,10 @@ const inboxPage = (emp, notes, ahState300 = {}, bell362o = null, o364 = {}) => `
     const h362 = (t, extra) => `<h3 style="margin:18px 0 10px;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;opacity:.85">${t}${extra || ""}</h3>`;
     const later364 = o364.page > 1;   // Block 364: Needs you sits on page 1; later pages show a one-line reminder
     const needHtml = later364 ? (bl.needs.length ? `<p style="text-align:center;margin:6px 0 0"><a href="/inbox" style="color:#ffd60a;font-weight:800">${bl.needs.length} need${bl.needs.length === 1 ? "s" : ""} you &mdash; on page 1</a></p>` : "") : h362("Needs you", bl.needs.length ? ` <span id="needcnt300" style="background:#ffd60a;color:#000;border-radius:9px;padding:1px 9px;font-size:.85rem;font-weight:900;margin-left:4px">${bl.needs.length}</span>` : "")
-      + (bl.needs.length ? bl.needs.map((it) => it.kind === "tc" ? tcCard362(it) : cardHtml300(it.n, true, { noDot: true })).join("") : `<div style="opacity:.6;text-align:center;margin:0 0 6px">Nothing needs you right now.</div>`);
+      + (bl.needs.length ? bl.needs.map((it) => hideWrap365(it, it.kind === "tc" ? tcCard362(it) : cardHtml300(it.n, true, { noDot: true }), true)).join("") : `<div style="opacity:.6;text-align:center;margin:0 0 6px">Nothing needs you right now.</div>`)
+      + hiddenFold365(bl.hiddenNeeds || []);   // Block 365: your hidden ones, each with Unhide
     const pg364 = o364.pages ? pager364("/inbox?", o364.page, o364.pages) : "";
-    const newsHtml = news362.length ? h362("News", o364.pages ? ` <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;opacity:.7">last ${NEWS_DAYS364} days &middot; ${o364.total}</span>` : "") + pg364 + news362.map((n) => { const it = bl.stateOf.get(n.id); return cardHtml300(n, false, it ? { noDot: true, line: it.open ? "Still open — it’s in Needs you above" : it.done, open: it.open } : {}); }).join("") + pg364 : (o364.pages ? `<div style="opacity:.6;text-align:center;margin:10px 0">No news in the last ${NEWS_DAYS364} days.</div>` : "");
+    const newsHtml = news362.length ? h362("News", o364.pages ? ` <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;opacity:.7">last ${NEWS_DAYS364} days &middot; ${o364.total}</span>` : "") + pg364 + news362.map((n) => { const it = bl.stateOf.get(n.id); return cardHtml300(n, false, it ? { noDot: true, line: it.open ? (it.hidden ? "Still open — hidden by you" : "Still open — it’s in Needs you above") : it.done, open: it.open } : {}); }).join("") + pg364 : (o364.pages ? `<div style="opacity:.6;text-align:center;margin:10px 0">No news in the last ${NEWS_DAYS364} days.</div>` : "");
     return needHtml + newsHtml + (o364.pages ? arcLink364 : "");
   })()}
   <p style="text-align:center;margin-top:20px">
@@ -4196,6 +4205,13 @@ const inboxPage = (emp, notes, ahState300 = {}, bell362o = null, o364 = {}) => `
       m.textContent = (j && j.error) || "Didn’t go through — try again"; }
     catch (e) { m.textContent = "Network hiccup — try again"; }
     btn.disabled = false; }
+  // Block 365: Hide / Unhide a Needs you card — for this person only, audited (event_log bell.hide / bell.unhide)
+  async function bellHide365(key, hide, btn){ var w = btn.closest("[data-k365]"); btn.disabled = true;
+    try { var r = await fetch("/api/bell/hide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: key, hide: hide }) }); var j = await r.json();
+      if (j && j.ok) { if (!hide) { location.reload(); return; } w.remove(); less362(); var hc = document.getElementById("hidcnt365"); if (hc) hc.textContent = Number(hc.textContent) + 1; else { var nh = document.getElementById("hidnew365"); if (nh) nh.style.display = "block"; } return; }
+      btn.textContent = (j && j.error) || "Didn’t go through"; }
+    catch (e) { btn.textContent = "Network hiccup — try again"; }
+    btn.disabled = false; }
   function ahDeny300(id){ var d = document.getElementById("ahdeny-" + id); if (d) { d.style.display = "block"; var i = document.getElementById("ahrsn-" + id); if (i) i.focus(); } }
 </script>
 </body></html>`;
@@ -4221,7 +4237,7 @@ const cardHtml300 = (n, need, o362 = {}) => {   // Block 362: o362 = { noDot, li
         <span style="opacity:.5;font-size:.85rem;white-space:nowrap">${when}</span>
       </div>
       <div style="opacity:.85;margin-top:4px">${String(n.body).replace(/</g, "&lt;")}</div>
-      ${o362.line ? `<div style="font-size:.86rem;margin-top:6px;font-weight:700;color:${o362.open ? "#ffd60a" : "#30d158"}">${String(o362.line).replace(/</g, "&lt;")}</div>` : ""}
+      ${o362.line ? `<div style="font-size:.86rem;margin-top:6px;font-weight:700;color:${o362.open ? "#ffd60a" : /^[\u2713\u2715]/.test(String(o362.line)) ? "#30d158" : "#8e8e93"}">${String(o362.line).replace(/</g, "&lt;")}</div>` : ""}
       ${st ? `<div id="ahrow-${ahId}" style="margin-top:10px">${verdict}</div><div id="ahmsg-${ahId}" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>` : go234 ? `<div style="opacity:.45;font-size:.82rem;margin-top:6px">Tap to open &rarr;</div>` : ""}
     </${go234 ? "a" : "div"}>`; };
 
@@ -4240,6 +4256,13 @@ const tcCard362 = (it) => { const n = it.n; const when = new Date(new Date(n.cre
       </div>
       <div class="m362" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>
     </div>`; };
+
+// Block 365 (Daniel 11/6 10:12, Plan 88): a Needs you card + its Hide (for this person only); the "Show hidden (n)" fold with Unhide.
+const hideWrap365 = (it, cardHtml, hide) => { const k = String(it.key).replace(/['"<>]/g, "");
+  return `<div data-k365="${k}">${cardHtml}<div style="text-align:right;margin:-6px 2px 10px"><button onclick="bellHide365('${k}',${hide ? "true" : "false"},this)" style="background:none;border:1px solid #3a3a3c;border-radius:9px;color:#8e8e93;padding:6px 12px;font-size:.85rem;cursor:pointer">${hide ? "Hide &mdash; not for me" : "Unhide"}</button></div></div>`; };
+const hiddenFold365 = (hid) => hid.length
+  ? `<details id="hid365" style="margin:6px 0 4px"><summary style="cursor:pointer;color:#8e8e93;text-align:center;list-style:none">Show hidden (<span id="hidcnt365">${hid.length}</span>) &mdash; still open, hidden by you</summary><div style="margin-top:10px">${hid.map((it) => hideWrap365(it, cardHtml300(it.n, false, { noDot: true, line: "Still open — hidden by you", open: true }), false)).join("")}</div></details>`
+  : `<p id="hidnew365" style="display:none;text-align:center;margin:6px 0 4px"><a href="/inbox" style="color:#8e8e93">Show hidden &mdash; reload to see what you hid</a></p>`;
 
 // Q86 hand-off: the NO-LOGIN phone page. With a valid code it shows a photo
 // upload that posts straight to the code's one cab; without one it shows a
@@ -14948,6 +14971,23 @@ const handleRequest355 = async (req, res) => {
       if (!hit362) return json(403, { ok: false, error: "That card isn't yours" });
       await db("event_log", { method: "POST", body: JSON.stringify({ event_type: "bell.ok", actor_id: empId, payload: { key, kind: "tc", employee_id: m362[1], day: m362[2], notice_type: hit362.event_type } }) });
       bellMem362.clear();
+      return json(200, { ok: true });
+    }
+
+    // Block 365 (Plan 88): Hide / Unhide a Needs you card — for THIS person only (everyone else still sees it); only a card they
+    // actually got; written to event_log (bell.hide / bell.unhide — the audit record). It still clears for everyone when handled.
+    if (url.pathname === "/api/bell/hide" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Sign in again" });
+      const { key, hide } = await body(req);
+      const k365 = String(key || "");
+      if (!/^((insp|flags|kit)\|[A-Za-z0-9.\-]{1,40}|to\|(n:)?[0-9a-f-]{36}|tc\|[0-9a-f-]{36}\|\d{4}-\d{2}-\d{2}|ah\|[0-9a-f-]{36})$/i.test(k365)) return json(400, { ok: false, error: "Unknown card" });
+      const [meH365] = await db(`employee?select=id,role,department&id=eq.${empId}`);
+      if (!meH365) return json(401, { ok: false, error: "Sign in again" });
+      const bH365 = await bell362(meH365);
+      if (![...bH365.stateOf.values()].some((it) => it.key === k365)) return json(403, { ok: false, error: "That card isn't yours" });
+      await db("event_log", { method: "POST", body: JSON.stringify({ event_type: hide === false ? "bell.unhide" : "bell.hide", actor_id: empId, payload: { key: k365 } }) });
+      bellMem362.delete(empId);
       return json(200, { ok: true });
     }
 
