@@ -6356,7 +6356,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       const vo = (document.getElementById("tcct-" + pairs[1][0]) || {}).value;
       if ((vi && vi > mm[0]) || (vo && vo < mm[mm.length - 1])) {
         const m199 = document.getElementById("tccmsg-" + ds);
-        if (m199) m199.textContent = "This IN/OUT has a line move at " + (vi && vi > mm[0] ? mm[0] : mm[mm.length - 1]) + " inside it — keep IN before it and OUT after it. Wrong altogether? Remove this IN/OUT, then Add the right hours.";
+        if (m199) m199.textContent = "This IN/OUT has a switch (line move, crating, Body, panel prep or a fix) at " + (vi && vi > mm[0] ? mm[0] : mm[mm.length - 1]) + " inside it — keep IN before it and OUT after it. Wrong altogether? Remove this IN/OUT, then Add the right hours.";
         return;
       }
     }
@@ -11140,6 +11140,10 @@ const roundQ = (h) => Math.round(h * 4) / 4;   // nearest quarter-hour (owner-re
 // figured — payrollData, so the worksheet page, CSV, and Excel all agree —
 // the stored punches and the timecard editor stay exact-to-the-minute, so
 // the raw record can always prove the rounding washes out fairly.
+// Block 367: the clock switches the APP writes (an OUT + an IN one second apart) — never a reason a person typed. Kailey's
+// timecard folds these into the shop day (first in · lunch · last out). Every server-written clock_out_early reason must match
+// (t367 scans the source, so a new department's switch can't slip past it).
+const SWITCH_RSN_367 = /^(Switched lines$|Switched to |Crating: |Body: |Panels ready$|Panel prep skipped$|Back to warehouse$|Fix done|Started the fix$|Stepped off the fix$)/;
 function roundPunch235(iso) {
   const t = new Date(iso);
   const rem = t.getUTCMinutes() % 15;                     // whole minutes into the quarter (seconds ride along, ignored)
@@ -11162,6 +11166,7 @@ function roundPunch235(iso) {
 //     its own). Marketing lines (Daniel) are exact — no rounding, no dock.
 // Backdated by design: no effective date — Kailey can re-pull ANY period
 // (incl. 8/11–8/25) and compare against the physical punch-clock sheet.
+const SWITCH_GAP_MS_367 = 2 * 60000, STRADDLE_FROM_367 = "2026-10-26";   // Block 367: a switch = back on within 2 min (the timecard fold uses the same window); the pay fix starts with the 10/26 period
 function payRules248(events) {
   const out = []; const prevOut248 = {};   // exact last clock-out per person
   const lastR287 = {};   // Block 287: the last ROUNDED punch per person — the pay clock never runs backwards
@@ -11196,6 +11201,13 @@ function payRules248(events) {
     const po = prevOut248[ev.employee_id];
     if (po !== undefined && phxDate(po) === phxDate(t)) {
       const gap = t - po;
+      // Block 367 (Daniel 11/9 09:40 "1, build the fix in"): a clock-in within 2 minutes of the clock-out — every switch the app
+      // writes (line move, crating, Body, panel prep, fix job), or a person's own quick out-and-back — lands ON the clock-out's
+      // rounded time, so the pair is zero-length. Before, each punch rounded on its own: an OUT at :06:59 rounded down and its IN
+      // at :07:00 rounded up, and that person lost a quarter hour (Michael 8/20 12:36:59→12:37:00 — the only one in 623 switches
+      // since 7/26). This can only give time back (Block 287 already forbids the pay clock running backwards). From the current
+      // pay period (10/26) forward — paid periods never move (Fable's recommendation, named to Daniel).
+      if (gap < SWITCH_GAP_MS_367 && lastR287[ev.employee_id] !== undefined && phxDate(t) >= STRADDLE_FROM_367) { push287(ev, new Date(lastR287[ev.employee_id]).toISOString()); continue; }
       // Block 287 (Kailey's cross-check, 9/30): the rule no longer stops at 60.
       // A 62-minute lunch used to fall through to two independent roundings
       // (out 11:03 -> 11:00, in 12:05 -> 12:15) and cost 75 minutes; ten of her
@@ -16136,7 +16148,11 @@ const handleRequest355 = async (req, res) => {
             const merged199 = [];
             for (const s of stints) {
               const prev = merged199[merged199.length - 1];
-              if (prev && prev.out && prev.out.rsn === "Switched lines" && s.in &&
+              // Block 367 (Daniel 11/9 09:19: "for accounting, they dont want to see all of these punches, they want to see clock
+              // in time, lunch time and end of day clock out time"): fold EVERY switch the app writes itself — line moves AND the
+              // newer crating / Body / panel prep / fix-job switches (the 199 rule only knew "Switched lines", so Eric's crating
+              // days read as 8 rows). A reason a PERSON typed (Dr appt) still never folds (Block 199's rule), lunch never folds.
+              if (prev && prev.out && prev.out.kind === "clock_out_early" && SWITCH_RSN_367.test(prev.out.rsn || "") && s.in &&
                   new Date(s.in.at).getTime() - new Date(prev.out.at).getTime() < 120000) {
                 prev.mids.push(prev.out.hhmm);
                 prev.midIds.push(prev.out.id, s.in.id);
@@ -18024,7 +18040,7 @@ const handleRequest355 = async (req, res) => {
       // are skipped, so a retry heals a half-removed chain.
       if (action === "void_run") {
         const idsR = Array.isArray(ids) ? ids.filter(isUuid) : [];
-        if (!idsR.length || idsR.length > 12 || !Array.isArray(ids) || ids.length !== idsR.length)
+        if (!idsR.length || idsR.length > 80 || !Array.isArray(ids) || ids.length !== idsR.length)   // Block 367: a folded crating morning is 14+ punches (was 12)
           return json(400, { ok: false, error: "Those punch references aren't valid" });
         const rowsR = await db(`clock_event?select=id,employee_id,kind,claimed_at&id=in.(${idsR.join(",")})&voided=is.false`);
         if (!rowsR.length) return json(404, { ok: false, error: "Those punches are already gone — reload to see the day fresh" });
