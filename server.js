@@ -3141,7 +3141,9 @@ const whOnLineLane328 = (q, canPrep, clockedIn) => `<div class="now"><span class
 // Block 328: the warehouse queue data — one assembly shared by the Home (cards) and the cab page (the actions).
 // Moved verbatim out of the /home route (Blocks 97/212/254/288/301/305 inside); only the return is new.
 async function whQueueData328(empId, emp) {
-  const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254, prodW288] = await Promise.all([
+  // Block 368 (speed): the latest punch, the prep standards and the panel-prep roster ride THIS first round (they never
+  // depended on it) — the warehouse data now loads in 2 rounds (was 4–5).
+  const [lastWRows, reasonsW, linesW, buildsW, histW97, mgrRows132, hrsW212, shortOwedW254, prodW288, lastFullRows368, stdRows301, whoAll368] = await Promise.all([
     db(`clock_event?select=kind,claimed_at,reason&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 239: claimed_at + reason feed the honest clock-in hint
     db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
     db(`line?select=id,name&enabled=is.true&order=id`),
@@ -3156,6 +3158,9 @@ async function whQueueData328(empId, emp) {
     // this list is naturally tiny (any growth is itself the signal).
     db(`build?select=id,order_number,cab_number,line_id,state,kit_note,kit_delivered_at&kit_status=eq.short&state=in.(active,awaiting_inspection,rework,fix_job,production_complete,complete)&order=kit_delivered_at.asc.nullslast`),
     db(`product?select=part_number,family`).catch(() => []),   // Block 288: plain cab type on each row (display only — a failed read just leaves it blank)
+    db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 338: +the step stamps · Block 368: first round
+    db(`prep_standard?select=family,hours`).catch(() => []),   // Block 368: first round
+    db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []),   // Block 368: first round (used only when a cab has prep)
   ]);
   const [lastW] = lastWRows;
   const famW288 = Object.fromEntries((prodW288 || []).map((p) => [p.part_number, p.family]));
@@ -3163,16 +3168,17 @@ async function whQueueData328(empId, emp) {
   // Block 301: PANEL PREP on the warehouse page — who may prep, which cab I'm prepping right now,
   // each cab's prep state + hours so far, and the per-family standard (admin-set, 3.0 seeded).
   const canPrep301 = Boolean(emp.panel_prep) || emp.role === "admin";
-  const [lastFull301] = await db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`);   // Block 338: +the step stamps
+  const [lastFull301] = lastFullRows368;   // Block 368: read in the first round
   const myPrep301 = lastFull301 && lastFull301.kind === "clock_in" && lastFull301.line_id === PREP_LINE_ID ? { build_id: lastFull301.fix_build_id, since: lastFull301.claimed_at } : null;
   const prepIds301 = buildsW.filter((b) => b.prep_state && b.prep_state !== "none").map((b) => b.id);
-  const [prepHrs301, stdRows301, whoRows301] = await Promise.all([prepHours301(prepIds301), db(`prep_standard?select=family,hours`).catch(() => []), prepIds301.length ? db(`employee?select=id,first_name,last_name&panel_prep=is.true`).catch(() => []) : []]);
+  const whoRows301 = prepIds301.length ? (whoAll368 || []) : [];   // Block 368: same rule as before — the roster counts only when a cab has prep
   const stdOf301 = Object.fromEntries((stdRows301 || []).map((r) => [r.family, Number(r.hours)]));
   const whoOf301 = Object.fromEntries((whoRows301 || []).map((e2) => [e2.id, `${e2.first_name} ${((e2.last_name || "")[0] || "")}.`.trim()]));
   // Block 305 (Daniel: a PAUSE for Eric): a cab is "paused" only when NOBODY with the prep flag is
   // clocked onto it right now — one tiny read per prepper (Eric today), so the chip stays honest
   // if a second person ever gets the flag.
-  const lastPreppers305 = await Promise.all((whoRows301 || []).filter((e2) => e2.id !== empId).map((e2) => db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${e2.id}&order=claimed_at.desc&limit=1`).then((r) => r[0]).catch(() => null)));
+  // Block 368: the prep hours and the other preppers' last punches go out TOGETHER (second round)
+  const [prepHrs301, lastPreppers305] = await Promise.all([prepHours301(prepIds301), Promise.all((whoRows301 || []).filter((e2) => e2.id !== empId).map((e2) => db(`clock_event?select=kind,line_id,fix_build_id&voided=is.false&employee_id=eq.${e2.id}&order=claimed_at.desc&limit=1`).then((r) => r[0]).catch(() => null)))]);
   const activeOn305 = new Set(lastPreppers305.filter((ev) => ev && ev.kind === "clock_in" && ev.line_id === PREP_LINE_ID && ev.fix_build_id).map((ev) => ev.fix_build_id)); if (myPrep301 && myPrep301.build_id) activeOn305.add(myPrep301.build_id);
   buildsW.forEach((b) => { b.prep = { state: b.prep_state || "none", hrs: Math.round((prepHrs301[b.id] || 0) * 10) / 10, std: stdOf301[b.family] != null ? stdOf301[b.family] : 3, by: whoOf301[b.prep_done_by] || "", mine: Boolean(myPrep301 && myPrep301.build_id === b.id), active: activeOn305.has(b.id) }; });
   const prep301 = { can: canPrep301, mine: myPrep301 };
@@ -3305,6 +3311,7 @@ const whPageScript328 = (ah) => `${netJs}
       if (tm304) clearTimeout(tm304);
       const out = await r.json();
       if (out.ok) {
+        QVER = null;   // Block 368: my own change — the change check re-baselines instead of reloading what I just did
         // Block 304 ROOT CAUSE: this used to be a regex with escaped slashes; inside the page
         // template the backslashes vanished and the whole line became a comment after "return" —
         // every successful warehouse tap since v265 saved its data and then did NOTHING on screen.
@@ -3396,14 +3403,15 @@ const whPageScript328 = (ah) => `${netJs}
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp107 && wp107.style.display !== "none") return;
     if (noteOpen288()) return;   // Block 288: an open parts-note panel is mid-task
-    location.reload(); }, 60000); // the board keeps itself fresh — never mid-typing
+    location.reload(); }, 600000); // the board keeps itself fresh — never mid-typing · Block 368: a 10-minute BACKSTOP now (was every 60 s — 29% of the shop's
+                                   // database work on 11/9); the 6 s change check below (?wh=1) reloads the moment anything this screen shows changes
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
   // reorders a line (queue_pos) or a cab changes state, reflect it here within
   // seconds instead of waiting for the 60s catch-all above. Polls the SAME
   // /api/queue/state version hash the White Board polls, so the two screens
   // never fork. Skips a cycle while a field is focused (60s backstop covers it).
   var QVER=null;
-  function qpoll(){fetch('/api/queue/state',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
+  function qpoll(){fetch('/api/queue/state?wh=1',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
 `;
 // ===== Block 337 (Daniel 10/28 14:28: "HOW are we separating all of this so warehouse has an EASILY navigatable home
@@ -8510,7 +8518,7 @@ const whCabPage327 = (emp, st, opts) => {
   async function whPost(url, payload, btn){ var m = document.getElementById("wmsg327"); if (btn) btn.disabled = true; m.textContent = "";
     if (!(await flush352(payload && payload.build_id))) { if (btn) btn.disabled = false; return; }   /* Block 352 (Fable audit): unsaved ticks are SAVED first, never lost or prompted away */
     try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ claimed_at: new Date().toISOString() }, payload)) });
-      var j = await r.json(); if (j && j.ok) { if (url === "/api/wh/step" || url === "/api/wh/check" || url === "/api/wh/handling") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
+      var j = await r.json(); if (j && j.ok) { if (typeof QVER !== "undefined") QVER = null; /* Block 368 (Fable): my own change — the change check re-baselines, never a full reload on top of the quiet redraw */ if (url === "/api/wh/step" || url === "/api/wh/check" || url === "/api/wh/handling") { quiet357(); return; } location.reload(); return; } m.textContent = (j && j.error) || "Didn't go through — try again"; if (btn) btn.disabled = false; }
     catch (e) { m.textContent = "Network hiccup — try again"; if (btn) btn.disabled = false; } }
   function whCheck327(bid, btn, on){ whPost("/api/wh/check", { build_id: bid, key: btn.getAttribute("data-key"), on: on }, btn); }
   /* Block 352: ticks live on the phone until ONE Save sends them all; leaving with unsaved ticks asks first */
@@ -8521,7 +8529,7 @@ const whCabPage327 = (emp, st, opts) => {
   async function save352(bid, btn){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length) return;
     var t = document.getElementById("save352n"); btn.disabled = true; btn.textContent = "Saving…";
     try { var r = await fetch("/api/wh/check-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_id: bid, keys: keys, claimed_at: new Date().toISOString() }) });
-      var j = await r.json(); if (j && j.ok) { dirty352 = false; quiet357(); return; }   /* Block 357: same screen, drawn in place */
+      var j = await r.json(); if (j && j.ok) { dirty352 = false; if (typeof QVER !== "undefined") QVER = null; /* Block 368 (Fable) */ quiet357(); return; }   /* Block 357: same screen, drawn in place */
       btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = (j && j.error) || "Didn't save — your ticks are still here, try again"; }
     catch (e) { btn.disabled = false; tick352(); t.style.color = "#ff8fa3"; t.textContent = "Network hiccup — your ticks are still here, try again"; } }
   async function flush352(bid){ var keys = Array.prototype.map.call(document.querySelectorAll(".cb352:checked"), function(c){ return c.getAttribute("data-key"); }); if (!keys.length || !bid) return true;
@@ -13570,6 +13578,8 @@ const handleRequest355 = async (req, res) => {
       if (emp.department === "Warehouse" || (emp.role === "admin" && String(url.searchParams.get("viewas") || "").toLowerCase() === "warehouse")) {
         // Q109: warehouse gets its own board — the handoff INTO production.
         // Block 212 (v201 SPEED): independent reads fired together.
+        // Block 368 (speed): the Finish-out list never depended on the queue data — it starts NOW, beside it
+        const wh327P368 = whFinishList327().catch((eW) => { console.error("warehouse finish list:", eW && eW.message); return null; });
         const { lastW, reasonsW, linesW, buildsW, rowsW, histW97, hrsW212, shortOwedW254, prep301, lastFull301 } = await whQueueData328(empId, emp);   // Block 328: shared with the cab page
         // Block 106 (owner-rep live test): warehouse clocks in from THIS page,
         // but the Q112 after-hours questionnaire only existed on the floor's
@@ -13577,6 +13587,9 @@ const handleRequest355 = async (req, res) => {
         // three questions, same claim-then-confirm, now on this surface too.
         const clockedInW106 = Boolean(lastW && lastW.kind === "clock_in");
         const ahNowW = isAfterHoursDept(Date.now(), hrsW212, "Warehouse");   // Block 195: warehouse runs from 6
+        // Block 368 (speed): the help cards and the stay-late card ride the SAME round as the after-hours reads (they were one after another)
+        const helpP368 = Promise.all([openSteps345(empId, lastFull301, emp).catch(() => null), clockedInW106 ? onStep338(empId, lastFull301, emp).catch(() => null) : null]);
+        const stayP368 = stayFor334(empId, hrsW212).then((v) => ({ v }), (e) => ({ e }));   // settled now, thrown at its await below — never an unhandled rejection
         const [ahReasW, openAhWRows, lastAhWRows214] = await Promise.all([
           // Block 215: the approver roster fetch is gone with the question.
           (ahNowW && !clockedInW106) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
@@ -13590,9 +13603,9 @@ const handleRequest355 = async (req, res) => {
         // rightly called it out. Now it reads his own LAST punch: a clock-out
         // earlier TODAY means he's coming back (lunch named when that was the
         // reason); anything else means this tap starts his day.
-        const helpW338 = mergeHelp345(await openSteps345(empId, lastFull301, emp).catch(() => null), clockedInW106 ? await onStep338(empId, lastFull301, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
-        const stayW334 = await stayFor334(empId, hrsW212);   // Block 334 (above the hint block — the t239 walker slices hint239 → return send)
-        let wh327 = null; try { wh327 = await whFinishList327(); } catch (eW) { console.error("warehouse finish list:", eW && eW.message); wh327 = null; }   // Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
+        const [open345R368, on338R368] = await helpP368; const helpW338 = mergeHelp345(open345R368, on338R368);   // Block 368: started above, same values   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
+        const stayR368 = await stayP368; if (stayR368.e) throw stayR368.e; const stayW334 = stayR368.v;   // Block 368: started above (same throw as before) · Block 334 (above the hint block — the t239 walker slices hint239 → return send)
+        const wh327 = await wh327P368;   // Block 368: started beside the queue data (same catch → null) · Block 327 (above the hint block — the t239 walker slices hint239 → return send): the finish-out list (in from Body → crating → shipped)
         const lnName337 = Object.fromEntries(linesW.map((l) => [l.id, l.name]));   // Block 337 (above the hint block — the t239 walker slices hint239 → return send)
         const counts337 = whTabCounts337(rowsW, buildsW, wh327 || [], prep301.can);
         const tabs337 = { ...counts337, help: helpW338, canPrep: prep301.can, prepHtml: prep301.can ? whPrepTab347(rowsW) : "", histLive: (histW97 || []).filter((h) => ["active", "awaiting_inspection", "rework"].includes(String(h.state))) };   // Block 337 (F4): only cabs still on a line
@@ -18787,6 +18800,22 @@ self.addEventListener("notificationclick", (e) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
       if (!me || (me.role !== "admin" && me.role !== "manager" && me.department !== "Warehouse")) return json(403, { ok: false, error: "Not allowed" });
+      if (url.searchParams.get("wh") === "1") {
+        // Block 368 (Daniel 11/9 10:45, speed): the WAREHOUSE screen's version — everything its Home + cab pages show that someone
+        // ELSE can change: the queue, kits (checked / short / note / pulled / delivered), panel prep, cabs arriving from Body or
+        // sent back, how they leave, shipped / picked up, and every crating step. Two small reads side by side; the screen
+        // reloads only when this changes (the old 60 s blind reload is a 10-min backstop now). The Order Queue / White Board
+        // keep the plain version below, unchanged.
+        const sinceW368 = new Date(Date.now() - 21 * 86400000).toISOString();
+        const [bW368, tW368] = await Promise.all([
+          dbAll252(`build?select=id,queue_pos,state,queue_pinned,line_id,kit_status,kit_note,kit_pull_started_at,kit_delivered_at,prep_state,prep_done_at,body_done_at,body_moved_to_build_at,wh_sent_back_at,wh_handling,shipped_at,stage&state=in.(upcoming,active,awaiting_inspection,rework,fix_job,production_complete,complete)&or=(shipped_at.is.null,shipped_at.gte.${sinceW368})&order=id.asc`),
+          dbAll252(`wh_task?select=id,state,started_at,completed_at&created_at=gte.${sinceW368}&order=id.asc`).catch(() => []),
+        ]);
+        let seedW = ""; for (const r of bW368) seedW += Object.values(r).map((x) => (x == null ? "" : x)).join(":") + "|";
+        seedW += "#"; for (const r of tW368) seedW += Object.values(r).map((x) => (x == null ? "" : x)).join(":") + "|";
+        let hW = 0; for (let i = 0; i < seedW.length; i++) hW = (hW * 31 + seedW.charCodeAt(i)) >>> 0;
+        return json(200, { v: "w" + String(hW) });
+      }
       const rows = await dbAll252(`build?select=id,queue_pos,state,queue_pinned&state=in.(upcoming,active,awaiting_inspection,rework)&order=id.asc`);
       rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       let seed = ""; for (const r of rows) seed += r.id + ":" + (r.queue_pos == null ? "" : r.queue_pos) + ":" + r.state + ":" + (r.queue_pinned ? 1 : 0) + "|";
