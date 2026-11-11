@@ -1310,7 +1310,7 @@ async function periodEndCheck221() {
       "Pay period ended — worksheet ready",
       `${prev.f} → ${prev.t} closed yesterday.` +
       (oddN221 ? ` ${oddN221} punch day${oddN221 === 1 ? "" : "s"} still flagged in the oddities lane.` : " No open punch oddities.") +
-      (pend221 ? ` ${pend221} after-hours session${pend221 === 1 ? "" : "s"} awaiting admin sign-off — those hours are held out until ruled on.` : "") +
+      (pend221 ? ` ${pend221} after-hours session${pend221 === 1 ? "" : "s"} awaiting sign-off — they're on your Home under OVERTIME TO APPROVE; the hours are held out until ruled on.` : "") +
       " Review and export when ready.",
       "/payroll?preset=last");
   } catch (e) { console.error("period-end check failed:", e.message); }
@@ -1484,11 +1484,11 @@ async function sweepForgottenClockOuts() {
         // the people who'd give it; the hours stay HELD until someone does.
         try {
           const [whoAh107] = await db(`employee?select=first_name,last_name&id=eq.${ev.employee_id}`);
-          const adminsAh107 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+          const [adminsAh107, acctAh374] = await Promise.all([db(`employee?select=id&active=is.true&role=eq.admin`), db(ACCT_MGRS_Q374)]);   // Block 374: + the accounting manager
           // Block 300: same card shape as a normal wrap-up, with the auto-close said plainly; Approve/Deny on the card.
           const nmS300 = whoAh107 ? `${whoAh107.first_name} ${((whoAh107.last_name || "")[0] || "")}.`.trim() : "?";
           const cardS300 = ahWrapNotice300(nmS300, { id: ahSweep.id, started_at: ahSweep.started_at, ended_at: new Date(closeAt).toISOString() }, lineName300(ahSweep.line_id, []), "(auto-closed at day end — no wrap-up left)", 0);
-          notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id)])], cardS300.title, cardS300.body, cardS300.link);
+          notify("afterhours.wrapped", [...new Set([ahSweep.approved_by, ...adminsAh107.map((a) => a.id), ...acctAh374.map((a) => a.id)])].filter(Boolean), cardS300.title, cardS300.body, cardS300.link);
         } catch (e) { console.error("ah sweep notify failed:", e.message); }
       } else {
         // v148 (owner-rep): EVERY system clock-out tells the admins — the machine
@@ -3976,6 +3976,51 @@ const areaHead353 = (clk, fallback) => {
 // Block 373 (Daniel 11/11 12:03 — "speed up that screen"): the department clock card is ONE function. The home renders it, and a punch
 // from the card renders it AGAIN inside the punch's own answer, so the tablet draws the new card at once — one trip instead of two,
 // ~3 KB instead of the whole 25 KB home, and no second run through the home's reads.
+// Block 374 (Daniel 11/11 12:35): OVERTIME TO APPROVE on the accounting manager's Home — every after-hours session that has
+// ended and has no verdict (the same queue the Admin console shows), Approve / Deny on each row. Admins keep theirs on the console.
+// One wave: the sessions + the cached people and lines read side by side. Any trouble → no card (the Home never fails over it).
+const otHome374 = async (emp) => {
+  if (!emp || emp.role !== "manager" || emp.department !== "Accounting") return null;
+  try {
+    const [rows, people, lines] = await Promise.all([
+      db(`after_hours_session?select=id,employee_id,line_id,reason,wrap_note,started_at,ended_at&ended_at=not.is.null&signed_off_by=is.null&declined_by=is.null&order=started_at.asc&limit=20`),
+      db(`employee?select=id,first_name,last_name`),
+      db(`line?select=id,name`),
+    ]);
+    const nm = Object.fromEntries((people || []).map((e) => [e.id, `${e.first_name} ${((e.last_name || "")[0] || "")}.`.trim()]));
+    const ln = Object.fromEntries((lines || []).map((l) => [l.id, l.name]));
+    return (rows || []).map((r) => ({ id: r.id, who: nm[r.employee_id] || "Someone", line: ln[r.line_id] || "", reason: r.reason || "", wrap: r.wrap_note || "",
+      day: dayShort291(phxDate(new Date(r.started_at).getTime())), from: phx12_290(r.started_at), to: phx12_290(r.ended_at),
+      hrs: Math.round(Math.max(0, new Date(r.ended_at).getTime() - new Date(r.started_at).getTime()) / 360000) / 10 }));
+  } catch (e) { console.error("ot home 374:", e && e.message); return null; }
+};
+const otEsc374 = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const otStrip374 = (rows) => `<div id="ot374" style="max-width:560px;margin:0 auto 14px;border:2px solid #ffd60a;border-radius:14px;padding:12px 14px;background:#2a2200"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
+  <div style="font-weight:900;color:#ffd60a;letter-spacing:.03em">&#9200; OVERTIME TO APPROVE &middot; <span id="otn374">${rows.length}</span> waiting</div>
+  ${rows.length ? rows.map((r) => `<div class="otrow374" id="otr-${r.id}" style="border-top:1px solid #5a4a00;margin-top:10px;padding-top:10px">
+    <div style="font-size:1.1rem;font-weight:800">${otEsc374(r.who)} <span style="opacity:.65;font-weight:400;font-size:.9rem">&mdash; ${otEsc374(r.day)} ${otEsc374(r.from)}&ndash;${otEsc374(r.to)} &middot; ${r.hrs}h</span></div>
+    <div style="opacity:.8;margin-top:2px">${otEsc374(r.line)}${r.reason ? ` &middot; ${otEsc374(r.reason)}` : ""}</div>
+    ${r.wrap ? `<div style="margin-top:2px">wrap-up: &ldquo;${otEsc374(r.wrap)}&rdquo;</div>` : ""}
+    <div id="otb-${r.id}" style="margin-top:8px"><button class="wbtn" style="background:#1d5a2d;margin:0 6px 0 0" onclick="ot374('${r.id}','signoff',this)">&#10003; Approve ${r.hrs} h</button><button class="wbtn" style="background:#2c2c2e;margin:0" onclick="document.getElementById('otd-${r.id}').style.display='block';document.getElementById('otr2-${r.id}').focus()">Deny</button>
+      <div id="otd-${r.id}" style="display:none;margin-top:8px"><input id="otr2-${r.id}" maxlength="200" placeholder="Why these hours don't count — one line, goes on the record" style="width:100%;box-sizing:border-box;background:#111;color:#fff;border:1px solid #3a3a3c;border-radius:8px;padding:8px;font-size:16px"><button class="wbtn" style="background:#5a1d1d;margin:6px 0 0" onclick="ot374('${r.id}','decline',this)">Deny these hours</button></div></div>
+    <div id="otm-${r.id}" style="color:#ffd60a;font-size:.9rem;min-height:1em;margin-top:4px"></div>
+  </div>`).join("") : `<div style="opacity:.75;margin-top:6px">All caught up &mdash; nothing waiting.</div>`}
+  <div style="opacity:.6;font-size:.82rem;margin-top:8px">Approve puts the hours on the timecard. Deny needs one typed line &mdash; the person is told.</div>
+</div><script>
+  async function ot374(id, what, btn){
+    var box = document.getElementById("otb-" + id), msg = document.getElementById("otm-" + id), payload = { session_id: id };
+    if (what === "decline") { var r = (document.getElementById("otr2-" + id) || { value: "" }).value.trim(); if (r.length < 3) { msg.textContent = "Type the reason first — it goes on the record"; return; } payload.reason = r; }
+    btn.disabled = true; msg.textContent = "";
+    try { var res = await fetch(what === "decline" ? "/api/afterhours/decline" : "/api/afterhours/signoff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      var out = await res.json();
+      if (out.ok || /^Already (signed off|declined)/.test(out.error || "")) {
+        box.innerHTML = out.ok ? (what === "decline" ? '<span style="color:#ff8a80;font-weight:800">✕ Denied — hours don’t count. They’ve been told.</span>' : '<span style="color:#30d158;font-weight:800">✓ Approved — hours on the timecard</span>') : '<span style="opacity:.75">Someone else already decided this one.</span>';
+        var n = document.getElementById("otn374"); if (n) n.textContent = Math.max(0, Number(n.textContent) - 1); return; }
+      msg.textContent = out.error || "Something went wrong";
+    } catch (e) { msg.textContent = "Network hiccup — try again"; }
+    btn.disabled = false;
+  }
+</script>`;
 // Block 373: the department clock card's data — the home route and the punch answers share it. `known` = the punch row just
 // written (skips the last-punch read). Reads ride the same waves as before (Block 212 / 299).
 const DEPT_LINE373 = { "Body Shop": 13, "Build": 12, "Accounting": 16 };
@@ -4049,7 +4094,7 @@ const clkCard373 = (emp, clk) => `<div id="clkcard292"><style>.wbtn{border:none;
         <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
       </div>` : ""}`}</div>
   <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p></div>`;
-const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null) => `<!doctype html>
+const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null, ot374 = null) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
 <meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}${body326 ? bodyCss326 : ""}</head>
@@ -4058,7 +4103,7 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
   ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
   <h2>Welcome, ${emp.first_name}.</h2>
-  ${inspStrip308(insp308)}
+  ${inspStrip308(insp308)}${ot374 ? otStrip374(ot374) : ""}
   ${clk && clk.show ? clkCard373(emp, clk) : ""}
   ${body326 ? bodyList326(body326, true) : `<p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
@@ -4211,7 +4256,10 @@ const OFFBELL362 = ["sync.iface_add", "sync.iface_drop"];
 const TC_FIX362 = ["punch.moved", "punch.voided", "punch.added", "punch.pair_voided", "punch.run_voided", "punch.relined"];
 // A long-day / auto-clock-out notice from BEFORE Daniel's ruling counts as already looked at (the old bell had no other way to say so).
 const TC_FROM362 = "2026-11-06T15:10:00.000Z";
-const actFor362 = (n, me) => { const k = ACT362[n && n.event_type]; if (!k) return false; if (k === "insp" && !canInspect321(me)) return false; if ((k === "ah" || k === "kit") && !(me && me.role === "admin")) return false; return true; };   // inspection: the people who inspect · after-hours + a short kit: admins (they decide / chase the parts) — anyone else gets it as news
+// Block 374 (Daniel 11/11 12:35): the ACCOUNTING MANAGER approves overtime too — the after-hours sign-off (Approve / Deny), her own sessions included (Daniel 12:41).
+const canOT374 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting")));
+const ACCT_MGRS_Q374 = `employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`;   // byte-identical to week40Check221's read → the 60 s memory shares it
+const actFor362 = (n, me) => { const k = ACT362[n && n.event_type]; if (!k) return false; if (k === "insp" && !canInspect321(me)) return false; if (k === "ah" && !canOT374(me)) return false; if (k === "kit" && !(me && me.role === "admin")) return false; return true; };   // Block 374: after-hours → admins + the accounting manager   // inspection: the people who inspect · after-hours + a short kit: admins (they decide / chase the parts) — anyone else gets it as news
 const notMine362 = (me) => OFFBELL362.concat(Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me)));   // event types that are NOT this person's news
 const key362 = (n) => {
   const kind = ACT362[n && n.event_type]; if (!kind) return null;
@@ -4323,7 +4371,7 @@ const inboxPage = (emp, notes, ahState300 = {}, bell362o = null, o364 = {}) => `
     // "unread = needs you" (opening the page cleared it); the after-hours Approve / Deny card is unchanged.
     const bl = bell362o || { needs: [], stateOf: new Map(), ahState: {} };
     const h362All = (t, extra) => `<h3 style="margin:18px 0 10px;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;opacity:.85">${t}${extra || ""}</h3>`;   // Block 364: shared by the archive view
-    const isAdmin300 = emp && emp.role === "admin";
+    const isAdmin300 = canOT374(emp);   // Block 374: admins + the accounting manager get the Approve / Deny card
     for (const it of bl.needs) if (it.kind === "ah") it.n.__ahState = ahState300[it.ah] || bl.ahState[it.ah];
     const shown362 = new Set(bl.needs.map((it) => it.n.id));
     const news362 = notes.filter((n) => !shown362.has(n.id));
@@ -12379,7 +12427,7 @@ function payrollCsv(d) {
   const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
   if (pendAh.length) {
     L.push("");
-    L.push(q(`NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`));
+    L.push(q(`NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting sign-off. Approve or deny them in the app, then re-download.`));
   }
   return L.join("\n");
 }
@@ -12487,7 +12535,7 @@ function payrollXlsx235(d) {
   if (d.rows.some((r) => r.unpaid)) lblRow236("Unpaid", (r) => roundQ(r.unpaid));
   const pendAh = (d.ahNotes || []).filter((n) => !n.declined);
   if (pendAh.length) { row([]);
-    row([{ t: `NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting admin sign-off. Approve or deny them in the app, then re-download.`, s: 11 }], { ht: 30 });
+    row([{ t: `NOTE: ${h1(pendAh.reduce((a, n) => a + n.hrs, 0))} after-hours hours (${pendAh.map((n) => `${n.name} ${n.date}`).join(" · ")}) are NOT in this sheet — they're awaiting sign-off. Approve or deny them in the app, then re-download.`, s: 11 }], { ht: 30 });
   }
   const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -14515,6 +14563,7 @@ const handleRequest355 = async (req, res) => {
             where: inM ? (Number(lastM.line_id) === MKT_REMOTE_LINE_290 ? "remote" : "shop") : (hereRows290 ? "shop" : "remote"),
             atShopIp: Boolean(hereRows290), note: note290 };
         }
+        const ot374P = otHome374(emp);   // Block 374: the accounting manager's overtime list — starts now, rides alongside the clock card's reads
         if (DEPT_LINE92[emp.department]) {
           // Block 212 (v201 SPEED): reads fired together per dependency wave.
           clk92 = await clkData373(empId, emp);   // Block 373: the same builder the punch answer uses
@@ -14534,7 +14583,7 @@ const handleRequest355 = async (req, res) => {
           const cabsH = await dbAll252("build?select=id,order_number,cab_number,part_number,customer_name,state,left_production_at,body_done_at,body_done_by,body_moved_to_build_at,body_build_reason,stage,wh_sent_back_at,wh_sent_back_by,wh_sent_back_reason&state=in.(production_complete,complete,rework,fix_job)&body_moved_to_build_at=is.null&stage=is.null&order=left_production_at.asc.nullslast,created_at.asc,id.asc");
           body326h = (await bodyStatus326(cabsH)).filter((x) => x.total > 0 || x.b.body_done_at);
         } catch (eH) { console.error("body home list:", eH && eH.message); body326h = null; } }
-        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290, insp308, body326h));   // Block 290: Marketing clock card rides along (null for everyone else) · Block 308: inspection strip · Block 326: Body list
+        return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290, insp308, body326h, await ot374P));   // Block 374   // Block 290: Marketing clock card rides along (null for everyone else) · Block 308: inspection strip · Block 326: Body list
       }
       // Block 369: the production manager's options strip rides on top of his home — started now, beside the floor reads
       const strip369P = isProdMgr369(emp) ? optBoard369().then(async (rows) => optStrip369(rows, await optNames369(rows.map((r) => r.sign && r.sign.by)))).catch((e) => { console.error("options strip:", e && e.message); return ""; }) : null;
@@ -15184,17 +15233,18 @@ const handleRequest355 = async (req, res) => {
         try {
           const hrs107 = Math.round(Math.max(0, new Date(endIso107).getTime() - new Date(openAhOut.started_at).getTime()) / 360000) / 10;
           // Block 300: the card names who / when / how long / where / their words and carries the session so the inbox can Approve in one tap.
-          const [meOut107, admins107, ahPhotos300, lnRows300] = await Promise.all([
+          const [meOut107, admins107, ahPhotos300, lnRows300, acct374] = await Promise.all([
             db(`employee?select=first_name,last_name&id=eq.${empId}`).then((r) => r[0]),
             db(`employee?select=id&active=is.true&role=eq.admin`),
             db(`after_hours_photo?select=id&session_id=eq.${openAhOut.id}`),
             openAhOut.line_id ? db(`line?select=id,name&id=eq.${openAhOut.line_id}`) : [],
+            db(ACCT_MGRS_Q374),   // Block 374: the accounting manager approves too
           ]);
           const nPhotos107 = ahPhotos300.length;
           const nm300 = meOut107 ? `${meOut107.first_name} ${((meOut107.last_name || "")[0] || "")}.`.trim() : "?";
           const card300 = ahWrapNotice300(nm300, { id: openAhOut.id, started_at: openAhOut.started_at, ended_at: endIso107 }, lineName300(openAhOut.line_id, lnRows300), String(wrap_note).trim(), nPhotos107);
           void hrs107;
-          notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id)])], card300.title, card300.body, card300.link);
+          notify("afterhours.wrapped", [...new Set([openAhOut.approved_by, ...admins107.map((a) => a.id), ...acct374.map((a) => a.id)])].filter(Boolean), card300.title, card300.body, card300.link);
         } catch (e) { console.error("ah wrap notify failed:", e.message); }
       }
       // Block 97 (owner-rep): "End of day" and "End of shift" are the SAME
@@ -16025,7 +16075,7 @@ const handleRequest355 = async (req, res) => {
       const notes = newsAll364.slice((page364 - 1) * PER364, page364 * PER364);   // Block 364: this page's 20
       // Block 300: the after-hours cards act — read each session's verdict so the card shows Approve/Deny or the outcome.
       let ahState300 = {};
-      if (emp.role === "admin") {
+      if (canOT374(emp)) {   // Block 374
         const ids300 = [...new Set(notes.map(ahIdOf300).filter(Boolean))].filter((id) => !bell362o.ahState[id]);   // Block 362: Needs you already read these
         if (ids300.length) for (const sRow of await db(`after_hours_session?select=id,started_at,ended_at,signed_off_by,declined_by&id=in.(${ids300.join(",")})`))
           ahState300[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
@@ -19271,9 +19321,10 @@ const handleRequest355 = async (req, res) => {
       if (!empId) return json(401, { ok: false, error: "Signed out" });
       // Block 108 (owner-rep): sign-off is an ADMIN approval job — it releases
       // pay hours. Managers still confirm the approval claim from the cockpit.
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || me.role !== "admin")
-        return json(403, { ok: false, error: "Admin only — sign-off releases pay hours" });
+      // Block 374: + the accounting manager (Daniel 11/11).
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!canOT374(me))
+        return json(403, { ok: false, error: "Admins and the accounting manager only — sign-off releases pay hours" });
       const { session_id } = await body(req);
       if (!isUuid(session_id)) return json(400, { ok: false, error: "That session reference isn't valid" });
       const [sAh2] = await db(`after_hours_session?select=id,employee_id,ended_at,confirmed_by,signed_off_by&id=eq.${session_id}`);
@@ -19295,9 +19346,9 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/api/afterhours/decline" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
-      const [me] = await db(`employee?select=role&id=eq.${empId}`);
-      if (!me || me.role !== "admin")
-        return json(403, { ok: false, error: "Admin only — declining refuses pay hours" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);   // Block 374: + the accounting manager
+      if (!canOT374(me))
+        return json(403, { ok: false, error: "Admins and the accounting manager only — declining refuses pay hours" });
       const { session_id, reason } = await body(req);
       if (!isUuid(session_id)) return json(400, { ok: false, error: "That session reference isn't valid" });
       if (String(reason || "").trim().length < 3)
