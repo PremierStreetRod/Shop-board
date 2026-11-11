@@ -2545,6 +2545,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   </div>
   ${(() => { const sn138 = scrubMoney138(build.invoice_note); return build.note_flagged && sn138 && (emp.role === "manager" || emp.role === "admin") ? `<div class="note">⚠ ORDER NOTE: ${escH(sn138)}</div>` : ""; })()}   <!-- Block 138: money never reaches the floor. Block 194 (owner): the order note (shipping etc.) is MANAGER/ADMIN-only on the cab screen — production builds from the checklist + flags, not customer notes. -->
   ${fixFlow321 ? fixBox321 : ""}
+  ${optCrew369(build)}
   ${!fixFlow321 && tasks.every((t) => t.is_background || t.state === "complete") ? `
   <!-- Block 194 (Blazer lesson): when the cab is DONE, say so at the TOP —
        the finish box used to live only below the whole checklist. -->
@@ -2673,6 +2674,15 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
   // one audited move, stamped at the tap (Q103-1 — retries keep true time).
   // Block 164 (owner-rep): un-START an accidental "tap to start". Confirm,
   // then the server wipes the start (your own steps; managers anyone's).
+  // Block 369: the crew's bypass — only offered when the production manager is off the clock (the server checks again)
+  async function bypass369(btn) {
+    if (!confirm("Send this cab on WITHOUT the production manager's options sign-off?\\n\\nYour name goes on it. Body checks the options he didn't get to.")) return;
+    if (!confirm("Are you sure? This is recorded as a bypass and he'll be told.")) return;
+    btn.disabled = true; const err = document.getElementById("err");
+    const out = await sbPost("/api/opts369/bypass", { build_id: btn.dataset.b }, (m) => { err.textContent = m; });
+    if (out.ok) { err.textContent = "Unlocked \\u2014 finish the last step to send it to Body."; return quiet357(); }
+    err.textContent = out.error || "Something went wrong"; btn.disabled = false;
+  }
   async function unstart164(id) {
     if (!confirm("Put this step back to not started?\\n\\nUse this for an accidental tap — the start and who tapped it are wiped from this step.")) return;
     const err = document.getElementById("err");
@@ -2782,9 +2792,10 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
       b.disabled = true;   // no double-taps while a retry is in flight
       const err = document.getElementById("err");
       const out = await sbPost("/api/task/state",
-        { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString() },
+        { task_id: b.dataset.id, to: next[b.dataset.state], claimed_at: new Date().toISOString(), build_id: "${build.id}" },   // Block 369: the cab id rides along (speed hint for the last-step lock)
         (m) => { err.textContent = m; });
       if (out.ok) return quiet357();   // Block 357: the floor's most-tapped button — same screen, drawn in place
+      if (out.locked369) { b.disabled = false; var c369 = document.getElementById("crew369"); if (!c369 || (out.bypass_ok && !c369.querySelector("button"))) await quiet357(); var e369 = document.getElementById("err"); if (e369) e369.textContent = out.error; c369 = document.getElementById("crew369"); if (c369) c369.scrollIntoView({ behavior: "smooth", block: "center" }); return; }   // Block 369: the last-step lock — the yellow box explains it (Fable: no redraw — it wiped the message and undid the scroll; a stale page without the box — or without the red bypass box the answer now offers — redraws FIRST, then the message is written; Opus 11/11)
       // Block 159 (owner-rep F1): the soft cap's nudge. OK starts it anyway
       // (the server logs the override for the manager); Cancel leaves it be.
       if (out.nudge159) {
@@ -5118,6 +5129,157 @@ async function optionList255(b, allow255 = null) {
   const out322 = split322.keep; out322.kit322 = split322.kit;
   return out322;
 }
+// ===== Block 369 (Daniel 11/10 09:34-10:20, Plan 93): MIKE'S OPTIONS CHECK =====
+// The customer-options check moves from Body's inspection to the production manager, DURING the build:
+//  · Mike (role manager · Production) — admins as backup — ticks the production options as they're built
+//    (the SAME list Body ticked: optionList255, kit panels already out per Block 322). Each tick is an
+//    option_check gate='body' row with his name (the gate the order must clear before it leaves production —
+//    migration 0058 calls it "the production sign-off gate"); an untick VOIDS the row (never deleted).
+//  · HARD LOCK: on an ACTIVE cab the crew's LAST open step can't be completed (and the cab can't be
+//    finished) until he signs off (event options.prod_signoff). The cab stays live on the line meanwhile.
+//  · BYPASS: only when no production manager is in — not clocked in today, or clocked out with End of day
+//    (or the day-end auto clock-out). Lunch is NOT off. The crew sends it on (two confirms, event
+//    options.prod_bypass, Mike + admins get a "take a look" bell); Body then ticks whatever Mike hadn't.
+//  · Body: the same inspection; their list is only what's NOT already on record — after Mike's sign-off
+//    that is nothing (a grey "signed off by" line), after a bypass it's the options Mike didn't get to.
+// Rework / fix-job cabs are untouched (Mike signed off before the first finish).
+const OPT_SIGN_EVT369 = ["options.prod_signoff", "options.prod_bypass"];
+const isProdMgr369 = (e) => Boolean(e && e.role === "manager" && e.department === "Production");
+const canOpts369 = (e) => Boolean(e && (e.role === "admin" || isProdMgr369(e)));
+// "Mon 2:40 PM" — or just "2:40 PM" for today (Phoenix, UTC-7 fixed, Q82)
+const when369 = (iso) => { if (!iso) return ""; const ms = new Date(iso).getTime(); const d = new Date(ms - 7 * 3600000); const h = d.getUTCHours(), m = d.getUTCMinutes();
+  const t = `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+  return phxDate(ms) === phxDate(Date.now()) ? t : `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()]} ${t}`; };
+// the latest sign-off / bypass per cab: { build_id: { at, by, bypass } }
+async function optSigns369(ids) {
+  if (!ids || !ids.length) return {};
+  const rows = await db(`event_log?select=at,actor_id,event_type,payload&event_type=in.(${OPT_SIGN_EVT369.join(",")})&payload->>build_id=in.(${ids.join(",")})&order=at.desc&limit=500`);
+  const out = {}; for (const r of rows || []) { const id = r.payload && r.payload.build_id; if (id && !out[id]) out[id] = { at: r.at, by: r.actor_id, bypass: r.event_type === "options.prod_bypass" }; }
+  return out;
+}
+// the option ticks on record (not voided) per cab: { build_id: [{ item_text, checked_by, checked_at }] }
+async function optChecks369(ids) {
+  if (!ids || !ids.length) return {};
+  const rows = await db(`option_check?select=build_id,item_text,checked_by,checked_at&gate=eq.body&voided=is.false&build_id=in.(${ids.join(",")})&order=checked_at.asc&limit=4000`);
+  const out = {}; for (const r of rows || []) (out[r.build_id] = out[r.build_id] || []).push(r);
+  return out;
+}
+// Is the production manager IN? Off = not clocked in today, or today's last punch is End of day / the day-end auto
+// clock-out. Lunch (and any other clock-out) still counts as in. No production manager at all = off.
+async function mgrOff369(nowMs = Date.now()) {
+  const mgrs = ((await db(`employee?select=id,first_name,last_name,role,department&active=is.true&role=eq.manager&department=eq.Production`)) || []).filter((e) => !isTestAcct215(e));
+  if (!mgrs.length) return { off: true, on: [], names: [] };
+  const d0 = new Date(phxDayStart(phxDate(nowMs))).toISOString();
+  const ev = await db(`clock_event?select=employee_id,kind,claimed_at&voided=is.false&employee_id=in.(${mgrs.map((m) => m.id).join(",")})&claimed_at=gte.${d0}&order=claimed_at.desc&limit=300`);
+  const on = mgrs.filter((m) => { const last = (ev || []).find((x) => x.employee_id === m.id); return Boolean(last) && last.kind !== "clock_out_shift" && last.kind !== "clock_out_auto"; });
+  return { off: on.length === 0, on: on.map((m) => m.first_name), names: mgrs.map((m) => m.first_name) };
+}
+// optionList255 with a 60 s memory per cab (the order's options don't change minute to minute; Mike's home reads every cab)
+const optMemo369 = new Map();
+async function optList369(b, allow) {
+  const hit = optMemo369.get(b.id); if (hit && Date.now() - hit.at < 60000) return hit.L;
+  const L = await optionList255(b, allow); optMemo369.set(b.id, { at: Date.now(), L }); return L;
+}
+// The LAST-STEP LOCK. Returns null (go ahead) or the refusal body. `taskId` = the step being completed (null = the Finished tap).
+// SPEED FIRST: the floor's done tap carries the cab id (build_id hint), so these reads ride the tap's FIRST wave (lockReads369)
+// and the lock costs no extra wait; a tap without the hint (or a wrong one) reads them here instead.
+const lockReads369 = (buildId) => Promise.all([
+  db(`build?select=id,state,order_number&id=eq.${buildId}`),
+  db(`task?select=id&build_id=eq.${buildId}&is_background=is.false&state=neq.complete`),
+  optSigns369([buildId]),
+]).then((v) => ({ id: buildId, v }), (e) => ({ id: buildId, e }));
+async function lastStepLock369(buildId, taskId, pre) {
+  const got = pre && pre.id === buildId ? pre : await lockReads369(buildId);
+  if (got.e) throw got.e;
+  const [[b], open, signs] = got.v;
+  if (!b || b.state !== "active") return null;
+  if ((open || []).some((x) => x.id !== taskId)) return null;   // not the last step
+  const sign = signs[buildId];
+  if (sign) return null;
+  const mg = await mgrOff369();
+  return { ok: false, locked369: true, bypass_ok: mg.off,
+    error: mg.off ? "Locked — the production manager hasn't signed off this cab's customer options, and he's off the clock. Use the red box at the top to send it on without him."
+      : "Locked until the production manager signs off this cab's customer options. Keep working — he has a yellow card for this cab." };
+}
+// Bell to the production manager when an active cab gets down to ONE open step without his sign-off (once per cab).
+async function headsUp369(buildId, actor) {
+  try {
+    const [[b], open] = await Promise.all([
+      db(`build?select=id,state,order_number,cab_number,line_id&id=eq.${buildId}`),
+      db(`task?select=id&build_id=eq.${buildId}&is_background=is.false&state=neq.complete`),
+    ]);
+    if (!b || b.state !== "active" || (open || []).length !== 1) return;
+    const [signs, prior] = await Promise.all([optSigns369([buildId]), db(`event_log?select=id&event_type=eq.options.prod_heads_up&payload->>build_id=eq.${buildId}&limit=1`)]);
+    if (signs[buildId] || (prior && prior.length)) return;
+    const mgrs = ((await db(`employee?select=id,first_name,last_name,role,department&active=is.true&role=eq.manager&department=eq.Production`)) || []).filter((e) => !isTestAcct215(e));
+    logEvent("options.prod_heads_up", actor || null, { build_id: buildId, order_number: b.order_number, line_id: b.line_id });
+    if (!mgrs.length) return;
+    const [ln] = await db(`line?select=name&id=eq.${b.line_id}`);
+    await notify("options.need_signoff", mgrs.map((m) => m.id), `${ln ? ln.name : "A line"} — 1 step left, options need you`,
+      `Order ${b.order_number}${b.cab_number ? ` (Cab #${b.cab_number})` : ""} is on its last step. Check the customer options and sign off — the crew's last step waits for you.`, `/options/${b.id}`);
+  } catch (e) { console.error("options heads-up:", e && e.message); }
+}
+// Every active cab on the lines, for Mike's home strip and /options.
+async function optBoard369() {
+  const builds = await db(`build?select=id,order_number,cab_number,line_id,part_number,coyote_root,state&state=eq.active&order=line_id`);
+  if (!builds || !builds.length) return [];
+  const ids = builds.map((b) => b.id);
+  const [tasks, lines, signs, checks, prods] = await Promise.all([
+    db(`task?select=build_id,state&build_id=in.(${ids.join(",")})&is_background=is.false&limit=4000`),
+    db(`line?select=id,name`),
+    optSigns369(ids), optChecks369(ids), db("product?select=part_number"),
+  ]);
+  const allow = new Set((prods || []).map((p) => String(p.part_number).toUpperCase()));
+  const lists = await Promise.all(builds.map((b) => optList369(b, allow).catch(() => [])));
+  const lnName = Object.fromEntries((lines || []).map((l) => [l.id, l.name]));
+  return builds.map((b, i) => {
+    const mine = (tasks || []).filter((t) => t.build_id === b.id); const open = mine.filter((t) => t.state !== "complete").length;
+    const exp = lists[i] || []; const have = new Set((checks[b.id] || []).map((c) => c.item_text));
+    const sign = signs[b.id] || null;
+    return { b, line: lnName[b.line_id] || "", total: mine.length, open, exp: exp.length, done: exp.filter((o) => have.has(o)).length, sign, hot: !sign && open <= 1 };
+  });
+}
+function optStrip369(rows, names = {}) {
+  if (!rows || !rows.length) return "";
+  const hot = rows.filter((r) => r.hot).length;
+  const row = (r) => {
+    const st = r.sign ? (r.sign.bypass ? `<span style="color:#ff9f0a">&#9888; Sent on without you${names[r.sign.by] ? ` by ${escH(names[r.sign.by])}` : ""} &mdash; take a look</span>` : `<span style="color:#30d158">&#10003; Signed off${names[r.sign.by] ? ` by ${escH(names[r.sign.by])}` : ""}</span>`)
+      : !r.exp ? `<span style="color:#ff6961">&#9888; Can't read the options &mdash; check the order</span>`
+      : `options ${r.done} of ${r.exp}`;
+    const left = r.open === 0 ? "every step done &mdash; crew is waiting on you" : `${r.open} step${r.open === 1 ? "" : "s"} left`;
+    return `<a href="/options/${r.b.id}" style="display:block;text-decoration:none;color:#fff;margin-top:8px;padding:12px 14px;border-radius:12px;${r.hot ? "background:#2a2200;border:2px solid #ffd60a" : "background:#1c1c1e;border:1px solid #3a3a3c"}">
+      <div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${escH(r.line)} &middot; ${escH(r.b.order_number)}</b>${r.hot ? `<span style="color:#ffd60a;font-weight:800;font-size:.85rem">${r.open === 0 ? "WAITING ON YOU" : "1 STEP LEFT"}</span>` : ""}</div>
+      <div style="font-size:.9rem;opacity:.85;margin-top:2px">${left} &middot; ${st}</div>
+      ${r.hot && !r.sign ? `<div style="font-size:.85rem;color:#e6d48a;margin-top:4px">Check the rest now &mdash; the crew's last step waits for your sign-off.</div>` : ""}</a>`;
+  };
+  return `<div id="opts369" style="max-width:560px;margin:0 auto 14px;text-align:left">
+    <div style="font-weight:800;letter-spacing:.06em;font-size:.8rem;color:#8e8e93">CUSTOMER OPTIONS &mdash; YOUR CHECK${hot ? ` <span style="background:#ffd60a;color:#000;border-radius:9px;padding:1px 9px;margin-left:4px">${hot} need${hot === 1 ? "s" : ""} you</span>` : ""}</div>
+    ${rows.map(row).join("")}
+    <div style="opacity:.55;font-size:.8rem;margin-top:6px">Production options only &mdash; the sheet metal kit options stay with the warehouse.</div>
+  </div>`;
+}
+// Names for the "by" lines: { id: "Mike H." }
+async function optNames369(ids) {
+  const u = [...new Set((ids || []).filter(Boolean))]; if (!u.length) return {};
+  const rows = await db(`employee?select=id,first_name,last_name&id=in.(${u.join(",")})`);
+  return Object.fromEntries((rows || []).map((e) => [e.id, `${e.first_name || ""}${e.last_name ? " " + String(e.last_name).charAt(0) + "." : ""}`.trim()]));
+}
+// The crew's box on the cab screen (active cab, ≤1 open step, no sign-off yet). build.opts369 = { off, done, exp, mgr }.
+const optCrew369 = (build) => {
+  const o = build && build.opts369; if (!o) return "";
+  if (o.signed) return `<div style="max-width:560px;margin:0 auto 10px;padding:10px 14px;border-radius:12px;background:#10240f;border:1px solid #30d158;color:#b6f2c3;font-size:.95rem">&#10003; Customer options signed off${o.by ? ` by ${escH(o.by)}` : ""} &mdash; finish when you're done.</div>`;
+  return `<div id="crew369" style="max-width:560px;margin:0 auto 10px;text-align:left">
+    <div style="padding:14px;border-radius:12px;background:#2a2200;border:2px solid #ffd60a">
+      <div style="font-weight:800;font-size:1.05rem">&#128274; Last step waits on ${escH(o.mgr || "the production manager")}'s options sign-off</div>
+      <div style="color:#e6d48a;margin-top:4px;font-size:.95rem;line-height:1.45">${o.exp ? `${o.done} of ${o.exp} customer options checked. ` : ""}${o.off ? `${escH(o.mgr || "He")} is off the clock today.` : `${escH(o.mgr || "He")} has a yellow card for this cab. Keep working &mdash; if he spots something, fix it while you're still on this step. Done unlocks the moment he signs off.`}</div>
+    </div>
+    ${o.off ? `<div style="margin-top:10px;padding:14px;border-radius:12px;background:#3a0d12;border:2px solid #ff453a">
+      <div style="font-weight:800;color:#ffd0cc;font-size:1.05rem">Send it to Body without ${escH(o.mgr || "him")}?</div>
+      <div style="color:#ffd0cc;font-size:.95rem;margin-top:4px;line-height:1.45">This skips the <b>production manager's check</b>. Only do it because ${escH(o.mgr || "he")} isn't in. Your name goes on it, ${escH(o.mgr || "he")} and the admins will see it, and <b>Body checks the options ${escH(o.mgr || "he")} didn't get to</b> at inspection.</div>
+      <button class="name" style="background:transparent;border:2px solid #ff453a;color:#ff6961;margin-top:10px;font-size:1.05rem" data-b="${build.id}" onclick="bypass369(this)">Unlock &mdash; send it on without ${escH(o.mgr || "him")}</button>
+    </div>` : ""}
+  </div>`;
+};
 // Block 322: which order lines are the loose sheet-metal-kit panels (front clip / bed — the
 // warehouse checks them at crating) and which are cab/tub work (inspection ticks them). Decided by
 // the DROPDOWN, not the value: a label is a kit label when every live library row under it is
@@ -5630,8 +5792,18 @@ const settingsPage117 = (me) => `<!doctype html>
 // selection (stock included) gets its own box; the server refuses
 // /api/build/complete until every line is checked. A no-options cab gets one
 // explicit confirm box, so nothing ever passes untouched.
-const oc255 = (id, L) => `<div style="border:1px solid #C8102E;border-radius:10px;padding:8px 10px;margin:8px 0;background:#1c1416">
-    <div style="font-weight:800;font-size:.82rem;letter-spacing:.04em;color:#ff8f98">CUSTOMER SELECTIONS — confirm each is ON THIS CAB and correct before sign-off</div>
+// Block 369: what's already on record for an inspection list — the sign-off line, a bypass banner, and the ticked rows (read-only)
+const optRec369 = (L) => {
+  const D = (L && L.done369) || []; const S = (L && L.sign369) || null; if (!D.length && !S) return "";
+  const head = S && S.bypass ? `<div style="clear:both;background:#3a2400;border:1px solid #ff9f0a;border-radius:8px;padding:8px 10px;margin:4px 0 6px;color:#ffd8a0;font-size:.95rem">Sent on by <b>${escH(S.by || "the crew")}</b> without the production manager's sign-off (he was off the clock) &middot; ${when369(S.at)}. <b>Check the options he didn't get to.</b></div>`
+    : S ? `<div style="clear:both;opacity:.75;font-size:.92rem;margin:4px 0 6px">Customer options signed off by ${escH(S.by || "the production manager")} &middot; ${when369(S.at)}</div>`
+    : `<div style="clear:both;opacity:.75;font-size:.92rem;margin:4px 0 6px">Already checked: ${D.length} option${D.length === 1 ? "" : "s"} on record</div>`;
+  const rows = (L.length || (S && S.bypass)) ? D.map((d) => `<div style="padding:5px 6px;font-size:.95rem;opacity:.7;border-top:1px solid #2a2a2c">&#9745; ${escH(d.t)} <span style="font-size:.8rem;opacity:.8">&middot; ${escH(d.by)}${d.at ? ` ${when369(d.at)}` : ""}</span></div>`).join("") : "";
+  return head + rows;
+};
+const allOnRec369 = (L) => Boolean(L && !L.length && L.done369 && L.done369.length);
+const oc255 = (id, L) => allOnRec369(L) ? `<div style="border:1px solid #3a3a3c;border-radius:10px;padding:8px 10px;margin:8px 0;background:#1c1c1e">${optRec369(L)}${kitLine322(L)}</div>` : `<div style="border:1px solid #C8102E;border-radius:10px;padding:8px 10px;margin:8px 0;background:#1c1416">
+    <div style="font-weight:800;font-size:.82rem;letter-spacing:.04em;color:#ff8f98">CUSTOMER SELECTIONS — confirm each is ON THIS CAB and correct before sign-off</div>${optRec369(L)}
     ${(L && L.length) ? L.map((o) => `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="oc255" data-b="${id}" data-o="${escH(o).replace(/"/g, "&quot;")}"> ${escH(o)}</label>`).join("")
       : `<label style="display:block;padding:3px 0;font-size:.95rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${id}"> No customer options on this order — checked against the order, confirmed</label>`}
     ${kitLine322(L)}
@@ -5652,21 +5824,23 @@ const roInsp321 = (w, r) => `
       <b>ORDER ${w.order_number}</b>${w.cab_number ? ` · Cab #${w.cab_number}` : ""} · ${r.line.name} · WAITING FOR INSPECTION
       <div style="opacity:.7;font-size:.9rem;margin-top:4px">${w.inspection_claimed_by ? `&#128269; ${w.claim_name184} is inspecting it${w.claim_hhmm184 ? ` — since ${w.claim_hhmm184}` : ""}.` : "A Body Shop manager inspects it (admins as backup)."} The line stays occupied until it's signed off.</div>
     </div>`;
-const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const n = L.length;
+const inspCard308 = (w, r, reworkReasons) => { const L = w.opts255 || []; const n = L.length; const rec369 = allOnRec369(L);   // Block 369: every option already on record → nothing to tick
   return `<div id="insp-${w.id}" style="border:2px solid #ffd60a;border-radius:14px;padding:14px;margin-bottom:12px;background:#1a1700">
       <div style="font-size:1.35rem;font-weight:800">ORDER ${w.order_number}${w.cab_number ? ` &middot; Cab #${w.cab_number}` : ""}</div>
       <div style="opacity:.7;margin:2px 0 8px">${r.line.name} &middot; production says it&#39;s done</div>
       ${w.inspection_claimed_by && !w.claim_is_me308 ? `<div style="color:#5ac8fa;font-weight:700;margin-bottom:8px">&#128269; ${w.claim_name184} is on this one${w.claim_hhmm184 ? ` (since ${w.claim_hhmm184})` : ""}</div>` : ""}
       ${w.final_note ? `<div style="opacity:.8;font-size:.95rem;margin-bottom:8px">Crew&#39;s note: ${w.final_note}</div>` : ""}
       <div style="border:1px solid #C8102E;border-radius:12px;padding:10px 12px;background:#1c1416">
-        <div style="font-weight:800;color:#ff8f98;margin-bottom:4px">STEP 1 &mdash; Customer selections <span id="occ-${w.id}" style="float:right;font-weight:700;color:#fff">0 of ${n || 1}</span></div>
-        <div style="opacity:.7;font-size:.9rem;margin-bottom:6px">${n ? "Tick each one you can see on the cab, done right." : "This order has no customer options."}</div>
-        ${n ? L.map((o) => `<label style="display:block;padding:9px 6px;font-size:1.05rem;border-top:1px solid #3a2a2c;cursor:pointer"><input type="checkbox" class="oc255" data-b="${w.id}" data-o="${escH(o).replace(/"/g, "&quot;")}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> ${escH(o)}</label>`).join("")
+        <div style="font-weight:800;color:#ff8f98;margin-bottom:4px">STEP 1 &mdash; Customer selections ${rec369 ? "" : `<span id="occ-${w.id}" style="float:right;font-weight:700;color:#fff">0 of ${n || 1}</span>`}</div>
+        ${optRec369(L)}
+        ${rec369 ? `<div style="opacity:.7;font-size:.9rem">Nothing for you to tick &mdash; do the rest of your inspection and sign off.</div>` : `<div style="opacity:.7;font-size:.9rem;margin-bottom:6px">${n ? "Tick each one you can see on the cab, done right." : "This order has no customer options."}</div>`}
+        ${rec369 ? "" : n ? L.map((o) => `<label style="display:block;padding:9px 6px;font-size:1.05rem;border-top:1px solid #3a2a2c;cursor:pointer"><input type="checkbox" class="oc255" data-b="${w.id}" data-o="${escH(o).replace(/"/g, "&quot;")}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> ${escH(o)}</label>`).join("")
           : `<label style="display:block;padding:9px 6px;font-size:1.05rem;cursor:pointer"><input type="checkbox" class="ocack255" data-b="${w.id}" onchange="ocTick308('${w.id}')" style="width:22px;height:22px;vertical-align:middle;margin-right:10px"> Checked against the order &mdash; nothing to confirm</label>`}
         ${kitLine322(L)}
       </div>
       <div style="font-weight:800;color:#ffd60a;margin:12px 0 4px">STEP 2 &mdash; Sign off</div>
-      <button id="sob-${w.id}" class="btn" disabled style="width:100%;font-size:1.15rem;padding:16px;margin-top:0;background:#1d5a2d;border-color:#30d158;opacity:.45" onclick="act('complete','${w.id}',this)">Tick ${n ? `the ${n} selection${n > 1 ? "s" : ""}` : "the box"} first</button>
+      ${rec369 ? `<button id="sob-${w.id}" class="btn" style="width:100%;font-size:1.15rem;padding:16px;margin-top:0;background:#1d5a2d;border-color:#30d158" onclick="act('complete','${w.id}',this)">&#10003; Inspected &mdash; sign off</button>`
+        : `<button id="sob-${w.id}" class="btn" disabled style="width:100%;font-size:1.15rem;padding:16px;margin-top:0;background:#1d5a2d;border-color:#30d158;opacity:.45" onclick="act('complete','${w.id}',this)">Tick ${n ? `the ${n} selection${n > 1 ? "s" : ""}` : "the box"} first</button>`}
       <details style="margin-top:12px"><summary style="cursor:pointer;color:#8e8e93;font-size:.95rem">Something&#39;s wrong? Send it back &#9656;</summary>
         <div style="margin-top:8px"><select id="Trr-${w.id}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;width:100%">
           ${reworkReasons.map((x) => `<option>${x.label}</option>`).join("")}</select>
@@ -5990,7 +6164,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
           ${r.active.downs.map((d) => `⚑ Line down${d.open ? " (running now)" : ""} — ${d.label}`).join("<br>")}
           ${r.active.downTotalLabel ? `<div style="margin-top:3px;opacity:.85">Down ${r.active.downTotalLabel} total across ${r.active.downs.length} stops — off the cab's pace clock.</div>` : `<div style="margin-top:3px;opacity:.7">This down time is off the cab's pace clock.</div>`}
         </div>` : ""}
-        ${insp188 ? "" : `${oc255(r.active.id, r.active.opts255)}${!isAdmin ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`}`
+        ${insp188 ? "" : `<a href="/options/${r.active.id}" style="display:block;margin:8px 0 0;color:#ffd60a;font-weight:700">Customer options &mdash; production manager's check &rsaquo;</a>${oc255(r.active.id, r.active.opts255)}${!isAdmin ? "" : `<button class="btn${r.active.ready194 && r.active.ready194.allDone ? " gray" : ""}" onclick="armM(this,()=>act('complete','${r.active.id}',this))">Skip inspection — mark production complete</button>`}`}`
       : (r.rework || []).length ? `<div style="opacity:.6">The fix above is this line's current cab &mdash; Start next comes back when it's done.</div>`   /* Block 321: a rework cab occupies its line */
       : `<div style="opacity:.6">No active cab</div>
         ${!insp188 && r.queue.length ? `<button class="btn" onclick="act('start','${r.queue[0].id}',this)">Start next: ORDER ${r.queue[0].order_number}</button>` : ""}`}
@@ -12106,7 +12280,7 @@ async function cabRecap310(b) {
     db("employee?select=id,first_name,last_name,department"),
     dbAll252(`event_log?select=at,event_type,actor_id,payload&payload->>build_id=eq.${b.id}&order=at.asc,id.asc`),
     db(`build_photo?select=id,kind,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc&limit=400`),
-    db(`option_check?select=item_text,checked_by,checked_at&build_id=eq.${b.id}&gate=eq.body&order=checked_at.asc`).catch(() => []),   // Block 327: the inspection gate only — the crating re-check has its own section
+    db(`option_check?select=item_text,checked_by,checked_at&build_id=eq.${b.id}&gate=eq.body&voided=is.false&order=checked_at.asc`).catch(() => []),   // Block 327: the inspection gate only — the crating re-check has its own section
     db(`option_flag?select=flag_text&build_id=eq.${b.id}`).catch(() => []),
     db(`line_down?select=reason,down_at,up_at&build_id=eq.${b.id}&order=down_at.asc`).catch(() => []),
     db(`task_note?select=task_id,body_task_id,wh_task_id,note,created_at,hidden&build_id=eq.${b.id}&order=created_at.asc`).catch(() => []),   // Block 340: +Body / crating notes
@@ -13048,7 +13222,7 @@ async function notify(eventType, intendedIds, title, bodyText, link, opts226) {
     // {urgent:true} (the order is ACTIVE on a line) punches through and
     // buzzes normally. pace.standards and option.changed stay pushable —
     // they only ever fire about live cabs.
-    const BELL_ONLY_225 = ["help.released", "afterhours.stay", "touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved"];   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
+    const BELL_ONLY_225 = ["help.released", "afterhours.stay", "touch.linefrees", "nudge.daystart", "sync.iface_add", "sync.iface_drop", "note.triage", "option.flagged", "pace.fast_tap", "pace.unstart_long", "kit.cleared_at_signoff", "kit.manager_started_reminder", "build.recap_ready", "build.line_moved", "options.signed_off"];   // Block 369 (Daniel 11/11 08:35): the crew's "options signed off" is bell only   // Block 318: a cab moved lines — bell only   // Block 308/309/310: bookkeeping nudges + the owners' recap, bell only   // Block 280: tap facts are bell-only
     const bellOnly225 = !(opts226 && opts226.urgent) && (BELL_ONLY_225.includes(String(eventType)) || String(eventType).startsWith("cab.") || String(eventType).startsWith("body.") || String(eventType).startsWith("wh."));   // Block 326: Body notices are facts for the bell, never a buzz · Block 327: warehouse finish-out notices the same
     // Block 226b: OWNER-QUIET — "i dont want to burden the owners WHEN they
     // decide to turn on their push notifications." Owner-department admins
@@ -13687,6 +13861,9 @@ const handleRequest355 = async (req, res) => {
         } catch (eH) { console.error("body home list:", eH && eH.message); body326h = null; } }
         return send(200, "text/html; charset=utf-8", watcherPage(emp, clk92, mt290, insp308, body326h));   // Block 290: Marketing clock card rides along (null for everyone else) · Block 308: inspection strip · Block 326: Body list
       }
+      // Block 369: the production manager's options strip rides on top of his home — started now, beside the floor reads
+      const strip369P = isProdMgr369(emp) ? optBoard369().then(async (rows) => optStrip369(rows, await optNames369(rows.map((r) => r.sign && r.sign.by)))).catch((e) => { console.error("options strip:", e && e.message); return ""; }) : null;
+      const with369 = async (html) => { if (!strip369P) return html; const st = await strip369P; return st ? html.replace("<!-- Block 196: the ONE shared nav -->", (m) => m + st) : html; };
       // Block 212 (v201 SPEED): the floor home's three base reads together.
       const [lastRows212, allLines, reasons] = await Promise.all([
         db(`clock_event?select=kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 271: +fix_build_id — the cab screen needs to know if your clock is on THIS fix · Block 338: +the step stamps
@@ -13785,7 +13962,17 @@ const handleRequest355 = async (req, res) => {
             const [stR, sbR] = await Promise.all([fixStatus321(build.id), db(`event_log?select=at,actor_id&event_type=in.(${evT})&payload->>build_id=eq.${build.id}&order=at.desc&limit=1`)]);
             st321 = stR; if (sbR[0]) { sentAt321 = sbR[0].at; sentBy321 = sbR[0].actor_id ? (people[sbR[0].actor_id] || "") : ""; }
           }
-          return send(200, "text/html; charset=utf-8", cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271, st321, sentBy321, sentAt321 }, prog209, prog316));
+          // Block 369: the crew's options box — an active cab down to its last step (or all done) without the sign-off
+          if (build.state === "active" && tasks.filter((t) => !t.is_background && t.state !== "complete").length <= 1) {
+            try {
+              const [sg369, mg369, ck369, L369] = await Promise.all([optSigns369([build.id]), mgrOff369(), optChecks369([build.id]), optList369(build, null).catch(() => [])]);   // one wave, side by side
+              const s369 = sg369[build.id];
+              if (s369) build.opts369 = { signed: true, by: people[s369.by] || "" };
+              else { const hv369 = new Set((ck369[build.id] || []).map((c) => c.item_text));
+                build.opts369 = { off: mg369.off, mgr: mg369.names[0] || "", exp: L369.length, done: L369.filter((o) => hv369.has(o)).length }; }
+            } catch (e369) { console.error("crew options box:", e369 && e369.message); }
+          }
+          return send(200, "text/html; charset=utf-8", await with369(cabPage(emp, build, tasks, lineName, notes, tphotos, otherLines, people, photoMin, cShots.length, { open: openFixes126.filter((f) => f.build_id !== build.id), onFix: onFix126, offFix: offFix271, st321, sentBy321, sentAt321 }, prog209, prog316)));   // Block 369: + the manager's strip
         }
         // No active cab on this line -> fall through to the clock screen.
       }
@@ -13857,11 +14044,11 @@ const handleRequest355 = async (req, res) => {
         }
       } catch (e321) { console.error("fix box:", e321.message); back321 = []; }
       const stay334h = await stayFor334(empId, await shopHours());   // Block 334: Staying late / recovery card
-      return send(200, "text/html; charset=utf-8",
+      return send(200, "text/html; charset=utf-8", await with369(   // Block 369: + the production manager's options strip
         homePage(emp, { clockedIn, lineName, lineId: last ? last.line_id : 0 }, usual, other, reasons,
           { now: ahNow && !stay334h.openStay, reasons: ahReasonRows.map((r) => r.label), open: Boolean(openAh) && stay334h.openStarted,
             lastReason: (lastAhRows214[0] && ahReasonRows.some((r) => r.label === lastAhRows214[0].reason)) ? lastAhRows214[0].reason : "" },
-          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126, back321 }, stay334h, help338));
+          { on: toOn, reasons: toReasons, mine: toMine }, lineStat98, { open: openFixes126, back321 }, stay334h, help338)));
     }
 
     // TASK STATE CHANGE — the two-step check-off engine (Q45/Q90/Q104).
@@ -13870,12 +14057,13 @@ const handleRequest355 = async (req, res) => {
     if (url.pathname === "/api/task/state" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
-      const { task_id, to, claimed_at, confirm159 } = await body(req);
+      const { task_id, to, claimed_at, confirm159, build_id: hint369 } = await body(req);   // Block 369: the cab id rides along (a speed hint — checked against the step's own cab)
       if (!isUuid(task_id)) return json(400, { ok: false, error: "That step reference isn't valid" });
       // Block 357: a start's open-steps count (read later, before any write) rides in the same round trip
       if (to === "in_progress") prefetch356([`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`]);
       // Block 212 (v201 SPEED): the floor's most-tapped endpoint — the two
       // independent lookups now share one round trip.
+      const pre369P = to === "complete" && isUuid(hint369) ? lockReads369(hint369) : null;   // Block 369: the lock's reads start in this first wave (settled — never an unhandled rejection)
       const [tRows212, lastCkRows212] = await Promise.all([
         // Block 260: name + wh_callout ride along for the warehouse call-out.
         // started_by too — the Block 164 "only the starter (or a manager) can
@@ -13940,6 +14128,11 @@ const handleRequest355 = async (req, res) => {
         if (!meU164 || (meU164.role !== "manager" && meU164.role !== "admin"))
           return json(403, { ok: false, error: "Only the person who started this step (or a manager) can undo the start" });
       }
+      // Block 369: the LAST-STEP LOCK — an active cab's last open step waits for the production manager's options sign-off
+      if (to === "complete" && t.state === "in_progress" && !t.is_background) {
+        const lk369 = await lastStepLock369(t.build_id, t.id, pre369P ? await pre369P : null);
+        if (lk369) return json(200, lk369);
+      }
       const patch = { state: to };
       if (to === "in_progress" && t.state === "not_started") { patch.started_by = empId; patch.started_at = claimed_at || new Date().toISOString(); }
       if (to === "complete") { patch.completed_by = empId; patch.completed_at = claimed_at || new Date().toISOString(); }
@@ -13951,6 +14144,7 @@ const handleRequest355 = async (req, res) => {
       await db(`task?id=eq.${task_id}`, { method: "PATCH", body: JSON.stringify(patch) });
       logEvent(to === "not_started" ? "task.unstart" : t.state === "complete" ? "task.undo" : to === "complete" ? "task.complete" : "task.start",
         empId, { task_id, build_id: t.build_id, display_no: t.display_no, from: t.state, to });
+      if (to === "complete" && !t.is_background) void headsUp369(t.build_id, empId);   // Block 369: down to one step → the production manager's bell (once per cab)
       if (to === "complete") void kitVerifyNudge222(t.build_id);   // Block 222: 75% checkpoint — nudge warehouse if the on-deck kit is unverified
       if (to === "complete" && !t.is_background) void paceTapFact280(t, empId, "fast");                                  // Block 280: fast done-tap fact (bell, floor mgrs)
       if (to === "not_started" && t.state === "in_progress" && !t.is_background) void paceTapFact280(t, empId, "unstart");   // Block 280: long undo-start fact
@@ -15947,7 +16141,19 @@ const handleRequest355 = async (req, res) => {
       if (sign255.length) {
         const prodsOC255 = await db("product?select=part_number");
         const allowOC255 = new Set(prodsOC255.map((p) => String(p.part_number).toUpperCase()));
+        const ids369 = sign255.map((b) => b.id);
+        const rec369P = Promise.all([optChecks369(ids369), optSigns369(ids369)]).then((v) => ({ v }), (e) => ({ e }));   // Block 369: started beside the lists (settled — never an unhandled rejection)
         await Promise.all(sign255.map(async (b255) => { b255.opts255 = await optionList255(b255, allowOC255); }));
+        // Block 369: Body's list = only what ISN'T on record yet (Mike's ticks, or a first sign-off before a fix); what is on record rides along by name
+        const rec369 = await rec369P;
+        if (rec369.v) { const [ck369, sg369] = rec369.v;
+          const nm369 = await optNames369([...Object.values(sg369).map((x) => x.by), ...Object.values(ck369).flat().map((c) => c.checked_by)]).catch(() => ({}));
+          for (const b255 of sign255) { const L = b255.opts255 || []; const have = new Map((ck369[b255.id] || []).map((c) => [c.item_text, c]));
+            const rest = L.filter((o) => !have.has(o)); rest.kit322 = L.kit322;
+            rest.done369 = L.filter((o) => have.has(o)).map((o) => ({ t: o, by: nm369[have.get(o).checked_by] || "", at: have.get(o).checked_at }));
+            const sg = sg369[b255.id]; rest.sign369 = sg ? { by: nm369[sg.by] || "", at: sg.at, bypass: sg.bypass } : null;
+            b255.opts255 = rest; }
+        } else console.error("options on record:", rec369.e && rec369.e.message);
       }
       // Who's on the clock right now — feeds the forgotten-clock-out tool.
       const latestCk = {};
@@ -16827,6 +17033,164 @@ const handleRequest355 = async (req, res) => {
       return json(200, { ok: true, count: shotsPC.length });
     }
 
+    // ===== Block 369 (Plan 93): MIKE'S OPTIONS CHECK — his page, his ticks, his sign-off, the crew's bypass =====
+    if (url.pathname === "/options" || url.pathname.startsWith("/options/")) {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=id,first_name,last_name,role,department&id=eq.${empId}`);
+      if (!canOpts369(me)) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      const head369 = (t) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>${t}</title>${style}</head><body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Home</a></p>
+  ${nav196(me)}`;
+      const bid = url.pathname.slice("/options/".length);
+      if (!bid) {
+        const rows = await optBoard369();
+        const nm = await optNames369(rows.map((r) => r.sign && r.sign.by));
+        return send(200, "text/html; charset=utf-8", `${head369("Customer options")}${rows.length ? optStrip369(rows, nm) : `<p style="text-align:center;opacity:.6">No cabs on the lines right now.</p>`}</div></body></html>`);
+      }
+      if (!isUuid(bid)) return send(404, "text/html; charset=utf-8", `${head369("Customer options")}<p style="text-align:center">That cab reference isn't valid.</p></div></body></html>`);
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${bid}`);
+      if (!b) return send(404, "text/html; charset=utf-8", `${head369("Customer options")}<p style="text-align:center">No such cab.</p></div></body></html>`);
+      const [L, tasks, [ln], ck, sg, folks] = await Promise.all([
+        optList369(b, null).catch(() => []),
+        db(`task?select=name,state,started_by,is_background&build_id=eq.${b.id}&is_background=is.false&order=day_no,sort_order`),
+        b.line_id ? db(`line?select=name&id=eq.${b.line_id}`) : [null],
+        optChecks369([b.id]), optSigns369([b.id]),
+        db(`employee?select=id,first_name,last_name`),
+      ]);
+      const nm = Object.fromEntries((folks || []).map((e) => [e.id, `${e.first_name || ""}${e.last_name ? " " + String(e.last_name).charAt(0) + "." : ""}`.trim()]));
+      const have = new Map((ck[b.id] || []).map((c) => [c.item_text, c]));
+      const sign = sg[b.id] || null;
+      const open = tasks.filter((t) => t.state !== "complete");
+      const onNow = tasks.filter((t) => t.state === "in_progress");
+      const live = b.state === "active";
+      const canTick = live && !sign;
+      const left = L.filter((o) => !have.has(o)).length;
+      const q = (s) => escH(s).replace(/"/g, "&quot;");
+      const rowsH = L.map((o) => { const c = have.get(o);
+        return `<label style="display:flex;align-items:center;gap:12px;margin-top:8px;padding:12px;border-radius:10px;${c ? "background:#1f3a24" : "background:#1c1c1e;border:1px solid #48484a"};cursor:${canTick ? "pointer" : "default"}">
+          <input type="checkbox" class="o369" data-o="${q(o)}" ${c ? "checked" : ""} ${canTick ? "" : "disabled"} onchange="tick369(this)" style="width:24px;height:24px;accent-color:#34c759;flex:none">
+          <span style="flex:1"><b>${escH(o)}</b><br><span style="font-size:.82rem;${c ? "color:#b6f2c3" : "opacity:.6"}">${c ? `&#10003; ${escH(nm[c.checked_by] || "")} &middot; ${when369(c.checked_at)}` : "not checked yet"}</span></span></label>`; }).join("");
+      const html = `${head369(`Options · ${escH(b.order_number)}`)}
+  <div style="max-width:560px;margin:0 auto;text-align:left">
+    <div style="font-size:1.3rem;font-weight:800;text-align:center">Order <a href="/order/${encodeURIComponent(b.order_number)}" style="color:inherit">${escH(b.order_number)}</a>${b.cab_number ? ` &middot; Cab #${escH(b.cab_number)}` : ""}</div>
+    <div style="background:#1c1c1e;border:1px solid #3a3a3c;border-radius:12px;padding:12px 14px;margin-top:10px">
+      <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:#8e8e93">WHERE IT IS NOW</div>
+      <div style="font-size:1.1rem;font-weight:800;margin-top:4px">${live ? `${escH(ln ? ln.name : "On the line")} &middot; ${open.length === 0 ? "every step done" : `${open.length} step${open.length === 1 ? "" : "s"} left`}` : `Off the line &mdash; ${escH(String(b.state).replace(/_/g, " "))}`}</div>
+      ${onNow.length ? `<div style="font-size:.9rem;opacity:.8;margin-top:3px">Crew is on ${onNow.map((t) => `<b>${escH(t.name)}</b>${t.started_by && nm[t.started_by] ? ` &mdash; ${escH(nm[t.started_by])}` : ""}`).join(", ")}</div>` : ""}
+    </div>
+    ${sign ? (sign.bypass ? `<div style="background:#3a2400;border:2px solid #ff9f0a;border-radius:12px;padding:12px 14px;margin-top:12px;color:#ffd8a0"><b>Sent on without your sign-off</b> by ${escH(nm[sign.by] || "the crew")} &middot; ${when369(sign.at)} &mdash; you were off the clock. Body checks the options you didn't get to at inspection. Take a look when you can.</div>`
+      : `<div style="background:#10240f;border:2px solid #30d158;border-radius:12px;padding:12px 14px;margin-top:12px;color:#b6f2c3"><b>&#10003; Signed off</b> by ${escH(nm[sign.by] || "")} &middot; ${when369(sign.at)}. Need more time on something? Re-open a step from the Manager console &mdash; the cab stays on the line.</div>`) : ""}
+    <div style="background:${L.length ? "#2a2200" : "#3a0d12"};border:2px solid ${L.length ? "#ffd60a" : "#ff453a"};border-radius:12px;padding:14px;margin-top:12px">
+      <div style="display:flex;align-items:baseline"><b style="flex:1;font-size:1.05rem">Customer options</b>${L.length ? `<span style="color:#ffd60a;font-weight:700">${L.length - left} of ${L.length} checked</span>` : ""}</div>
+      ${L.length ? `<div style="font-size:.85rem;color:#e6d48a;margin-top:3px">Production options from the Coyote order &mdash; the sheet metal kit options aren't here, the warehouse checks those at crating.</div>${rowsH}${kitLine322(L)}`
+        : `<div style="color:#ffd0cc;margin-top:6px;line-height:1.45">&#9888; The board can't read this cab's options from the Coyote order. Open the order in Coyote and check the cab against it yourself.</div>
+           ${canTick ? `<label style="display:flex;gap:10px;align-items:center;margin-top:10px;color:#ffd0cc"><input type="checkbox" id="ack369" onchange="ack369c(this)" style="width:22px;height:22px"> I checked the cab against the Coyote order myself</label>` : ""}`}
+    </div>
+    <div class="msg err" id="err369" style="min-height:1.2em;margin-top:8px"></div>
+    ${canTick ? `<button class="name" id="sign369" ${left || !L.length ? "disabled" : ""} style="margin-top:4px;font-size:1.15rem;${left || !L.length ? "opacity:.45" : "background:#1d5a2d;border-color:#30d158"}" data-b="${b.id}" onclick="sign369(this)">${!L.length ? "Sign off options" : left ? `Sign off options (${left} left)` : "&#10003; Sign off options"}</button>
+    <div style="opacity:.6;font-size:.85rem;margin-top:8px;line-height:1.45">The crew's <b>last step stays locked</b> until you sign off &mdash; the cab stays live on the line so they can fix anything you find while they're still on it. They tap Done after your sign-off &rarr; the cab finishes and Body is told, same as today.</div>` : ""}
+    ${!live && !sign ? `<div style="opacity:.6;font-size:.9rem;margin-top:8px">This cab isn't on the line any more &mdash; nothing to sign off here.</div>` : ""}
+  </div>
+</div>
+<script>
+  async function post369(url, payload) {
+    try { const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); return await r.json(); }
+    catch (e) { return { ok: false, error: "Can't reach the board — check Wi-Fi and tap again" }; }
+  }
+  async function tick369(cb) {
+    cb.disabled = true; const e = document.getElementById("err369"); e.textContent = "";
+    const out = await post369("/api/opts369/tick", { build_id: "${b.id}", item: cb.dataset.o, on: cb.checked });
+    if (out.ok) return location.reload();
+    e.textContent = out.error || "Something went wrong"; cb.checked = !cb.checked; cb.disabled = false;
+  }
+  function ack369c(cb) { const s = document.getElementById("sign369"); if (!s) return; s.disabled = !cb.checked; s.style.opacity = cb.checked ? "1" : ".45"; }
+  async function sign369(btn) {
+    btn.disabled = true; const e = document.getElementById("err369"); e.textContent = "";
+    const a = document.getElementById("ack369");
+    const out = await post369("/api/opts369/signoff", { build_id: btn.dataset.b, ack: !!(a && a.checked) });
+    if (out.ok) return location.reload();
+    e.textContent = out.error || "Something went wrong"; btn.disabled = false;
+  }
+</script></body></html>`;
+      return send(200, "text/html; charset=utf-8", html);
+    }
+    if (url.pathname === "/api/opts369/tick" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role,department&id=eq.${empId}`);
+      if (!canOpts369(me)) return json(403, { ok: false, error: "The options check is the production manager's (admins as backup)" });
+      const { build_id, item, on } = await body(req);
+      if (!isUuid(build_id) || typeof item !== "string" || !item) return json(400, { ok: false, error: "That option reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,line_id,part_number,coyote_root&id=eq.${build_id}`);
+      if (!b || b.state !== "active") return json(400, { ok: false, error: "This cab isn't on the line any more — refresh" });
+      const [sg, L] = await Promise.all([optSigns369([build_id]), optionList255(b)]);
+      if (sg[build_id]) return json(400, { ok: false, error: "Already signed off — refresh" });
+      if (!L.includes(item)) return json(400, { ok: false, error: "That option isn't on the order any more — refresh" });
+      const cur = await db(`option_check?select=id&build_id=eq.${build_id}&gate=eq.body&voided=is.false&item_text=eq.${encodeURIComponent(item)}`);
+      if (on === true) {
+        if (!cur.length) {
+          await db("option_check", { method: "POST", body: JSON.stringify([{ build_id, gate: "body", item_text: item, checked_by: empId, checked_at: new Date().toISOString() }]) });
+          logEvent("options.prod_tick", empId, { build_id, order_number: b.order_number, item });
+        }
+      } else if (cur.length) {
+        await db(`option_check?build_id=eq.${build_id}&gate=eq.body&voided=is.false&item_text=eq.${encodeURIComponent(item)}`, { method: "PATCH", body: JSON.stringify({ voided: true }) });   // never deleted — the untick voids the row
+        logEvent("options.prod_untick", empId, { build_id, order_number: b.order_number, item });
+      }
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/opts369/signoff" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out" });
+      const [me] = await db(`employee?select=role,department,first_name&id=eq.${empId}`);
+      if (!canOpts369(me)) return json(403, { ok: false, error: "The options check is the production manager's (admins as backup)" });
+      const { build_id, ack } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);
+      if (!b || b.state !== "active") return json(400, { ok: false, error: "This cab isn't on the line any more — refresh" });
+      const [sg, L, ck, open] = await Promise.all([optSigns369([build_id]), optionList255(b), optChecks369([build_id]),
+        db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete`)]);
+      if (sg[build_id]) return json(400, { ok: false, error: "Already signed off — refresh" });
+      const have = new Set((ck[build_id] || []).map((c) => c.item_text));
+      const miss = L.filter((o) => !have.has(o));
+      if (miss.length) return json(400, { ok: false, error: `${miss.length} option${miss.length === 1 ? "" : "s"} not checked yet: ${miss.slice(0, 3).join(" · ")}${miss.length > 3 ? " …" : ""}` });
+      if (!L.length && ack !== true) return json(400, { ok: false, error: "No options came through from Coyote — tick the box after checking the cab against the order yourself" });
+      logEvent("options.prod_signoff", empId, { build_id, order_number: b.order_number, line_id: b.line_id, lines: L.length, ack_no_options: L.length ? undefined : true, steps_open: open.length });
+      if (open.length <= 1) {   // the crew is on (or done with) the last step — tell them it's unlocked
+        const techs = await db(`employee?select=id&active=is.true&lines=cs.{${b.line_id}}`);
+        const [ln] = await db(`line?select=name&id=eq.${b.line_id}`);
+        void notify("options.signed_off", (techs || []).map((t) => t.id), `${ln ? ln.name : "Your line"} — options signed off`,
+          `${me.first_name || "The production manager"} signed off the customer options on order ${b.order_number}. Finish the last step when you're done.`, "/home");
+      }
+      return json(200, { ok: true });
+    }
+    if (url.pathname === "/api/opts369/bypass" && req.method === "POST") {
+      const empId = await liveSession(req);
+      if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [[ck], [me]] = await Promise.all([
+        db(`clock_event?select=kind&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`employee?select=first_name,last_name&id=eq.${empId}`)]);
+      if (!ck || ck.kind !== "clock_in") return json(403, { ok: false, error: "Clock in first" });
+      const { build_id } = await body(req);
+      if (!isUuid(build_id)) return json(400, { ok: false, error: "That cab reference isn't valid" });
+      const [b] = await db(`build?select=id,state,order_number,cab_number,line_id,part_number,coyote_root&id=eq.${build_id}`);
+      if (!b || b.state !== "active") return json(400, { ok: false, error: "This cab isn't on the line any more — refresh" });
+      const [sg, mg, open, L, cks] = await Promise.all([optSigns369([build_id]), mgrOff369(),
+        db(`task?select=id&build_id=eq.${build_id}&is_background=is.false&state=neq.complete`), optionList255(b).catch(() => []), optChecks369([build_id])]);
+      if (sg[build_id]) return json(200, { ok: true, already: true });
+      if (!mg.off) return json(403, { ok: false, error: `${mg.on.join(" / ") || "The production manager"} is on the clock — he signs off the options` });
+      if (open.length > 1) return json(400, { ok: false, error: "The bypass is for the last step — there's more than one step open" });
+      const have = new Set((cks[build_id] || []).map((c) => c.item_text));
+      const had = L.filter((o) => have.has(o)).length;
+      logEvent("options.prod_bypass", empId, { build_id, order_number: b.order_number, line_id: b.line_id, checked_before: had, of: L.length, mgr_off: true });
+      const who = `${(me && me.first_name) || "The crew"}${me && me.last_name ? " " + String(me.last_name).charAt(0) + "." : ""}`;
+      void (async () => { try {
+        const rcp = ((await db(`employee?select=id,first_name,last_name,role,department&active=is.true&role=in.(manager,admin)`)) || []).filter((e) => !isTestAcct215(e) && (e.role === "admin" || e.department === "Production")).map((e) => e.id);
+        await notify("options.bypassed", rcp, `Order ${b.order_number} went on without the options sign-off`,
+          `${who} sent it on while the production manager was off the clock — ${had} of ${L.length} options were checked. Body checks the rest at inspection. Take a look when you're back.`, `/options/${b.id}`);
+      } catch (eN) { console.error("bypass bell:", eN && eN.message); } })();
+      return json(200, { ok: true });
+    }
     if (url.pathname === "/api/build/finish" && req.method === "POST") {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out" });
@@ -16856,10 +17220,12 @@ const handleRequest355 = async (req, res) => {
       // (audited here) — the crew no longer taps R1 start, R1 done, then hunts for the button.
       // Hours live on the Fix-work punches, not on the step. Any OTHER open step still blocks.
       const fixFlow321 = b.state === "rework" || b.state === "fix_job";
-      const openAll321 = await db(`task?select=id,display_no,name,state,source&build_id=eq.${build_id}&is_background=is.false&state=neq.complete`);
+      const [openAll321, sgF369] = await Promise.all([db(`task?select=id,display_no,name,state,source&build_id=eq.${build_id}&is_background=is.false&state=neq.complete`),
+        b.state === "active" ? optSigns369([build_id]) : {}]);   // Block 369: the options sign-off rides beside the open-steps read
       const openFx321 = fixFlow321 ? openAll321.filter((t) => t.source === "rework" || t.source === "fix") : [];
       const open = openAll321.filter((t) => !openFx321.includes(t));
       if (open.length) return json(400, { ok: false, error: "There are still open steps on this cab" });
+      if (b.state === "active" && !sgF369[build_id]) { const lkF369 = await lastStepLock369(build_id, null, { id: build_id, v: [[b], openAll321, sgF369] }); if (lkF369) return json(400, lkF369); }   // Block 369: no finish before the options sign-off (a cab whose steps were all done before this block)
       // Q86: HARD per-product completion-photo gate (product.photo_min; 0 exempts).
       const [prodF] = await db(`product?select=photo_min&part_number=eq.${encodeURIComponent(b.part_number)}`);
       const photoNeed = prodF ? prodF.photo_min : 1;
@@ -16911,7 +17277,7 @@ const handleRequest355 = async (req, res) => {
         const optsSP256 = await optionList255(b);
         let confirmed256 = [];
         if (optsSP256.length) {
-          const haveSP256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body`);
+          const haveSP256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body&voided=is.false`);   // Block 369: an unticked (voided) row isn't a check
           const setSP256 = new Set(haveSP256.map((r2) => r2.item_text));
           confirmed256 = optsSP256.filter((o) => !setSP256.has(o));
           if (confirmed256.length) {
@@ -17112,7 +17478,7 @@ const handleRequest355 = async (req, res) => {
       const optsV256 = Array.isArray(opts_verified) ? opts_verified.map((x) => String(x)).filter(Boolean) : [];
       if (optsV256.length) {
         const exp256 = await optionList255(b);
-        const have256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body`);
+        const have256 = await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body&voided=is.false`);   // Block 369
         const haveSet256 = new Set(have256.map((r2) => r2.item_text));
         const new256 = optsV256.filter((o) => exp256.includes(o) && !haveSet256.has(o));
         if (new256.length) {
@@ -17299,8 +17665,12 @@ const handleRequest355 = async (req, res) => {
       // the task list, so a cab with a hollow task history can't slip through.
       const optsExp255 = await optionList255(b);
       const sent255 = Array.isArray(opts_checked) ? opts_checked.map((x) => String(x)) : [];
+      // Block 369: Body confirms only what ISN'T already on record — after the production manager's sign-off that's nothing;
+      // after a crew bypass it's the options he didn't get to. Nothing already checked is written twice.
+      const have369 = optsExp255.length ? new Set(((await db(`option_check?select=item_text&build_id=eq.${build_id}&gate=eq.body&voided=is.false`)) || []).map((r) => r.item_text)) : new Set();
+      const need369 = optsExp255.filter((o) => !have369.has(o));
       if (optsExp255.length) {
-        const missing255 = optsExp255.filter((o) => !sent255.includes(o));
+        const missing255 = need369.filter((o) => !sent255.includes(o));
         if (missing255.length)
           return json(400, { ok: false, need_opts: missing255,
             error: `Verify the customer's selections first — ${missing255.length} not confirmed: ${missing255.slice(0, 3).join(" · ")}${missing255.length > 3 ? " …" : ""}. If one is NOT done, leave it unchecked and send the cab back for rework naming that option.` });
@@ -17342,10 +17712,10 @@ const handleRequest355 = async (req, res) => {
       // Block 255: the verification itself, on the record — one audited row per
       // confirmed selection (gate-aware: 'body' now, 'ship' wakes with the
       // Body→warehouse hand-off build). Zero-options cabs log the acknowledgment.
-      if (optsExp255.length)
-        await db("option_check", { method: "POST", body: JSON.stringify(optsExp255.map((o) => ({
+      if (need369.length)   // Block 369: only the lines not already on record
+        await db("option_check", { method: "POST", body: JSON.stringify(need369.map((o) => ({
           build_id, gate: "body", item_text: o, checked_by: empId, checked_at: claimed_at || new Date().toISOString() }))) });
-      logEvent("options.verified", empId, { build_id, order_number: b.order_number, gate: "body", lines: optsExp255.length });
+      logEvent("options.verified", empId, { build_id, order_number: b.order_number, gate: "body", lines: need369.length, already: optsExp255.length - need369.length });
       if (wasFix) logEvent("build.fixjob_closed", empId, { build_id, order_number: b.order_number, kind: b.fix_kind, reason: b.fix_reason, signed_off_at: claimed_at });
       // Q109: sign-off frees the line — warehouse can deliver the next
       // verified kit the moment this fires. Q106 sandbox applies.
