@@ -884,10 +884,10 @@ function stayState334(nowMs, hrs, lastPunch, openSess, isOpenDay) {
   return { card: "none" };
 }
 // The per-request read for a Home: the last punch (any kind, with the correction stamps) and the open session.
-async function stayFor334(empId, hrs) {
+async function stayFor334(empId, hrs, known = null) {   // Block 373: `known` = the punch row just written — skips the last-punch read
   try {
     const [lastRows, sessRows] = await Promise.all([
-      db(`clock_event?select=kind,line_id,claimed_at,reason,corrected_by,added_by,correction_note&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+      known ? [known] : db(`clock_event?select=kind,line_id,claimed_at,reason,corrected_by,added_by,correction_note&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
       db(`after_hours_session?select=id,started_at,reason&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),
     ]);
     const nowMs = Date.now();
@@ -1613,7 +1613,24 @@ async function storeThumb246(req, photo_id) {
 // backoff (1s/2s/4s/8s) and a plain status line; rule answers (4xx) surface
 // immediately. claimed_at is stamped at the ORIGINAL tap and rides through
 // every retry (Q103-1), so a delayed landing still records the true time.
+// Block 372 (Daniel 11/11): the double-tap guard. Server: any clock-out within GUARD_MS_372 of the clock-in asks first.
+// Client: after a clock-in the out buttons stay greyed 3 s from the moment they APPEAR (lock372), on a redraw-in-place AND on the next page load.
+const GUARD_MS_372 = 60000;   // the out buttons' 3 s grey-out (lock372) is written literally in netJs and swapIn292Script — tests lift those alone
+const guardMsg372 = (ageMs, reason) => {
+  const s = Math.max(0, Math.round(ageMs / 1000));
+  return `You clocked IN ${s < 2 ? "just now" : s + " seconds ago"}.\n\nClock OUT now${reason ? " (" + reason + ")" : ""}?\n\nOK = clock out · Cancel = stay clocked in`;
+};
 const netJs = `
+  function mark372(){ try { sessionStorage.setItem("in372", String(Date.now())); } catch (e) {} }
+  function lock372(root){ try {
+    var t = Number(sessionStorage.getItem("in372") || 0); if (!t || Date.now() - t > 20000) return;
+    var bs = (root || document).querySelectorAll('button[data-reason],button[onclick*="clockOut("],button[onclick*="quickOut198("],button[onclick*="clock/out"]');
+    if (!bs.length) return; sessionStorage.removeItem("in372");   // Fable: the FULL 3 s runs from the moment the out buttons APPEAR (the tablet redraw is slow — that is the double-tap screen); used once, so the next person on the shared tablet never inherits it
+    [].forEach.call(bs, function(b){ if (b.disabled) return; b.disabled = true; b.dataset.o372 = b.style.opacity || ""; b.style.opacity = ".35"; b.dataset.l372 = "1"; });
+    setTimeout(function(){ [].forEach.call(bs, function(b){ if (b.dataset.l372) { b.disabled = false; b.style.opacity = b.dataset.o372; delete b.dataset.l372; delete b.dataset.o372; } }); }, 3000);
+  } catch (e) {} }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ lock372(); }); else lock372();
+
   async function sbPost(url, payload, onStatus) {
     const delays = [1000, 2000, 4000, 8000];
     for (let i = 0; ; i++) {
@@ -1621,7 +1638,14 @@ const netJs = `
         const r = await fetch(url, { method: "POST",
           headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (r.status >= 500) throw new Error("server " + r.status);
-        return await r.json();
+        const o372 = await r.json();
+        // Block 372: "you just clocked in — clock OUT now?" (OK resends once with confirm372; Cancel changes nothing)
+        if (o372 && o372.guard372 && !payload.confirm372) {
+          if (window.confirm(o372.error)) { payload = Object.assign({}, payload, { confirm372: true }); i = -1; continue; }
+          return { ok: false, kept372: true, error: "Still clocked in — nothing changed." };
+        }
+        if (o372 && o372.ok && url === "/api/clock/in") mark372();
+        return o372;
       } catch (e) {
         if (i >= delays.length)
           return { ok: false, error: "Can't reach the board — check Wi-Fi and tap again (nothing was lost)" };
@@ -3063,16 +3087,17 @@ const prepBox366 = (b, canPrep, clockedIn, open) => {
 // background and only the named region is swapped — no navigation, so a
 // Sign out tap a second later is never swallowed. Any failure → plain reload
 // (the pre-292 behavior), never a stuck screen.
-const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
+const swapIn292Script = () => `function swapIn292(sel, what, autoOut, html373){
     var el = document.querySelector(sel);
     try { var now = new Date(); var hh = now.getHours() % 12 || 12, mm = String(now.getMinutes()).padStart(2, "0"), ap = now.getHours() >= 12 ? "PM" : "AM";
       var ack = document.createElement("div"); ack.id = "ack292"; ack.style.cssText = "text-align:center;margin:6px auto;max-width:560px;padding:10px 14px;border-radius:12px;background:#1d5a2d;color:#fff;font-weight:800;font-size:1.1rem";
       ack.textContent = "\u2713 " + (what || "Saved") + " " + hh + ":" + mm + " " + ap;
+      if (/^Clocked (IN|OUT)/.test(what || "")) { ack.style.fontSize = "1.45rem"; ack.style.padding = "16px 14px"; if (what.indexOf("OUT") > -1) ack.style.background = "#7a1f1f"; }   // Block 372: a punch reads loud and plain
       if (el) { el.style.opacity = ".55"; el.parentNode.insertBefore(ack, el); } } catch (e) {}
-    return fetch(location.href, { cache: "no-store", credentials: "same-origin" }).then(function(r){ return r.text(); }).then(function(h){
+    return (html373 ? Promise.resolve(html373) : fetch(location.href, { cache: "no-store", credentials: "same-origin" }).then(function(r){ return r.text(); })).then(function(h){   // Block 373: a card that came with the answer skips the re-read
       var d = new DOMParser().parseFromString(h, "text/html"); var n = d.querySelector(sel);
       if (!el || !n) { location.reload(); return; }
-      el.replaceWith(n); if (typeof whRestore347 === "function") whRestore347(); var a = document.getElementById("ack292");
+      el.replaceWith(n); if (typeof whRestore347 === "function") whRestore347(); if (typeof lock372 === "function") lock372(n); var a = document.getElementById("ack292");   // Block 372
       // Block 292 option 2 (Daniel: "build both"): on the SHARED TABLET the natural
       // session is sign in → punch → sign out (Evan's are 4–19 s long). After a
       // punch from a dept clock card, return to the sign-in screen by itself in a
@@ -3086,7 +3111,17 @@ const swapIn292Script = () => `function swapIn292(sel, what, autoOut){
         a.appendChild(line); tick();
         var tm = setInterval(function(){ left--; if (left <= 0) { clearInterval(tm); location.replace("/logout"); return; } tick(); }, 1000);
       } else if (a) setTimeout(function(){ a.remove(); }, 4000);
-    }).catch(function(){ location.reload(); }); }`;
+    }).catch(function(){ location.reload(); }); }
+  function mark372(){ try { sessionStorage.setItem("in372", String(Date.now())); } catch (e) {} }
+  function lock372(root){ try {
+    var t = Number(sessionStorage.getItem("in372") || 0); if (!t || Date.now() - t > 20000) return;
+    var bs = (root || document).querySelectorAll('button[data-reason],button[onclick*="clockOut("],button[onclick*="quickOut198("],button[onclick*="clock/out"]');
+    if (!bs.length) return; sessionStorage.removeItem("in372");   // Fable: the FULL 3 s runs from the moment the out buttons APPEAR (the tablet redraw is slow — that is the double-tap screen); used once, so the next person on the shared tablet never inherits it
+    [].forEach.call(bs, function(b){ if (b.disabled) return; b.disabled = true; b.dataset.o372 = b.style.opacity || ""; b.style.opacity = ".35"; b.dataset.l372 = "1"; });
+    setTimeout(function(){ [].forEach.call(bs, function(b){ if (b.dataset.l372) { b.disabled = false; b.style.opacity = b.dataset.o372; delete b.dataset.l372; delete b.dataset.o372; } }); }, 3000);
+  } catch (e) {} }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ lock372(); }); else lock372();
+`;
 // Block 301: the PANEL PREP strip on a warehouse row — one button to start, "Panels ready" to finish
 // (which also puts the clock back on Warehouse), a small "Back to warehouse" to pause. Chip for everyone.
 const prepStrip301 = (b, canPrep, clockedIn) => {
@@ -3322,13 +3357,16 @@ const whPageScript328 = (ah) => `${netJs}
         body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }), signal: ctl304 ? ctl304.signal : undefined });
       if (tm304) clearTimeout(tm304);
       const out = await r.json();
+      // Block 372: a clock-out right after a clock-in asks first
+      if (out.guard372 && !payload.confirm372) { if (btn) btn.disabled = false; if (window.confirm(out.error)) return post(url, Object.assign({}, payload, { confirm372: true }), btn); showErr97(btn, "Still clocked in — nothing changed."); return; }
       if (out.ok) {
         QVER = null;   // Block 368: my own change — the change check re-baselines instead of reloading what I just did
         // Block 304 ROOT CAUSE: this used to be a regex with escaped slashes; inside the page
         // template the backslashes vanished and the whole line became a comment after "return" —
         // every successful warehouse tap since v265 saved its data and then did NOTHING on screen.
         // Plain string tests now; NEVER write "\/" inside a page template.
-        if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/switch") > -1 ? "Switched" : url.indexOf("/in") > -1 ? "Clocked in" : "Clocked out");   // Block 292: clock taps redraw in place · Block 328: a switch is not a clock-out
+        if (url === "/api/clock/in") mark372();   // Block 372: the out buttons wait 3 s
+        if (url.indexOf("/api/clock/") === 0) return swapIn292(".wrap", url.indexOf("/switch") > -1 ? "Switched" : url.indexOf("/in") > -1 ? "Clocked IN" : "Clocked OUT" + (payload && payload.reason ? " \u2014 " + String(payload.reason).toUpperCase() : ""));   // Block 292 · Block 372: say which: clock taps redraw in place · Block 328: a switch is not a clock-out
         if (url.indexOf("/api/prep/") === 0) return swapIn292(".wrap", url.indexOf("/start") > -1 ? "Prepping panels" : url.indexOf("/done") > -1 ? "Panels ready" : url.indexOf("/unskip") > -1 ? "Skip undone" : url.indexOf("/skip") > -1 ? "Panel prep skipped" : "Back on warehouse");   // Block 304 · Block 366: skip / unskip
         return location.reload();   // every other action still reloads
       }
@@ -3935,17 +3973,56 @@ const areaHead353 = (clk, fallback) => {
   if (cur === 13) return { text: clk.help && clk.help.label ? clk.help.label : "Body Shop", style: null };
   return { text: (clk.help && clk.help.label) || fallback, style: null };
 };
-const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null) => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}${body326 ? bodyCss326 : ""}</head>
-<body><div class="wrap">
-  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
-  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
-  ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
-  <h2>Welcome, ${emp.first_name}.</h2>
-  ${inspStrip308(insp308)}
-  ${clk && clk.show ? `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
+// Block 373 (Daniel 11/11 12:03 — "speed up that screen"): the department clock card is ONE function. The home renders it, and a punch
+// from the card renders it AGAIN inside the punch's own answer, so the tablet draws the new card at once — one trip instead of two,
+// ~3 KB instead of the whole 25 KB home, and no second run through the home's reads.
+// Block 373: the department clock card's data — the home route and the punch answers share it. `known` = the punch row just
+// written (skips the last-punch read). Reads ride the same waves as before (Block 212 / 299).
+const DEPT_LINE373 = { "Body Shop": 13, "Build": 12, "Accounting": 16 };
+const clkData373 = async (empId, emp, known = null) => {
+  const DEPT_LINE92 = DEPT_LINE373;
+  const [lastC92Rows, rs92, hrs92] = await Promise.all([
+    known ? [known] : db(`clock_event?select=id,kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 373: a punch answer already holds its own row · Block 338: +the step stamps · Block 354: +id (the stint's note)
+    db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
+    shopHours(),
+  ]);
+  const [lastC92] = lastC92Rows;
+  // Block 106: Body + Build punch HERE — same Q112 after-hours
+  // questionnaire and wrap-note the floor and warehouse get.
+  const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
+  const ahNow92 = isAfterHoursDept(Date.now(), hrs92, emp.department);   // Block 195: dept-aware open
+  // Block 373: everything below needs only lastC92 + the cached hours — ONE wave (the home's prefetch hid the old chain; a punch answer has no prefetch)
+  const body354 = emp.department === "Body Shop", cur354 = in92 ? Number(lastC92.line_id) : null;
+  const [ahRe92, openAh92Rows, lastAh92Rows214, stay92, open345, on338, wl354] = await Promise.all([
+    // Block 215: the approver roster fetch is gone with the question.
+    (ahNow92 && !in92) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
+    in92 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
+    (ahNow92 && !in92) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
+    stayFor334(empId, hrs92, known),   // Block 334
+    openSteps345(empId, lastC92, emp).catch(() => null),   // Block 345
+    in92 ? onStep338(empId, lastC92, emp).catch(() => null) : null,   // Block 338 (H1)
+    // Block 354: a Body Shop person sees the area switch; off Body, the stint's optional note
+    (body354 && in92 && (cur354 === SHOP_LINE_ID || cur354 === 12) && lastC92.id) ? db(`work_log?select=note&clock_in_id=eq.${lastC92.id}&limit=1`).catch(() => []) : [],
+  ]);
+  const [openAh92] = openAh92Rows;
+  const help92 = mergeHelp345(open345, on338);   // Block 345: both cards (Opus review fix 2)
+  const note354 = (wl354[0] && wl354[0].note) || "";
+  return { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department], stay: stay92, help: help92,
+    body353: body354, cur353: cur354, note353: note354, since353: in92 && lastC92.claimed_at ? phxClock12354(lastC92.claimed_at) : "",
+    ah: { now: ahNow92 && !stay92.openStay, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) && stay92.openStarted,
+      lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
+};
+// Block 373: a punch from the department card asks (card373) for the fresh card in the same answer. Any trouble here → no card,
+// and the tablet falls back to the Block 292 re-read; the punch itself is already on the record either way.
+const punchCard373 = async (asked, empId, row) => {
+  if (asked !== true) return {};
+  try {
+    const [emp] = await db(`employee?select=id,first_name,lines,department,role,must_change_pin,panel_prep&id=eq.${empId}`);   // the home's own read, byte-identical → the 60 s memory answers it
+    if (!emp || !DEPT_LINE373[emp.department]) return {};
+    return { card373: clkCard373(emp, await clkData373(empId, emp, row)) };
+  } catch (e) { console.error("punch card 373:", e && e.message); return {}; }
+};
+const clkCard373 = (emp, clk) => `<div id="clkcard292"><style>.wbtn{border:none;border-radius:12px;color:#fff;padding:12px 22px;font-weight:800;cursor:pointer;margin:4px}</style>
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clk.clockedIn ? ((areaHead353(clk, "") || {}).style || "background:#1d5a2d;color:#fff;border:2px solid #30d158") : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clk.clockedIn ? `&#9679; ON THE CLOCK — ${areaHead353(clk, emp.department) ? escH(areaHead353(clk, emp.department).text) : clk.help && clk.help.label ? clk.help.label : emp.department}` : "&#9675; NOT CLOCKED IN"}</div>
   ${clk.body353 && clk.clockedIn && Number(clk.cur353) !== BODY_AREA353 ? areaCards353(clk) : ""}
   ${clk.help && (clk.clockedIn || clk.help.open345) ? stepCard338(clk.body353 && clk.clockedIn && Number(clk.cur353) !== BODY_AREA353 ? { ...clk.help, area353: AREA353[Number(clk.cur353)] || "another line" } : clk.help) : ""}
@@ -3971,7 +4048,18 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
         <button class="wbtn" style="background:#1d5a2d;margin-top:10px" onclick="ahGoW(this)">Clock in — after hours</button>
         <button class="wbtn" style="background:#2c2c2e;margin-top:10px" onclick="document.getElementById('ahpW').style.display='none'">cancel</button>
       </div>` : ""}`}</div>
-  <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p></div>` : ""}
+  <p id="werr" style="text-align:center;color:#ff6b5e;min-height:1em"></p></div>`;
+const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board</title>${style}${body326 ? bodyCss326 : ""}</head>
+<body><div class="wrap">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
+  ${nav196(emp)}   <!-- Block 196: the ONE shared nav (dept-aware, replaces the Block-193 ternary) -->
+  ${mtimeCard290(mt290)}   <!-- Block 290: Marketing's clock card — top of the first screen, before anything else -->
+  <h2>Welcome, ${emp.first_name}.</h2>
+  ${inspStrip308(insp308)}
+  ${clk && clk.show ? clkCard373(emp, clk) : ""}
   ${body326 ? bodyList326(body326, true) : `<p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
     ${emp.department === "Owner" || emp.role === "admin"
@@ -4040,8 +4128,11 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
       if (r97) { r97.style.display = "block"; var n97 = document.getElementById("wothn97"); if (n97) n97.focus(); return; }
     }
     b.disabled = true;
-    try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, claimed_at: new Date().toISOString() }) });
-      const o = await r.json(); if (o.ok) return swapIn292("#clkcard292", u.indexOf("/in") > -1 ? "Clocked in" : "Clocked out", true);   // Block 292: tablet returns to sign-in by itself (phones: no)
+    try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, card373: true, claimed_at: new Date().toISOString() }) });   // Block 373: ask for the fresh card in the answer
+      const o = await r.json();
+      if (o.guard372 && !p.confirm372) { b.disabled = false; if (window.confirm(o.error)) return wclk(u, Object.assign({}, p, { confirm372: true }), b); document.getElementById("werr").textContent = "Still clocked in — nothing changed."; return; }   // Block 372
+      if (o.ok && u.indexOf("/in") > -1) mark372();   // Block 372: the out buttons wait 3 s
+      if (o.ok) return swapIn292("#clkcard292", u.indexOf("/in") > -1 ? "Clocked IN" : "Clocked OUT" + (p && p.reason ? " \u2014 " + String(p.reason).toUpperCase() : ""), true, o.card373);   // Block 373: the answer carries the new card — no second trip   // Block 292: tablet returns to sign-in by itself (phones: no)
       document.getElementById("werr").textContent = o.error || "Something went wrong";
     } catch (e) { document.getElementById("werr").textContent = "Network hiccup — try again"; }
     b.disabled = false; }
@@ -14426,33 +14517,7 @@ const handleRequest355 = async (req, res) => {
         }
         if (DEPT_LINE92[emp.department]) {
           // Block 212 (v201 SPEED): reads fired together per dependency wave.
-          const [lastC92Rows, rs92, hrs92] = await Promise.all([
-            db(`clock_event?select=id,kind,line_id,fix_build_id,body_task_id,wh_task_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 338: +the step stamps · Block 354: +id (the stint's note)
-            db(`pick_list_item?select=label&list_key=eq.clock_out_reason&retired=is.false&order=sort_order`),
-            shopHours(),
-          ]);
-          const [lastC92] = lastC92Rows;
-          // Block 106: Body + Build punch HERE — same Q112 after-hours
-          // questionnaire and wrap-note the floor and warehouse get.
-          const in92 = Boolean(lastC92 && lastC92.kind === "clock_in");
-          const ahNow92 = isAfterHoursDept(Date.now(), hrs92, emp.department);   // Block 195: dept-aware open
-          const [ahRe92, openAh92Rows, lastAh92Rows214] = await Promise.all([
-            // Block 215: the approver roster fetch is gone with the question.
-            (ahNow92 && !in92) ? db(`pick_list_item?select=label&list_key=eq.after_hours_reason&retired=is.false&order=sort_order`) : [],
-            in92 ? db(`after_hours_session?select=id&employee_id=eq.${empId}&ended_at=is.null&limit=1`) : [],
-            (ahNow92 && !in92) ? db(`after_hours_session?select=reason&employee_id=eq.${empId}&order=started_at.desc&limit=1`) : [],   // Block 214/215: prefill last reason
-          ]);
-          const [openAh92] = openAh92Rows;
-          const stay92 = await stayFor334(empId, hrs92);   // Block 334
-          const help92 = mergeHelp345(await openSteps345(empId, lastC92, emp).catch(() => null), in92 ? await onStep338(empId, lastC92, emp).catch(() => null) : null);   // Block 345: both cards (Opus review fix 2)   // Block 338 (H1)
-          // Block 354: a Body Shop person sees the area switch; off Body, the stint's optional note
-          const body354 = emp.department === "Body Shop", cur354 = in92 ? Number(lastC92.line_id) : null;
-          let note354 = "";
-          if (body354 && in92 && (cur354 === SHOP_LINE_ID || cur354 === 12) && lastC92.id) { try { const [wl] = await db(`work_log?select=note&clock_in_id=eq.${lastC92.id}&limit=1`); note354 = (wl && wl.note) || ""; } catch (eN) { note354 = ""; } }
-          clk92 = { show: true, clockedIn: in92, reasons: rs92.map((r) => r.label), lineId: DEPT_LINE92[emp.department], stay: stay92, help: help92,
-            body353: body354, cur353: cur354, note353: note354, since353: in92 && lastC92.claimed_at ? phxClock12354(lastC92.claimed_at) : "",
-            ah: { now: ahNow92 && !stay92.openStay, reasons: ahRe92.map((r) => r.label), open: Boolean(openAh92) && stay92.openStarted,
-              lastReason: (lastAh92Rows214[0] && ahRe92.some((r) => r.label === lastAh92Rows214[0].reason)) ? lastAh92Rows214[0].reason : "" } };
+          clk92 = await clkData373(empId, emp);   // Block 373: the same builder the punch answer uses
         }
         // Block 308 (Daniel, 10/20): inspectors (Body/Build managers + admins) see a yellow strip on their
         // HOME screen for every cab waiting for inspection — one tap lands on that cab's card. It exists
@@ -14798,7 +14863,7 @@ const handleRequest355 = async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { line_id, claimed_at, approved_by, ah_reason, ah_plan } = await body(req);
+      const { line_id, claimed_at, approved_by, ah_reason, ah_plan, card373 } = await body(req);
       if (!line_id) return json(400, { ok: false, error: "Pick a line" });
       if (!Number.isInteger(Number(line_id))) return json(400, { ok: false, error: "Pick a line" });
       if (approved_by != null && !isUuid(approved_by)) return json(400, { ok: false, error: "That approver isn't valid" });
@@ -14867,15 +14932,20 @@ const handleRequest355 = async (req, res) => {
           `After hours: ${me2 ? me2.first_name + " " + ((me2.last_name || "")[0] || "") + "." : "someone"} clocked in`,
           `${lnA ? lnA.name : "Line " + line_id} — ${ah_reason}.${plan214 ? ` Plan: ${plan214}.` : ""} Approve or deny from the Admin console once they wrap up.`, "/admin");
       }
-      await db("clock_event", { method: "POST", body: JSON.stringify({
-        employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() }) });
+      // Block 373: the fresh card is built WHILE the punch writes — none of the card's reads touch clock_event (the row is handed in), so
+      // the two can't disagree, and the answer costs the write's own round trip. A card failure never touches the punch (see punchCard373).
+      const row373 = { employee_id: empId, line_id, kind: "clock_in", claimed_at: claimed_at || new Date().toISOString() };
+      const [, cardIn373] = await Promise.all([
+        db("clock_event", { method: "POST", body: JSON.stringify(row373) }),
+        punchCard373(card373, empId, row373),
+      ]);
       logEvent("clock.in", empId, { line_id });
       // Block 134 (L9 audit fix): the clock-in is now recorded — safe to resume a
       // held line. Close the timed hold, clear the flag, and start any cab whose
       // kit warehouse dropped while the line was down. Runs post-insert, so a
       // rejected clock-in above never resumes the line or starts a cab.
       if (lnGate && lnGate.down_today) await resumeDownLine135(line_id, empId);
-      return json(200, { ok: true });
+      return json(200, { ok: true, ...cardIn373 });   // Block 373: the dept card rides the answer
     }
 
     // Block 290: MARKETING TIME — Daniel's clock. Its own two endpoints so the
@@ -15009,7 +15079,7 @@ const handleRequest355 = async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { reason, claimed_at, wrap_note, note, confirm163 } = await body(req);
+      const { reason, claimed_at, wrap_note, note, confirm163, confirm372, card373 } = await body(req);
       // Timecard-audit fix: an out while NOT clocked in wrote a misleading
       // flagged row (pay math skips orphan outs, people reading don't).
       // Same guard the switch endpoint has.
@@ -15018,7 +15088,7 @@ const handleRequest355 = async (req, res) => {
       // Every query string is byte-identical; only the waiting moved. The checks
       // still run in the same order with the same answers.
       const [lastOutRows299, open163oAll299, tog209Rows299, openAhRows299, meLines315Rows] = await Promise.all([
-        db(`clock_event?select=kind,line_id&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+        db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),   // Block 372: +claimed_at (the just-clocked-in guard)
         db(`task?select=build_id,is_background&state=eq.in_progress&started_by=eq.${empId}`),
         db(`feature_toggle?select=enabled&key=eq.eod_progress_photo_required`),
         db(`after_hours_session?select=id,started_at,approved_by,line_id,reason&employee_id=eq.${empId}&ended_at=is.null&order=started_at.desc&limit=1`),   // Block 300: line_id names the card · Block 334: +reason
@@ -15031,6 +15101,15 @@ const handleRequest355 = async (req, res) => {
       const [lastOut107] = lastOutRows299;
       if (!lastOut107 || lastOut107.kind !== "clock_in")
         return json(400, { ok: false, error: "You're not on the clock" });
+      // Block 372 (Daniel 11/11 — Evan's 9-second End of day): a clock-out within 60 s of the clock-in is almost
+      // always a second tap landing where CLOCK IN just was. Ask first — no write. OK resends with confirm372.
+      // confirm163 counts too: the open-steps heads-up only comes AFTER this question was answered.
+      const inMs372 = lastOut107.claimed_at ? new Date(lastOut107.claimed_at).getTime() : NaN;
+      const age372 = new Date(claimed_at || Date.now()).getTime() - inMs372;
+      if (confirm372 !== true && confirm163 !== true && age372 >= -5000 && age372 < GUARD_MS_372) {
+        logEvent("clock.out_guarded", empId, { reason: reason || null, secs_after_in: Math.max(0, Math.round(age372 / 1000)) });
+        return json(200, { ok: false, guard372: true, error: guardMsg372(age372, reason) });
+      }
       const ownLineEod315 = (reason === "End of day" || reason === "End of shift") && lastOut107.line_id != null && (myLines315.length === 0 || myLines315.includes(Number(lastOut107.line_id)));   // no roster (managers) → the line you're on is your own
       // Block 163 (owner-rep ruling): clocking OUT with steps you started
       // still open on your line — same soft heads-up as the line switch.
@@ -15126,12 +15205,15 @@ const handleRequest355 = async (req, res) => {
       const reason97 = note97 ? `${reason} — ${note97}` : reason;
       const kind = reason === "Lunch" ? "clock_out_lunch"
         : (reason === "End of shift" || reason === "End of day") ? "clock_out_shift" : "clock_out_early";
-      await db("clock_event", { method: "POST", body: JSON.stringify({
-        employee_id: empId, kind, reason: reason97 || null, claimed_at: claimed_at || new Date().toISOString() }) });
+      const row373 = { employee_id: empId, kind, reason: reason97 || null, claimed_at: claimed_at || new Date().toISOString() };
+      const [, cardOut373] = await Promise.all([   // Block 373: card built alongside the write (its reads never touch clock_event)
+        db("clock_event", { method: "POST", body: JSON.stringify(row373) }),
+        punchCard373(card373, empId, row373),
+      ]);
       logEvent("clock.out", empId, { reason: reason97, kind });
       void longDayCheck206(empId, claimed_at || new Date().toISOString());   // Block 206: fire-and-forget — never slows the tap; guarded inside
       void week40Check221(empId, claimed_at || new Date().toISOString());   // Block 221: crossed-40h check rides the same clock-out, same fire-and-forget
-      return json(200, { ok: true });
+      return json(200, { ok: true, ...cardOut373 });   // Block 373: the dept card rides the answer
     }
 
     // SWITCH LINE (Q107): one tap = clock out of the current line + clock in
