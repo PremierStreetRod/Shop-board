@@ -1146,7 +1146,7 @@ function cabLife342(b, evs, ivs, hrs, isOpenDay, nowMs) {
 const idleLine342 = (L) => !L ? "" : `Idle so far: production ${L.prod.hours} h${L.fix.hours ? ` · fix ${L.fix.hours} h` : ""} · Body ${L.body.hours} h · warehouse ${L.wh.hours} h · <b>${L.total} h total</b>${L.wait.hours || L.wait.open ? ` &middot; Waiting to leave ${L.wait.hours} h (${L.wait.calDays} days)` : ""}`;
 // loader: the events + punches for a set of cabs → cabLife342 per cab
 const LIFE_FLOOR_DAYS_342 = 180;   // reviewer: never read more than 180 days of punches (the punchWindow328 floor)
-async function loadCabLife342(builds, hrs, isOpenDay, nowMs, testIds) {
+async function loadCabLife342(builds, hrs, isOpenDay, nowMs, testIds, opts370) {   // Block 370: opts370 = { extra: [event types], evSinceMs } — Cab History reads a few more events + keeps the intervals
   const out = {}; if (!builds.length) return out;
   const ids = builds.map((b) => b.id);
   const earliest = builds.reduce((m, b) => Math.min(m, b.started_at ? new Date(b.started_at).getTime() : Infinity), Infinity);
@@ -1154,7 +1154,7 @@ async function loadCabLife342(builds, hrs, isOpenDay, nowMs, testIds) {
   const sinceIso = new Date(sinceMs).toISOString();
   const chunks = []; for (let i = 0; i < ids.length; i += 80) chunks.push(ids.slice(i, i + 80));   // reviewer: keep every in.() list under the URL limit
   const [evs, punchB, ...punchAs] = await Promise.all([
-    dbAll252(`event_log?select=at,event_type,payload&event_type=in.(${LIFE_EVENTS_342.join(",")})&at=gte.${sinceIso}&order=at.asc,id.asc`).catch(() => []),
+    dbAll252(`event_log?select=at,event_type,payload&event_type=in.(${LIFE_EVENTS_342.concat((opts370 && opts370.extra) || []).join(",")})&at=gte.${opts370 && opts370.evSinceMs ? new Date(Math.min(sinceMs, opts370.evSinceMs)).toISOString() : sinceIso}&order=at.asc,id.asc`).catch(() => []),
     dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at,fix_build_id&voided=is.false&claimed_at=gte.${sinceIso}&order=claimed_at.asc,id.asc`).catch(() => []),   // every punch in the span (production = the cab's line, no stamp)
     ...chunks.map((c) => dbAll252(`clock_event?select=employee_id,line_id,kind,claimed_at,fix_build_id&voided=is.false&fix_build_id=in.(${c.join(",")})&claimed_at=lt.${sinceIso}&order=claimed_at.asc,id.asc`).catch(() => [])),   // stamped punches older than the span (a long-lived cab)
   ]);
@@ -1171,6 +1171,7 @@ async function loadCabLife342(builds, hrs, isOpenDay, nowMs, testIds) {
       for (const iv of plain13) { if (iv.emp !== r.employee_id) continue; const a = Math.max(iv.start, s), b = Math.min(iv.end, e); if (b > a) ivs.push({ emp: r.employee_id, line: BODY_LINE_ID, fix: r.build_id, start: a, end: b }); } } } catch (e345) { console.error("cab life body rows:", e345 && e345.message); }
   const evBy = {}; for (const e of evs) { const id = e.payload && e.payload.build_id; if (id) (evBy[id] = evBy[id] || []).push(e); }
   for (const b of builds) out[b.id] = cabLife342(b, evBy[b.id] || [], ivs, hrs, isOpenDay, nowMs);
+  if (opts370) { Object.defineProperty(out, "ivs370", { value: ivs }); Object.defineProperty(out, "evBy370", { value: evBy }); }   // Block 370: non-enumerable — every other caller sees the same map
   return out;
 }
 // Block 316 (Daniel, 10/20 evening — Playbook 68): the board's "% done" credits OPEN steps by the
@@ -5649,20 +5650,21 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true, body326 = false)
   // sense" — the menu leads with the pages admin actually reaches for;
   // the pipeline/diagnostic pages sit below a Plumbing divider. Those
   // pages notify when they need a human — nobody has to watch them.
-  const daily95 = [["/body", "Body"], ["/warehouse", "Crating & shipping"], ["/reports", "Reports"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
+  const daily95 = [["/body", "Body"], ["/warehouse", "Crating & shipping"], ["/reports", "Reports"], ["/cab-history", "Cab History"], ["/progress", "Progress reports"], ["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"], ["/meeting", "Meeting Pack"], ["/coverage", "Coverage"], ["/lines", "Lines & parts"], ["/tablet", "Tablet setup"], ["/admin#channels116", "Text setup"], ["/admin#cabnums", "Cab numbers"], ["/tvboard", "TV screen"]];   // Block 154 (D6): set-once panels reachable from Tools
   const plumbing95 = [["/feed", "Coyote feed"], ["/intake", "Intake"], ["/sync", "Sync"], ["/changes", "Order changes"], ["/mapper", "Mapper"], ["/integrity", "Integrity"], ["/order", "Order history"]];   // Block 233 (Ross/Daniel): "Changes" (the Coyote push-to-push diff) is PLUMBING — off the top nav row, into the Tools drawer where the other pipeline pages live
   const tools = tools95 === "time"
     ? [["/payroll", "Pay Worksheet"], ["/mytime", "Salaried time"]]   // Block 189: Accounting-manager menu · Block 215 (Daniel): Pay Worksheet ONLY — Reports removed · Block 290: + the salaried hours log (read-only, so Kailey can answer Rob)
     : isAdmin
     ? daily95
-    : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"]] : []).concat([["/tvboard", "TV screen"]]);
+    : [["/meeting", "Meeting Pack"], ["/coverage", "Coverage"]].concat(showReports ? [["/reports", "Reports"], ["/cab-history", "Cab History"]] : []).concat([["/tvboard", "TV screen"]]);   // Block 370: + Cab History (same door as Reports)
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
     <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>   <!-- Block 157 (owner-rep E2): Manager cockpit -> Manager console, matching "Admin console" -->
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
-    <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>
+    <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>${/* Block 370 (Daniel 11/5 10:58 "top nav and inside of tools") */ isAdmin || (showReports && tools95 !== "time") ? `
+    <a href="/cab-history" style="color:#8e8e93;margin-right:16px">Cab History</a>` : ""}
     ${body326 ? `<a href="/body" style="color:#8e8e93;margin-right:16px">Body</a><a href="/warehouse" style="color:#8e8e93;margin-right:16px">Crating</a>` : ""}
     ${tools95 ? `<details class="t95" style="display:inline-block;position:relative">
       <summary style="color:#8e8e93;cursor:pointer;display:inline-block;list-style:none;text-decoration:underline">Tools &#9662;</summary>
@@ -9110,6 +9112,378 @@ async function reportData(startMs, endMs) {
         bodyHrs: bs ? bs.hours : 0, bodyAllowed: bs ? bs.allowed : 0, bodyRound: bs ? bs.round : 1, whHrs: ws ? ws.hours : 0, whAllowed: ws ? ws.allowed : 0, whStep: ws && ws.task ? ws.task.name : "", now: w.dept + (w.detail ? " — " + w.detail : ""), returned: Boolean(b.returned_at) }; });
   } catch (e342) { console.error("cab life lane:", e342 && e342.message); cabLife = []; }
   return { startMs, endMs, cabs, products, openCabs, labor, timecards, rework: { n: rw.length, reasons: rwReasons }, escapes, onTime, downtime, lineTime, trend, cabLife };   // Block 332: +lineTime · Block 342: +cabLife
+}
+
+// ===== Block 370 (Plan 89, Daniel 11/5–11/11): CAB HISTORY — a cab's life here, by year span =====
+// One admin page (`/cab-history`; managers too when "Managers can see Reports" is on): the last N cabs off each line per year
+// span, averaged, with best–worst, trend arrows vs the period just before, and the cabs behind every number.
+// CLEAN DATA RULING (Daniel 11/11 09:18): only cabs STARTED on/after Mon 9/28/2026 (Ross's v4 10–13 steps went live that
+// morning, Block 282) count anywhere; each section counts only where real data was collected for that cab; a hand move only
+// cancels the department(s) it jumped over (production stays); a department tapped through in ≤15 min with no hours is
+// catch-up, not counted. Every cab left out of a section is named with the reason — never dropped silently.
+const CLEAN_START_370 = "2026-09-28";
+const SPANS_370 = [["4753", "47-53"], ["5559", "55-59"], ["6466", "64-66"], ["6772", "67-72 Chevy"], ["6972", "69-72 Blazer"], ["F6772", "67-72 Ford"]];
+const CATCHUP_MIN_370 = 15;   // a department whose steps were all tapped done within 15 minutes with no hours = catch-up
+const EARLY_N_370 = 3;        // fewer real cabs than this = EARLY
+const LIFE_EXTRA_370 = ["build.finish", "kit.pull_started", "body.step_done", "build.line_moved"];   // Fable: + line moves (hours follow the cab across lines)
+const r1_370 = (n) => n == null || !Number.isFinite(n) ? null : Math.round(n * 10) / 10;
+const mean370 = (a) => { const v = a.filter((x) => x != null && Number.isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+const range370 = (a) => { const v = a.filter((x) => x != null && Number.isFinite(x)); return v.length >= 2 ? [Math.min(...v), Math.max(...v)] : null; };
+// the choices, from the query string (everything rides the link — bookmarkable)
+function chQuery370(sp, nowMs = Date.now()) {
+  const all = SPANS_370.map((s) => s[0]);
+  const spans = sp.has("spx") ? sp.getAll("sp").filter((k) => all.includes(k)) : sp.has("spans") ? String(sp.get("spans") || "").split(",").filter((k) => all.includes(k)) : all.slice();   // the form sends sp=…&spx=1 (spx says "the boxes were there", so none ticked = none)
+  const nRaw = parseInt(sp.get("n"), 10); const n = Number.isFinite(nRaw) ? Math.min(50, Math.max(1, nRaw)) : 4;
+  const isD = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  let dates = ["any", "pp", "lpp", "lpp2", "custom"].includes(sp.get("dates")) ? sp.get("dates") : "any";
+  let from = sp.get("from") || "", to = sp.get("to") || "";
+  if (dates === "custom" && !(isD(from) && isD(to))) dates = "any";
+  if (dates !== "custom") { from = ""; to = ""; }
+  if (dates === "custom" && from > to) { const x = from; from = to; to = x; }
+  const today = phxDate(nowMs);
+  const per = (ds) => periodFor221(+ds.slice(0, 4), +ds.slice(5, 7), +ds.slice(8, 10));
+  const before = (p) => per(phxDate(phxDayStart(p.f) - 86400000));
+  let win = null, label = "Any time";
+  if (dates === "pp") { const p = per(today); win = [phxDayStart(p.f), phxDayStart(p.t) + 86400000]; label = `This pay period (${p.f} → ${p.t})`; }
+  if (dates === "lpp") { const p = before(per(today)); win = [phxDayStart(p.f), phxDayStart(p.t) + 86400000]; label = `Last pay period (${p.f} → ${p.t})`; }
+  if (dates === "lpp2") { const p1 = before(per(today)), p0 = before(p1); win = [phxDayStart(p0.f), phxDayStart(p1.t) + 86400000]; label = `Last 2 pay periods (${p0.f} → ${p1.t})`; }
+  if (dates === "custom") { win = [phxDayStart(from), phxDayStart(to) + 86400000]; label = `${from} → ${to}`; }
+  const prevWin = win ? [win[0] - (win[1] - win[0]), win[0]] : null;   // the same length of time just before
+  const qs = `spans=${spans.join(",")}&n=${n}&dates=${dates}${dates === "custom" ? `&from=${from}&to=${to}` : ""}`;
+  return { spans, n, dates, from, to, win, prevWin, label, qs };
+}
+// ---- the data (60 s memory — every query reads the same cabs; the choices only pick among them) ----
+const MEMO_370 = { at: 0, p: null };
+async function load370(nowMs = Date.now()) {
+  if (MEMO_370.p && nowMs - MEMO_370.at < 60000) return MEMO_370.p;
+  MEMO_370.at = nowMs; MEMO_370.p = load370fresh(nowMs).catch((e) => { MEMO_370.p = null; throw e; });
+  return MEMO_370.p;
+}
+async function load370fresh(nowMs) {
+  const cleanMs = phxDayStart(CLEAN_START_370);
+  const thruSince = Math.min(phxDayStart(phxDate(nowMs).slice(0, 8) + "01") - 40 * 86400000, nowMs - 50 * 86400000);   // last month + 7 weeks of throughput
+  const [builds, prods, emps, nowRows, thruEv, hrs, calOv] = await Promise.all([
+    dbAll252(`build?select=id,order_number,cab_number,part_number,line_id,state,stage,started_at,promised_finish,promised_days,kit_pull_started_at,kit_delivered_at,left_production_at,body_done_at,body_moved_to_build_at,shipped_at,ship_mode,created_at&started_at=gte.${new Date(cleanMs).toISOString()}&state=neq.cancelled&order=started_at.asc`),
+    db("product?select=part_number,family"),
+    db("employee?select=id,first_name,last_name"),
+    dbAll252(`build?select=id,part_number,state,stage,shipped_at,body_done_at,body_moved_to_build_at,ship_mode&state=in.(upcoming,active,awaiting_inspection,rework,fix_job,production_complete,complete)&shipped_at=is.null`),
+    dbAll252(`event_log?select=at,event_type,payload&event_type=in.(wh.shipped,build.stage_moved,build.production_complete,body.done)&at=gte.${new Date(thruSince).toISOString()}&order=at.asc,id.asc`),
+    shopHours(), calendarOverrides(),
+  ]);
+  const testIds = new Set((emps || []).filter((e) => isTestAcct215(e)).map((e) => e.id));
+  const isOpen = openDayFn316(calOv || {});
+  const famOf = {}; for (const p of prods || []) famOf[String(p.part_number).toUpperCase()] = p.family;
+  const spanOf = (pn) => { const f = famOf[String(pn || "").toUpperCase()]; const hit = SPANS_370.find((s) => s[1] === f); return hit ? hit[0] : null; };
+  const ids = builds.map((b) => b.id); const chunks = []; for (let i = 0; i < ids.length; i += 80) chunks.push(ids.slice(i, i + 80));
+  const [taskRows, life] = await Promise.all([
+    Promise.all(chunks.map((c) => dbAll252(`task?select=build_id,man_hours,state,completed_by,is_background,source&build_id=in.(${c.join(",")})`))).then((x) => x.flat()),
+    loadCabLife342(builds, hrs, isOpen, nowMs, testIds, { extra: LIFE_EXTRA_370, evSinceMs: cleanMs - 60 * 86400000 }),
+  ]);
+  const ivs = life.ivs370 || [], evBy = life.evBy370 || {};
+  const tBy = {}; for (const t of taskRows) (tBy[t.build_id] = tBy[t.build_id] || []).push(t);
+  const floorMs = nowMs - LIFE_FLOOR_DAYS_342 * 86400000;   // Fable: punches older than the 180-day memory were never read — those cabs can't be measured honestly
+  const cabs = builds.map((b) => cab370(b, spanOf(b.part_number), tBy[b.id] || [], evBy[b.id] || [], life[b.id], ivs, hrs, isOpen, nowMs, floorMs));
+  const nameOf = {}; for (const e of emps || []) nameOf[e.id] = `${e.first_name || ""} ${e.last_name ? e.last_name[0] + "." : ""}`.trim();
+  return { cabs, nowRows: (nowRows || []).map((b) => ({ ...b, span: spanOf(b.part_number) })), thruEv: thruEv || [], hrs, isOpen, nowMs, nameOf };
+}
+// open (shop) days from day a through day b, both counted — the same counting the line's promise uses (Block 314)
+const openDays370 = (aMs, bMs, isOpen) => { if (!(aMs > 0) || !(bMs >= aMs)) return null; let n = 0; const end = phxDate(bMs);
+  for (let d = phxDate(aMs), i = 0; i < 400; i++) { if (isOpen(d)) n++; if (d >= end) break; d = phxDate(phxDayStart(d) + 36 * 3600000); } return n; };
+const daysCal370 = (a, b) => (a > 0 && b > a) ? (b - a) / 86400000 : null;
+// one cab's whole record: per section either the numbers or the reason it's left out
+function cab370(b, span, tasks, evs, L, ivs, hrs, isOpen, nowMs, floorMs = 0) {
+  const t = (e) => new Date(e.at).getTime();
+  const of = (type) => evs.filter((e) => e.event_type === type);
+  const S = b.started_at ? new Date(b.started_at).getTime() : null;
+  const passEv = of("build.production_complete")[0] || null; const P = passEv ? t(passEv) : null;   // the FIRST pass = production's own finish (a later fix job is its own number)
+  const moves = of("build.stage_moved").map((e) => ({ at: t(e), to: (e.payload || {}).to || "" }));
+  const out = { id: b.id, b, span, order: b.order_number, cab: b.cab_number || "", S, P, prod: null, body: null, wh: null, life: null, why: {} };
+  // PRODUCTION — real when its steps were tapped on the floor
+  const real = tasks.filter((x) => !x.is_background && !["rework", "fix"].includes(String(x.source || "")));
+  if (!P) out.why.prod = "not through inspection yet";
+  else if (S < floorMs) out.why.prod = "older than the 180-day punch memory";
+  else if (!real.some((x) => x.completed_by)) out.why.prod = "no steps tapped (moved by hand)";
+  else {
+    const std = real.reduce((s, x) => s + Number(x.man_hours || 0), 0);
+    // Fable: hours follow the cab across a line move (build.line_moved from→to) — one segment per line it sat on between start and pass
+    const mv = of("build.line_moved").map((e) => ({ at: t(e), from: Number((e.payload || {}).from), to: Number((e.payload || {}).to) })).filter((m) => m.at > S && m.at < P);
+    const segs = []; let cur = mv.length ? mv[0].from : Number(b.line_id), from = S;
+    for (const m of mv) { segs.push({ line: cur, a: from, z: m.at }); cur = m.to; from = m.at; } segs.push({ line: cur, a: from, z: P });
+    // Daniel 11/11 10:10: hours worked = EVERYONE on the line (crew + helpers) PLUS anyone clocked into the cab by name (a fix punch stamped
+    // with this cab, on any line) for the whole start → pass; idle uses the same people (the shop hours none of them covered)
+    const onLine = (iv, g) => Number(iv.line) === g.line && !iv.fix;
+    const onCab = (iv) => iv.fix === b.id;
+    const act = segs.reduce((sum, g) => sum + ivs.filter((iv) => onLine(iv, g)).reduce((s2, iv) => s2 + overlapHrs(iv, g.a, g.z), 0), 0)
+      + ivs.filter(onCab).reduce((s2, iv) => s2 + overlapHrs(iv, S, P), 0);
+    // Opus (audit of Fable): ONE idle pass over start → pass — each line's punches clipped to the time the cab sat on that line, plus the
+    // cab-stamped punches — so a line-move day docks its lunch hour once, not once per segment
+    const cover = segs.flatMap((g) => ivs.filter((iv) => onLine(iv, g)).map((iv) => ({ ...iv, start: Math.max(iv.start, g.a), end: Math.min(iv.end, g.z) })).filter((iv) => iv.end > iv.start)).concat(ivs.filter(onCab));
+    const idleProd = idleSinceStart332(cover, S, P, hrs, isOpen).hours;
+    const jig = openDays370(S, P, isOpen);
+    const plan = Number(b.promised_days) > 0 ? Number(b.promised_days) : (b.promised_finish ? openDays370(S, phxDayStart(String(b.promised_finish).slice(0, 10)) + 12 * 3600000, isOpen) : null);
+    const fin = of("build.finish").filter((e) => t(e) <= P).pop();
+    const insp = fin ? idleSinceStart332([], t(fin), P, hrs, isOpen).rawHours : null;   // shop-window hours (open → close); Fable: NOT .hours — Block 332's one-lunch-a-day dock would zero a 2–3 PM wait
+    const sendBacks = of("build.rework_assigned").length + of("build.fixjob_opened").length;
+    const fixH = ivs.filter((iv) => iv.fix === b.id && Number(iv.line) === FIX_LINE_ID).reduce((s, iv) => s + Math.max(0, (iv.end - iv.start) / 3600000), 0);
+    const vsPlan = jig != null && plan != null ? jig - plan : null;
+    const byPlan = vsPlan != null ? vsPlan <= 0 : null;   // Daniel 11/11 10:10: "by promise date" = passed inspection within the line's planned days (the same yardstick as Days vs planned)
+    out.prod = { jig, plan, vsPlan, std, act, vsStd: act - std, idle: Math.round(idleProd * 10) / 10, insp, sendBacks, fixH, byPlan, lateDays: byPlan === false ? vsPlan : 0 };
+  }
+  // BODY (shown in Block 371; known now for the glance tiles + whole life) — real = entered Body on its own and went through Body's steps
+  const bDone = of("body.done")[0]; const bIn = of("body.entered")[0];
+  const steps = (type, a, z) => of(type).filter((e) => t(e) >= a && t(e) <= z);
+  const caught = (st) => { if (!st.length) return true; const h = st.reduce((s, e) => s + Number((e.payload || {}).hours || 0), 0); return h < 0.05 && (t(st[st.length - 1]) - t(st[0])) <= CATCHUP_MIN_370 * 60000; };
+  const jumped = (to) => moves.some((m) => (to === "body" ? ["crating", "shipped"].includes(m.to) : m.to === "shipped") && (!P || m.at >= P));
+  if (!bDone) out.why.body = jumped("body") ? "moved past Body by hand" : P ? "not through Body yet" : "not through production yet";
+  else if (!bIn || t(bIn) > t(bDone)) out.why.body = "no Body entry on record (before Body tracking)";
+  else if (caught(steps("body.step_done", t(bIn), t(bDone)))) out.why.body = "tapped through to catch up";
+  else out.body = { inAt: t(bIn), doneAt: t(bDone), days: daysCal370(t(bIn), t(bDone)), idle: L ? L.body.hours : null };
+  // CRATING & SHIPPING — real = the warehouse steps were done before it shipped
+  const shipEv = of("wh.shipped")[0]; const handShip = moves.find((m) => m.to === "shipped");
+  if (!shipEv) out.why.wh = handShip ? "marked shipped by hand" : "not shipped yet";
+  else { const whSteps = steps("wh.step_done", 0, t(shipEv));
+    if (caught(whSteps)) out.why.wh = "tapped through to catch up";
+    else { const handIn = moves.find((m) => m.to === "crating");
+      out.wh = { shipAt: t(shipEv), mode: (shipEv.payload || {}).mode || b.ship_mode || "", stepH: whSteps.reduce((s, e) => s + Number((e.payload || {}).hours || 0), 0), idle: L && !handIn ? L.wh.hours : null, waitDays: L ? L.wait.calDays : null, handIn: Boolean(handIn) }; } }   // Fable: a hand move into crating has no true entry time → no crating idle
+  // WHOLE LIFE — only a cab that really left through the warehouse (a hand-marked "shipped" has no true leave time)
+  if (out.wh && S) {
+    // Fable (live check 11/11): the warehouse's Deliver tap IS the cab's start (kit_delivered_at == started_at on every cab), so there is
+    // no "wait for jig" between delivery and start — Kit pull runs pull started → the cab started. The build's own columns are the source
+    // (two cabs have the column but no event); the event is the fallback.
+    const pullEv = of("kit.pull_started")[0]; const pullMs = b.kit_pull_started_at ? new Date(b.kit_pull_started_at).getTime() : pullEv ? t(pullEv) : null;
+    const pull = pullMs != null && pullMs <= S ? pullMs : null;
+    const W = L ? L.windows : { body: [], wh: [], wait: [] }; const sumD = (ws) => ws.length ? ws.reduce((s, w) => s + (w.end - w.start), 0) / 86400000 : null;
+    const st = { pull: pull != null ? Math.max(0, (S - pull) / 86400000) : null,
+      prod: P ? daysCal370(S, P) : null,
+      body: out.body ? out.body.days : null,
+      crating: out.wh.handIn ? null : sumD(W.wh),
+      leave: sumD(W.wait) };
+    const from = pull != null ? pull : S;
+    const total = daysCal370(from, out.wh.shipAt);
+    st.gap = total != null ? Math.max(0, total - ["pull", "prod", "body", "crating", "leave"].reduce((s2, k) => s2 + (st[k] || 0), 0)) : null;   // Fable: so the stages add up to the total
+    out.life = { st, total, fromPull: pull != null };
+  } else out.why.life = out.why.wh || "not shipped yet";
+  return out;
+}
+// ---- pick the cabs for one section: the last N per span whose finish of that section falls in the window ----
+const SECT_370 = { prod: (c) => c.P, body: (c) => c.body && c.body.doneAt, wh: (c) => c.wh && c.wh.shipAt, life: (c) => c.wh && c.wh.shipAt };
+function pick370(D, sect, span, ch, prev) {
+  const fin = SECT_370[sect];
+  const win = prev ? ch.prevWin : ch.win;
+  let pool = D.cabs.filter((c) => c.span === span && c[sect] && fin(c) && (!win || (fin(c) >= win[0] && fin(c) < win[1])));
+  pool.sort((a, z) => fin(z) - fin(a));
+  if (prev && !ch.win) pool = pool.slice(ch.n);   // Last N with no dates → the N cabs before those N
+  return pool.slice(0, ch.n);
+}
+// the cabs of a span that are NOT in a section, with why (only those that finished something in the window)
+function leftOut370(D, sect, span, ch) {
+  return D.cabs.filter((c) => c.span === span && !c[sect] && c.why[sect] && !/not (through|shipped) .*yet$/.test(c.why[sect])).map((c) => ({ order: c.order, why: c.why[sect] }));
+}
+// ---- the numbers for one section × span ----
+function cell370(cabs, get) { const v = cabs.map(get); const m = mean370(v); return { avg: r1_370(m), n: v.filter((x) => x != null && Number.isFinite(x)).length, range: range370(v) && range370(v).map(r1_370) }; }
+function view370(D, ch, prev = false) {
+  const spans = ch.spans;
+  const by = {}; for (const sp of spans) by[sp] = { prod: pick370(D, "prod", sp, ch, prev), body: pick370(D, "body", sp, ch, prev), wh: pick370(D, "wh", sp, ch, prev), life: pick370(D, "life", sp, ch, prev) };
+  const pool = (sect) => [...new Set(spans.flatMap((sp) => by[sp][sect]))];
+  const P = pool("prod"), B = pool("body"), W = pool("wh"), Lf = pool("life");
+  const onUnder = P.filter((c) => c.prod.vsStd <= 0).length;
+  const idle = { prod: mean370(P.map((c) => c.prod.idle)), body: mean370(B.map((c) => c.body.idle)), wh: mean370(W.map((c) => c.wh.idle)) };
+  const dayH = Math.max(1, (Number(D.hrs.close) || 16) - (Number(D.hrs.open) || 7));   // Fable: the shop window (open → close) — the same hours the wait is measured in
+  const waits = [["Waiting for inspection", mean370(P.map((c) => c.prod.insp != null ? c.prod.insp / dayH : null)), P.filter((c) => c.prod.insp != null).length],   // shop hours → shop days
+    ["Waiting to leave", mean370(Lf.map((c) => c.life.st.leave)), Lf.filter((c) => c.life.st.leave != null).length]].filter((w) => w[1] != null);
+  const big = waits.sort((a, z) => z[1] - a[1])[0] || null;
+  const glance = {
+    life: { avg: r1_370(mean370(Lf.map((c) => c.life.total))), n: Lf.length },
+    onUnder: { pct: P.length ? Math.round(100 * onUnder / P.length) : null, x: onUnder, y: P.length },
+    labor: { net: P.length ? r1_370(P.reduce((s, c) => s + c.prod.vsStd, 0)) : null, n: P.length },
+    byPlan: (() => { const r = P.filter((c) => c.prod.byPlan != null); const on = r.filter((c) => c.prod.byPlan).length; const late = r.filter((c) => c.prod.byPlan === false);
+      return { pct: r.length ? Math.round(100 * on / r.length) : null, x: on, y: r.length, late: late.length, lateAvg: late.length ? r1_370(mean370(late.map((c) => c.prod.lateDays))) : null }; })(),
+    idle: { avg: [idle.prod, idle.body, idle.wh].every((x) => x == null) ? null : r1_370((idle.prod || 0) + (idle.body || 0) + (idle.wh || 0)), most: [["production", idle.prod], ["Body", idle.body], ["crating", idle.wh]].filter((x) => x[1] != null).sort((a, z) => z[1] - a[1])[0] || null, n: P.length },
+    big: big ? { label: big[0], days: r1_370(big[1]), n: big[2] } : null,
+  };
+  return { by, glance };
+}
+// throughput — shop facts (not limited by Last N): every cab, not only the ones since 9/28
+function thru370(D) {
+  const now = D.nowMs; const today = phxDate(now); const mStart = phxDayStart(today.slice(0, 8) + "01");
+  const lmDate = phxDate(mStart - 86400000); const lmStart = phxDayStart(lmDate.slice(0, 8) + "01");
+  const ev = D.thruEv; const t = (e) => new Date(e.at).getTime();
+  const real = ev.filter((e) => e.event_type === "wh.shipped"); const hand = ev.filter((e) => e.event_type === "build.stage_moved" && (e.payload || {}).to === "shipped");
+  const firstOf = (list) => { const seen = new Set(); return list.filter((e) => { const k = (e.payload || {}).build_id; if (!k || seen.has(k)) return false; seen.add(k); return true; }); };
+  const R = firstOf(real), H = firstOf(hand).filter((e) => !R.some((r) => (r.payload || {}).build_id === (e.payload || {}).build_id));
+  const inM = (list, a, z) => list.filter((e) => t(e) >= a && t(e) < z).length;
+  const shippedM = inM(R, mStart, now + 1), handM = inM(H, mStart, now + 1), lastM = inM(R, lmStart, mStart), lastHand = inM(H, lmStart, mStart);
+  // pace: shipped so far ÷ open days gone × open days in the month
+  let gone = 0, all = 0; for (let d = today.slice(0, 8) + "01"; d.slice(0, 7) === today.slice(0, 7); d = phxDate(phxDayStart(d) + 36 * 3600000)) { if (D.isOpen(d)) { all++; if (d <= today) gone++; } }
+  const pace = gone ? Math.round(shippedM / gone * all) : null;
+  // the last 6 weeks (Mon–Sun, Phoenix) — the warehouse began tracking 10/29; hand-marked shipments are drawn apart
+  const dow = (ds) => (new Date(ds + "T12:00:00Z").getUTCDay() + 6) % 7;   // Mon = 0
+  const w0 = phxDayStart(phxDate(phxDayStart(today) - dow(today) * 86400000)); const trackFrom = phxDayStart("2026-10-29"); const weeks = [];
+  for (let i = 5; i >= 0; i--) { const a = w0 - i * 7 * 86400000, z = a + 7 * 86400000; weeks.push({ start: phxDate(a + 12 * 3600000), real: inM(R, a, z), hand: inM(H, a, z), before: z <= trackFrom, part: a < trackFrom && z > trackFrom, done: z <= now }); }   // Fable: only a week wholly before 10/29 is "before tracking"; the straddling week is "partly tracked"
+  const tracked = weeks.filter((w) => !w.before && !w.part && w.done); const perWeek = tracked.length ? r1_370(tracked.reduce((s, w) => s + w.real, 0) / tracked.length) : null;
+  const offLine = firstOf(ev.filter((e) => e.event_type === "build.production_complete")).filter((e) => t(e) >= mStart).length;
+  const thruBody = firstOf(ev.filter((e) => e.event_type === "body.done")).filter((e) => t(e) >= mStart).length;
+  const nowR = D.nowRows; const st = (b) => String(b.state);
+  const inProd = nowR.filter((b) => ["active", "awaiting_inspection", "rework", "fix_job"].includes(st(b))).length;
+  const after = nowR.filter((b) => ["production_complete", "complete"].includes(st(b))).map((b) => stageOf323(b).key);
+  const backlog = nowR.filter((b) => st(b) === "upcoming").length;
+  return { shippedM, handM, lastM, lastHand, pace, weeks, perWeek, tracked: tracked.length, offLine, thruBody, inProd, inBody: after.filter((k) => k === "body").length, crated: after.filter((k) => k === "crating").length, backlog, backlogWeeks: perWeek ? r1_370(backlog / perWeek) : null };
+}
+// ---- Block 370: the page (screen + print) ----
+const spanName370 = (k) => (SPANS_370.find((s) => s[0] === k) || [k, k])[1];
+const f1_370 = (n) => n == null ? "—" : (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, "");
+// an arrow vs before, in words (never colour alone). lowerBetter: a drop is good.
+function arrow370(now, before, unit, lowerBetter, goodWord, badWord) {
+  if (now == null || before == null) return "";
+  const d = Math.round((now - before) * 10) / 10; if (Math.abs(d) < 0.05) return `<div class="ar">= same as before</div>`;
+  const good = lowerBetter ? d < 0 : d > 0;
+  return `<div class="ar ${good ? "gd" : "bd"}">${d > 0 ? "&#9650;" : "&#9660;"} ${f1_370(Math.abs(d))}${unit} ${good ? goodWord : badWord} than before</div>`;
+}
+function glance370(D, ch, V, Vp, T) {
+  const g = V.glance, p = Vp ? Vp.glance : null;
+  const tile = (label, big, sub, arr) => `<div class="tile"><div class="tl">${label}</div><div class="tb">${big}</div>${sub ? `<div class="ts">${sub}</div>` : ""}${arr || ""}</div>`;
+  const early = (n) => n < EARLY_N_370 ? ` <span class="early">EARLY</span>` : "";
+  return [
+    tile("Shipped this month", `${T.shippedM}`, `pace ≈ ${T.pace == null ? "—" : T.pace} this month · last month ${T.lastM}${T.handM ? ` · +${T.handM} marked shipped by hand` : ""}`, arrow370(T.shippedM, T.lastM, "", false, "more", "fewer").replace("than before", "than last month")),
+    tile("Kit pull → shipped", g.life.avg == null ? "—" : `${f1_370(g.life.avg)} d`, `average · ${g.life.n} cab${g.life.n === 1 ? "" : "s"}${early(g.life.n)}`, arrow370(g.life.avg, p && p.life.avg, " d", true, "faster", "slower")),
+    tile("Cabs on / under hours", g.onUnder.pct == null ? "—" : `${g.onUnder.pct}%`, `${g.onUnder.x} of ${g.onUnder.y} cabs within their allowed hours${early(g.onUnder.y)}`, arrow370(g.onUnder.pct, p && p.onUnder.pct, " pts", false, "better", "worse")),
+    tile("Labor vs standard", g.labor.net == null ? "—" : `${g.labor.net > 0 ? "+" : ""}${f1_370(g.labor.net)} h`, g.labor.net == null ? "" : `${g.labor.net > 0 ? "over" : "under"} the allowed hours, all cabs counted (production)`, arrow370(g.labor.net, p && p.labor.net, " h", true, "better", "worse")),
+    tile("Idle hours per cab", g.idle.avg == null ? "—" : `${f1_370(g.idle.avg)} h`, g.idle.most ? `most in ${g.idle.most[0]} (${f1_370(g.idle.most[1])} h)` : "", arrow370(g.idle.avg, p && p.idle.avg, " h", true, "less", "more")),
+    tile("Off the line by the planned date", g.byPlan.pct == null ? "—" : `${g.byPlan.pct}%`, g.byPlan.pct == null ? "no planned dates yet" : `${g.byPlan.x} of ${g.byPlan.y} passed inspection by the line's planned finish${g.byPlan.late ? ` · ${g.byPlan.late} late, ≈ ${f1_370(g.byPlan.lateAvg)} shop day${g.byPlan.lateAvg === 1 ? "" : "s"} each` : ""}${early(g.byPlan.y)}`, arrow370(g.byPlan.pct, p && p.byPlan.pct, " pts", false, "better", "worse")),
+    tile("Biggest wait", g.big ? `${f1_370(g.big.days)} d` : "—", g.big ? `${g.big.label}${early(g.big.n)}` : "no waits measured yet", g.big && p && p.big && p.big.label === g.big.label ? arrow370(g.big.days, p.big.days, " d", true, "shorter", "longer") : ""),
+    tile("Backlog", `${T.backlog}`, `cabs ordered, not started${T.backlogWeeks != null ? ` · ≈ ${f1_370(T.backlogWeeks)} weeks at the current pace` : ""}`, ""),
+  ].join("");
+}
+// one section grid: rows × the checked spans
+function grid370(ch, V, sect, rows) {
+  const head = `<tr><th class="lab"></th>${ch.spans.map((sp) => { const n = V.by[sp][sect].length; return `<th>${spanName370(sp)}<div class="nn">${n ? `${n} cab${n === 1 ? "" : "s"}` : "no cabs yet"}${n && n < EARLY_N_370 ? ` <span class="early">EARLY</span>` : ""}</div></th>`; }).join("")}</tr>`;
+  const body = rows.map((r) => `<tr><td class="lab"><b>${r.label}</b><div class="sub">${r.sub}</div></td>${ch.spans.map((sp) => {
+    const cabs = V.by[sp][sect]; if (!cabs.length) return `<td class="na">—</td>`;
+    const c = cell370(cabs, r.get); if (c.avg == null) return `<td class="na">—<div class="sub">not measured</div></td>`;
+    return `<td><div class="big">${r.fmt(c.avg, cabs)}</div>${r.note ? `<div class="note">${r.note(c.avg, cabs)}</div>` : ""}${c.range && cabs.length > 1 ? `<div class="rg">best–worst ${r.rfmt ? r.rfmt(c.range) : `${f1_370(c.range[0])} – ${f1_370(c.range[1])}`}</div>` : ""}</td>`; }).join("")}</tr>`).join("");
+  return `<div class="gw"><table class="chg"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;   // thead repeats on every printed page
+}
+const ahead370 = (v, unit) => v == null ? "" : Math.abs(v) < 0.05 ? "right on" : v < 0 ? `&#9660; ${f1_370(-v)} ${unit} under — ahead` : `&#9650; ${f1_370(v)} ${unit} over — behind`;
+function prodRows370() {
+  return [
+    { label: "Days on the jig", sub: "started → passed inspection (shop days)", get: (c) => c.prod.jig, fmt: (v) => `${f1_370(v)} d` },
+    { label: "Hours vs allowed", sub: "everyone on the line or clocked into the cab, start → pass, vs the cab's allowed hours", get: (c) => c.prod.vsStd,
+      fmt: (v, cabs) => `${f1_370(mean370(cabs.map((c) => c.prod.act)))} / ${f1_370(mean370(cabs.map((c) => c.prod.std)))} h`, note: (v) => ahead370(v, "h"), rfmt: (r) => `${r[0] > 0 ? "+" : ""}${f1_370(r[0])} to ${r[1] > 0 ? "+" : ""}${f1_370(r[1])} h` },
+    { label: "Days vs planned", sub: "against the line's schedule when it started", get: (c) => c.prod.vsPlan, fmt: (v) => Math.abs(v) < 0.05 ? "on plan" : `${v > 0 ? "+" : "−"}${f1_370(Math.abs(v))} d`, note: (v) => Math.abs(v) < 0.05 ? "" : v > 0 ? "&#9650; behind plan" : "&#9660; ahead of plan" },
+    { label: "Idle on the line", sub: "shop hours none of those people were on it (lunch hour out)", get: (c) => c.prod.idle, fmt: (v) => `${f1_370(v)} h` },
+    { label: "Waiting for inspection", sub: "crew tapped Finished → passed (shop hours)", get: (c) => c.prod.insp, fmt: (v) => `${f1_370(v)} h` },
+    { label: "Send-backs + fix jobs", sub: "per cab", get: (c) => c.prod.sendBacks, fmt: (v) => f1_370(v), note: (v, cabs) => { const h = mean370(cabs.map((c) => c.prod.fixH)); return h ? `fix-job hours ${f1_370(h)} h` : ""; } },
+  ];
+}
+const STAGES_370 = [["pull", "Kit pull", "#5e5ce6", "repeating-linear-gradient(45deg,#000 0 1px,transparent 1px 5px)"], ["prod", "Production", "#C8102E", "none"], ["body", "Body", "#5eaeff", "repeating-linear-gradient(90deg,#000 0 1px,transparent 1px 6px)"], ["crating", "Crating", "#ff9f0a", "repeating-linear-gradient(0deg,#000 0 1px,transparent 1px 5px)"], ["leave", "Waiting to leave", "#30d158", "radial-gradient(#000 1px,transparent 1px) 0 0/5px 5px"], ["gap", "Between depts / untracked", "#3a3a3c", "none"]];   // Fable: the bar adds up to the total — what no stage tracked (the waits between departments, a hand-moved stage) is its own grey piece
+function life370(ch, V) {
+  const rows = ch.spans.map((sp) => { const cabs = V.by[sp].life; const st = {}; for (const [k] of STAGES_370) st[k] = r1_370(mean370(cabs.map((c) => c.life.st[k]))); return { sp, cabs, st, total: r1_370(mean370(cabs.map((c) => c.life.total))) }; });
+  const max = Math.max(1, ...rows.map((r) => STAGES_370.reduce((s, [k]) => s + (r.st[k] || 0), 0)));
+  return `<div class="legend">${STAGES_370.map(([k, l, c, pat]) => `<span><i style="background:${c}" data-pat="${k}"></i>${l}</span>`).join("")}</div>` + rows.map((r) => `<div class="lrow"><div class="lname">${spanName370(r.sp)}<div class="nn">${r.cabs.length ? `${r.cabs.length} shipped cab${r.cabs.length === 1 ? "" : "s"}${r.cabs.length < EARLY_N_370 ? ` <span class="early">EARLY</span>` : ""}` : "no shipped cabs yet"}</div></div>
+    <div class="lbar">${r.cabs.length ? STAGES_370.filter(([k]) => r.st[k]).map(([k, l, c]) => `<span class="seg seg-${k}" style="width:${Math.max(2, 100 * r.st[k] / max)}%;background:${c}" title="${l}: ${f1_370(r.st[k])} days">${100 * r.st[k] / max > 9 ? f1_370(r.st[k]) : ""}</span>`).join("") : ""}</div>
+    <div class="ltot">${r.total != null ? `<b>${f1_370(r.total)} d</b><div class="sub">pull → gone</div>` : "—"}</div></div>
+    ${r.cabs.length ? `<div class="lst">${STAGES_370.map(([k, l]) => `${l} ${r.st[k] == null ? "—" : f1_370(r.st[k]) + " d"}`).join(" · ")}</div>` : ""}`).join("");
+}
+function thruHtml370(T) {
+  const max = Math.max(1, ...T.weeks.map((w) => w.real + w.hand));
+  const tile = (l, v, s) => `<div class="tile sm"><div class="tl">${l}</div><div class="tb">${v}</div>${s ? `<div class="ts">${s}</div>` : ""}</div>`;
+  return `<div class="tiles">${[tile("Shipped this month", T.shippedM, T.handM ? `+${T.handM} by hand` : ""), tile("Avg shipped / week", T.perWeek == null ? "—" : f1_370(T.perWeek), `over ${T.tracked} full week${T.tracked === 1 ? "" : "s"} tracked`), tile("Off the line this month", T.offLine, "passed inspection"), tile("Through Body this month", T.thruBody, ""), tile("In production now", T.inProd, ""), tile("In Body now", T.inBody, ""), tile("Crated / ready now", T.crated, ""), tile("Backlog", T.backlog, "ordered, not started")].join("")}</div>
+  <div class="wk"><div class="tl">Shipped per week — last 6 weeks</div><div class="wkbars">${T.weeks.map((w) => `<div class="wcol"><div class="wbar"><span class="wreal" style="height:${100 * w.real / max}%"></span><span class="whand" style="height:${100 * w.hand / max}%"></span></div><div class="wn">${w.real}${w.hand ? `<span class="sub"> +${w.hand}</span>` : ""}</div><div class="wl${w.before ? " pre" : ""}">${w.start.slice(5).replace("-", "/")}${w.before ? "<br>before tracking" : w.part ? "<br>partly tracked" : !w.done ? "<br>so far" : ""}</div></div>`).join("")}</div>
+  <div class="sub">Solid = shipped through the warehouse steps (tracking began 10/29) · hatched "+n" = marked shipped by hand (catch-up), not counted in the averages.</div></div>`;
+}
+function used370(D, ch, V) {
+  const link = (c) => `<a href="/order/${encodeURIComponent(c.order)}">${escH(c.order)}</a>`;
+  return ch.spans.map((sp) => { const lo = leftOut370(D, "prod", sp, ch), lw = leftOut370(D, "life", sp, ch);
+    return `<div class="used"><b>${spanName370(sp)}</b>
+      <div>Production: ${V.by[sp].prod.length ? V.by[sp].prod.map(link).join(", ") : "—"}</div>
+      <div>Whole life: ${V.by[sp].life.length ? V.by[sp].life.map(link).join(", ") : "—"}</div>
+      ${lo.length || lw.length ? `<div class="sub">Left out — ${[...lo.map((x) => `${escH(x.order)} (production: ${x.why})`), ...lw.filter((x) => !lo.some((y) => y.order === x.order && y.why === x.why)).map((x) => `${escH(x.order)} (${x.why})`)].join(" · ")}</div>` : ""}</div>`; }).join("");
+}
+const CSS_370 = `
+  .ch{max-width:1180px;margin:0 auto;text-align:left}
+  .sb{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;font-size:.92rem}
+  .sb .r{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:4px 0}
+  .sb label{white-space:nowrap}.sb input[type=number]{width:62px}.sb input,.sb select{font:inherit;background:#111;color:#fff;border:1px solid #48484a;border-radius:8px;padding:5px 7px}
+  .sb .run{background:#C8102E;color:#fff;border:0;border-radius:10px;padding:9px 18px;font-weight:800;font:inherit;font-weight:800;cursor:pointer}
+  .sb .lnk{color:#8e8e93;font-size:.85rem}.sb .rt{margin-left:auto}.sb .rt a{color:#ffd60a;margin-left:12px}
+  .hon{opacity:.7;font-size:.85rem;margin:0 0 12px;line-height:1.45}
+  .sec{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;break-inside:avoid}
+  .sec h3{margin:0 0 4px}.sec .why{opacity:.6;font-size:.82rem;margin:0 0 10px}
+  .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .tile{background:#141416;border:1px solid #2c2c2e;border-radius:12px;padding:10px 12px}
+  .tl{font-size:.75rem;letter-spacing:.05em;text-transform:uppercase;opacity:.6}.tb{font-size:1.6rem;font-weight:800;margin:2px 0;font-variant-numeric:tabular-nums}
+  .tile.sm .tb{font-size:1.25rem}.ts{font-size:.8rem;opacity:.75}.ar{font-size:.8rem;margin-top:3px}.ar.gd{color:#30d158}.ar.bd{color:#ff9f0a}
+  .early{background:#ffd60a;color:#000;border-radius:6px;padding:0 5px;font-size:.68rem;font-weight:800;letter-spacing:.04em}
+  .gw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table.chg{border-collapse:collapse;min-width:${230 + 6 * 135}px;width:100%;font-variant-numeric:tabular-nums}
+  .chg th,.chg td{border-top:1px solid #2c2c2e;padding:8px;vertical-align:top;text-align:right}
+  .chg th{font-size:.85rem}.chg .lab{text-align:left;width:230px;min-width:230px;position:sticky;left:0;background:var(--card);z-index:1}
+  .chg .big{font-size:1.1rem;font-weight:800}.chg .note{font-size:.8rem;opacity:.85}.chg .rg,.sub,.nn{font-size:.75rem;opacity:.6;font-weight:400}.chg .na{opacity:.45}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;margin-bottom:8px}.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+  .lrow{display:grid;grid-template-columns:150px 1fr 90px;gap:10px;align-items:center;margin-top:8px}
+  .lbar{display:flex;height:22px;background:#141416;border-radius:6px;overflow:hidden}.seg{display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:#000;border-right:1px solid #000}
+  .ltot{text-align:right}.lst{font-size:.75rem;opacity:.6;margin:2px 0 4px 160px}
+  .wk{margin-top:12px}.wkbars{display:flex;gap:10px;align-items:flex-end;height:150px;margin:8px 0}
+  .wcol{flex:1;display:flex;flex-direction:column;align-items:center;height:100%}.wbar{flex:1;width:70%;display:flex;flex-direction:column-reverse;background:#141416;border-radius:6px;overflow:hidden}
+  .wreal{background:#C8102E;display:block}.whand{display:block;background:repeating-linear-gradient(45deg,#8e8e93 0 3px,transparent 3px 6px)}
+  .wn{font-weight:800;margin-top:4px}.wl{font-size:.72rem;opacity:.7;text-align:center}.wl.pre{opacity:.4}
+  .used{border-top:1px solid #2c2c2e;padding:8px 0;font-size:.9rem}.used a{color:#ffd60a}
+  @media (max-width:720px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.lrow{grid-template-columns:96px 1fr 64px}.lst{margin-left:0}.sb .rt{margin-left:0}}
+`;
+const PRINT_CSS_370 = `
+  @page{size:letter landscape;margin:.5in}
+  html,body{background:#fff!important;color:#000!important;min-height:0!important;height:auto!important;overflow:visible!important}
+  body>a[href="/inbox"],body>a[href="/settings"],body>div[style*="position:fixed"]{display:none!important}
+  body{font-size:10.5pt}.wrap{max-width:none!important;padding:0!important}
+  .sec,.tile,.sb{background:#fff!important;border-color:#999!important}.chg .lab{background:#fff!important}
+  .chg th,.chg td{border-top:1px solid #bbb}.tile{border:1px solid #999}.ar.gd,.ar.bd{color:#000!important}
+  .early{background:#fff!important;border:1px solid #000;color:#000}
+  .tb{font-size:16pt}.chg .big{font-size:12pt}.ts,.sub,.nn,.rg,.note,.tl{font-size:9pt!important;opacity:1!important;color:#333!important}
+  .gw{overflow:visible}table.chg{min-width:0}
+  .seg{color:#000!important;border-right:1px solid #000}.seg-pull{background:#ddd!important}
+  .seg-prod{background:#555!important;color:#fff!important}.seg-body{background:#fff!important;background-image:repeating-linear-gradient(90deg,#000 0 1px,transparent 1px 6px)!important}
+  .seg-crating{background:#aaa!important}.seg-gap{background:#eee!important}.legend i[data-pat=gap]{background:#eee!important}.seg-leave{background:#fff!important;background-image:radial-gradient(#000 1px,transparent 1px)!important;background-size:5px 5px!important}
+  .lbar{border:1px solid #000;background:#fff!important}.legend i{border:1px solid #000}
+  .legend i[data-pat=pull]{background:#ddd!important}.legend i[data-pat=prod]{background:#555!important}.legend i[data-pat=body]{background:repeating-linear-gradient(90deg,#000 0 1px,#fff 1px 6px)!important}.legend i[data-pat=crating]{background:#aaa!important}.legend i[data-pat=leave]{background:radial-gradient(#000 1px,#fff 1px) 0 0/5px 5px!important}
+  .wreal{background:#555!important}.wbar{background:#fff!important;border:1px solid #999}.used a{color:#000!important;text-decoration:none}
+  .sec{break-inside:avoid;page-break-inside:avoid;padding:6px 10px;margin-bottom:6px}.sec.long{break-inside:auto;page-break-inside:auto;break-before:page;page-break-before:always}
+  .sec h3{font-size:12pt;break-after:avoid;page-break-after:avoid;margin:0 0 2px}.sec .why{margin:0 0 4px;font-size:8pt}
+  .tiles,.tile,.lrow,.wk,.used,.chg tr,.legend{break-inside:avoid;page-break-inside:avoid}.tiles{gap:5px}.tile{padding:4px 8px}
+  table.chg{table-layout:fixed;width:100%}.chg .lab{position:static!important;width:300px;min-width:300px}.chg th{vertical-align:bottom}
+  .chg th,.chg td{padding:2px 6px;line-height:1.2}.chg .lab .sub,.chg .note,.chg .rg{font-size:7.5pt!important}
+  body{font-size:9.5pt}.tb{font-size:13pt!important}.tile.sm .tb{font-size:11pt!important}.chg .big{font-size:10.5pt}.tile .ts,.ar{font-size:8pt!important}
+  .hon{font-size:8pt!important;margin:0 0 4px}.wkbars{height:70px!important}.lbar{height:16px}.used{padding:3px 0}.lrow{margin-top:3px}
+  .noprint{display:none!important}
+`;
+function page370(D, ch, me, print) {
+  const V = view370(D, ch, false); const Vp = view370(D, ch, true); const T = thru370(D);
+  const none = !ch.spans.length;
+  const runAt = new Date(D.nowMs - 7 * 3600000); const runTxt = `${phxDate(D.nowMs)} ${runAt.getUTCHours() % 12 || 12}:${String(runAt.getUTCMinutes()).padStart(2, "0")} ${runAt.getUTCHours() >= 12 ? "PM" : "AM"}`;
+  const meName = `${me.first_name || ""} ${me.last_name ? me.last_name[0] + "." : ""}`.trim();
+  const choices = `${none ? "no year spans" : ch.spans.length === SPANS_370.length ? "all year spans" : ch.spans.map(spanName370).join(", ")} · last ${ch.n} cab${ch.n === 1 ? "" : "s"} off each line · ${ch.label}`;
+  const search = `<form class="sb noprint" method="get" action="/cab-history" id="f370"><input type="hidden" name="spx" value="1">
+    <div class="r"><b>Year spans</b>${SPANS_370.map(([k, l]) => `<label><input type="checkbox" name="sp" value="${k}"${ch.spans.includes(k) ? " checked" : ""}> ${l}</label>`).join("")}<button type="button" class="lnk" style="background:none;border:0;cursor:pointer;text-decoration:underline" onclick="document.querySelectorAll('#f370 input[name=sp]').forEach(function(x){x.checked=false})">Clear</button></div>
+    <div class="r"><label><b>Cabs</b> last <input type="number" name="n" min="1" max="50" value="${ch.n}"> off each line</label><span class="lnk">1 = that cab · more = averaged</span>
+      <label><b>Dates</b> <select name="dates" id="d370">${[["any", "Any time"], ["pp", "This pay period"], ["lpp", "Last pay period"], ["lpp2", "Last 2 pay periods"], ["custom", "Custom range"]].map(([v, l]) => `<option value="${v}"${ch.dates === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label>From <input type="date" name="from" value="${ch.from}" onchange="document.getElementById('d370').value='custom'"></label><label>To <input type="date" name="to" value="${ch.to}" onchange="document.getElementById('d370').value='custom'"></label></div>
+    <div class="r"><button class="run" type="submit">Run report</button><span class="lnk">Your choices stay in the link — bookmark a view</span><span class="rt"><a href="/cab-history?${ch.qs}&print=1" target="_blank" rel="noopener">Print / PDF</a></span></div></form>`;
+  const sec = (title, why, inner, long) => `<div class="sec${long ? " long" : ""}"><h3>${title}</h3>${why ? `<div class="why">${why}</div>` : ""}${inner}</div>`;
+  const body = none ? `<div class="sec"><b>Pick at least one year span</b>, then Run report.</div>` : [
+    sec("At a glance", `${choices} · arrows compare with ${ch.win ? "the same length of time just before" : `the ${ch.n} cab${ch.n === 1 ? "" : "s"} before these on each line`}`, `<div class="tiles">${glance370(D, ch, V, Vp, T)}</div>`),
+    sec("Production", "Each column = the last cabs that passed inspection off that year span's line(s), averaged. Ahead / behind = hours against the cab's allowed hours, and days against the line's planned schedule (not the customer's date).", grid370(ch, V, "prod", prodRows370())),
+    sec("Whole life", "Only cabs that left through the warehouse steps (tracked since 10/29) — kit pull → shipped or picked up, in calendar days. Kit pull runs from the warehouse starting the pull to the cab starting on the line (the kit's delivery IS the start). A stage that wasn't really tracked for a cab (moved by hand) sits in the grey piece.", life370(ch, V)),
+    sec("Throughput", "The shop right now and this month — every cab, not limited by the choices above.", thruHtml370(T)),
+    sec("Cabs used", "The cabs behind every number above. Body and Crating & shipping sections arrive with the next block.", used370(D, ch, V), true),
+  ].join("");
+  const honesty = `<p class="hon">Counting starts with cabs started on or after <b>Mon 9/28</b> (when the new 10–13 step lists went live). Body and warehouse tracking began <b>10/29</b>. A section only counts a cab where real data was collected — hand moves and tapped-through catch-up are left out and named under Cabs used. <span class="early">EARLY</span> = fewer than ${EARLY_N_370} cabs behind the number. Ahead / behind = hours against the cab's allowed hours and days against the line's own schedule.</p>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<meta name="robots" content="noindex, nofollow"><title>Shop Board — Cab History</title>${style}<style>${CSS_370}${print ? PRINT_CSS_370 : ""}</style></head>
+<body><div class="wrap" style="max-width:1200px">
+  ${print ? `<div style="border-bottom:3px solid #C8102E;padding-bottom:6px;margin-bottom:10px"><b style="font-size:16pt">Cab History</b> &nbsp; ${escH(choices)}<div style="font-size:9pt">Printed ${runTxt} by ${escH(meName)} · Shop Board</div></div>`
+    : `<div class="logo">SHOP <span>BOARD</span></div>${nav196(me, true)}<h2 style="text-align:center;margin:0 0 10px">Cab History</h2>`}
+  <div class="ch">${print ? "" : search}${honesty}${body}</div>
+</div>${print ? `<script>window.addEventListener("load",function(){setTimeout(function(){try{window.print()}catch(e){}},300)})</script>` : ""}</body></html>`;
 }
 
 // Block 235: hours display keeps QUARTER precision — "8.25"/"7.75" stay
@@ -16651,6 +17025,20 @@ const handleRequest355 = async (req, res) => {
       return send(200, "text/html; charset=utf-8", payrollPage(data, me.role === "admin"));
     }
 
+    // ===== Block 370 (Plan 89): CAB HISTORY — same door as Reports (admins; managers only when "Managers can see Reports" is on) =====
+    if (url.pathname === "/cab-history") {
+      const empId = await liveSession(req);
+      if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=id,first_name,last_name,role,department&id=eq.${empId}`);
+      if (!me || (me.role !== "manager" && me.role !== "admin")) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      if (me.role === "manager") {
+        const [tog] = await db(`feature_toggle?select=enabled&key=eq.manager_reports`);
+        if (!tog || !tog.enabled) return send(403, "text/html; charset=utf-8", `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cab History</title>${style}</head><body><div class="wrap"><div class="logo">SHOP <span>BOARD</span></div>${nav196(me)}<p style="text-align:center">Cab History is for admins (and managers when an admin turns on "Managers can see Reports").</p></div></body></html>`);
+      }
+      const ch = chQuery370(url.searchParams);
+      const D = await load370();
+      return send(200, "text/html; charset=utf-8", page370(D, ch, me, url.searchParams.get("print") === "1"));
+    }
     if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
