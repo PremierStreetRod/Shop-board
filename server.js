@@ -4015,7 +4015,11 @@ const otStrip374 = (rows) => `<div id="ot374" style="max-width:560px;margin:0 au
       var out = await res.json();
       if (out.ok || /^Already (signed off|declined)/.test(out.error || "")) {
         box.innerHTML = out.ok ? (what === "decline" ? '<span style="color:#ff8a80;font-weight:800">✕ Denied — hours don’t count. They’ve been told.</span>' : '<span style="color:#30d158;font-weight:800">✓ Approved — hours on the timecard</span>') : '<span style="opacity:.75">Someone else already decided this one.</span>';
-        var n = document.getElementById("otn374"); if (n) n.textContent = Math.max(0, Number(n.textContent) - 1); return; }
+        var n = document.getElementById("otn374"); if (n) n.textContent = Math.max(0, Number(n.textContent) - 1);
+        // Block 377 (Daniel 11/11 15:07): decided = not actionable any more — the row goes away a moment after the verdict shows
+        var rowEl = document.getElementById("otr-" + id); if (rowEl) setTimeout(function(){ rowEl.style.transition = "opacity .4s"; rowEl.style.opacity = "0";
+          setTimeout(function(){ rowEl.remove(); if (!document.querySelector(".otrow374")) { var c = document.getElementById("ot374"); if (c) { var e = document.createElement("div"); e.style.cssText = "opacity:.75;margin-top:6px"; e.textContent = "All caught up \u2014 nothing waiting."; var hint = c.lastElementChild; c.insertBefore(e, hint); } } }, 420); }, 1500);
+        return; }
       msg.textContent = out.error || "Something went wrong";
     } catch (e) { msg.textContent = "Network hiccup — try again"; }
     btn.disabled = false;
@@ -4257,6 +4261,31 @@ const TC_FIX362 = ["punch.moved", "punch.voided", "punch.added", "punch.pair_voi
 // A long-day / auto-clock-out notice from BEFORE Daniel's ruling counts as already looked at (the old bell had no other way to say so).
 const TC_FROM362 = "2026-11-06T15:10:00.000Z";
 // Block 374 (Daniel 11/11 12:35): the ACCOUNTING MANAGER approves overtime too — the after-hours sign-off (Approve / Deny), her own sessions included (Daniel 12:41).
+// Block 377: who can mark the shop open / closed for a day — admins and the accounting manager (the same people who approve overtime)
+const canCal377 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting")));
+const calPanel377 = (days) => `<div class="lane" id="cal377" style="border-color:#4a90d9"><h3>Shop calendar &mdash; open &amp; closed days</h3>
+  <p style="opacity:.6;font-size:.88rem;margin:-4px 0 10px">The shop runs Monday&ndash;Friday, 7 to 4. Mark a holiday or shutdown day <b>CLOSED</b>, or a weekend <b>OPEN</b> if the shop is working it. Days not listed follow the normal week. The whole board follows this list: the after-hours rules, pace, the day-start nudge.</p>
+  ${days.length ? days.map((d) => { const ds = String(d.cal_date).slice(0, 10); const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ds + "T12:00:00Z").getUTCDay()]; return `<div class="qrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <b style="min-width:9.5em">${wd} ${ds.slice(5, 7)}/${ds.slice(8, 10)}/${ds.slice(0, 4)}</b>${d.is_open ? '<span style="color:#30d158;font-weight:800">OPEN</span>' : '<span style="color:#ff453a;font-weight:800">CLOSED</span>'}
+    <span style="flex:1;opacity:.85">${String(d.reason || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>
+    <button class="btn gray" style="padding:6px 12px;margin-top:0" onclick="cal377(this,{ action: 'remove', cal_date: '${ds}' }, true)">Remove</button></div>`; }).join("") : `<div style="opacity:.6">No exceptions listed &mdash; the normal Mon&ndash;Fri week applies.</div>`}
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <input type="date" id="cal377d" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px">
+    <input id="cal377r" maxlength="120" placeholder="Reason (e.g. Christmas)" style="min-width:14em;background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px">
+    <button class="btn" style="background:#5a1d1d;margin-top:0" onclick="cal377(this,{ action: 'set', is_open: false })">Mark CLOSED</button>
+    <button class="btn" style="background:#1d3a24;margin-top:0" onclick="cal377(this,{ action: 'set', is_open: true })">Mark OPEN</button>
+  </div><div id="cal377m" style="min-height:1.2em;margin-top:6px;color:#ffd60a;font-size:.9rem"></div>
+<script>
+  async function cal377(btn, p, sure){
+    var m = document.getElementById("cal377m");
+    if (sure && !btn.dataset.armed) { btn.dataset.armed = "1"; var o = btn.textContent; btn.textContent = "Sure? Tap again"; setTimeout(function(){ btn.dataset.armed = ""; btn.textContent = o; }, 4000); return; }
+    if (p.action === "set") { p.cal_date = document.getElementById("cal377d").value; p.reason = document.getElementById("cal377r").value.trim(); if (!p.cal_date) { m.textContent = "Pick the date first"; return; } }
+    btn.disabled = true; m.textContent = "";
+    try { var r = await fetch("/api/admin/calendar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); var out = await r.json();
+      if (out.ok) { btn.textContent = "\u2713 Saved"; setTimeout(function(){ location.reload(); }, 600); return; }
+      m.textContent = out.error || "Something went wrong"; } catch (e) { m.textContent = "Network hiccup \u2014 try again"; }
+    btn.disabled = false; }
+</script></div>`;
 const canOT374 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting")));
 const ACCT_MGRS_Q374 = `employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`;   // byte-identical to week40Check221's read → the 60 s memory shares it
 const actFor362 = (n, me) => { const k = ACT362[n && n.event_type]; if (!k) return false; if (k === "insp" && !canInspect321(me)) return false; if (k === "ah" && !canOT374(me)) return false; if (k === "kit" && !(me && me.role === "admin")) return false; return true; };   // Block 374: after-hours → admins + the accounting manager   // inspection: the people who inspect · after-hours + a short kit: admins (they decide / chase the parts) — anyone else gets it as news
@@ -4279,6 +4308,7 @@ async function bell362(me) {
   const since = new Date(Date.now() - NEED_DAYS364 * 86400000).toISOString();   // Block 364: 90 days (was 30) — nothing still open falls off
   const types = Object.keys(ACT362).filter((t) => actFor362({ event_type: t }, me));
   // Block 365 (Daniel 11/6 10:12): this person's Hide / Unhide taps ride beside the notices — same wave, no extra trip
+  const waiting377P = canOT374(me) ? Promise.all([db(`after_hours_session?select=id,employee_id,line_id,wrap_note,started_at,ended_at,signed_off_by,declined_by&ended_at=not.is.null&signed_off_by=is.null&declined_by=is.null&order=started_at.asc&limit=50`).catch(() => []), db(`line?select=id,name`).catch(() => [])]) : Promise.resolve([[], []]);   // Block 377: both ride the first wave (no extra round)
   const [notes, hideEv365] = await Promise.all([types.length ? db(`notification_log?select=id,event_type,title,body,link,created_at,read_at&intended_employee_id=eq.${me.id}&channel=eq.push&event_type=in.(${types.join(",")})&created_at=gte.${since}&order=created_at.desc&limit=1500`) : [],
     types.length ? db(`event_log?select=event_type,payload,at&actor_id=eq.${me.id}&event_type=in.(bell.hide,bell.unhide)&order=at.asc&limit=3000`).catch(() => []) : []]);
   // Daniel 11/6 10:32: a hide covers the notices up to that moment — a NEWER notice about the same thing brings the card back
@@ -4301,6 +4331,15 @@ async function bell362(me) {
   const who = (id, at) => [nm[id] || "", at ? `${dayShort291(phxDate(new Date(at).getTime()))} ${phx12_290(at)}` : ""].filter(Boolean).join(", ");
   const B = new Map(builds.map((b) => [String(b.order_number), b])), openFl = new Set(flagsOpen.map((f) => f.build_id)), R = new Map(reqs.map((r) => [r.id, r]));
   const ahState = {}; for (const sRow of ahs) ahState[sRow.id] = { ...sRow, hrs: sRow.ended_at ? Math.round(Math.max(0, new Date(sRow.ended_at).getTime() - new Date(sRow.started_at).getTime()) / 360000) / 10 : null };
+  // Block 377 (Daniel 11/11 15:07 — Evan's 11/09 hours never reached Kailey's bell: the wrap-up notice went out before she could
+  // approve): for an approver, Needs you lists EVERY waiting session, whether or not a notice was sent to them. A session that has
+  // a notice uses it; one that doesn't gets the same card built from the session itself.
+  const [waiting377, lines377] = await waiting377P;
+  const have377 = new Set(items.filter((i) => i.ah).map((i) => i.ah));
+  for (const sW of waiting377) { if (have377.has(sW.id)) continue;
+    const card = ahWrapNotice300(nm[sW.employee_id] || "Someone", sW, lineName300(sW.line_id, lines377), sW.wrap_note || "", 0);
+    items.push({ n: { id: "ahw377-" + sW.id, event_type: "afterhours.wrapped", title: card.title, body: card.body, link: card.link, created_at: sW.ended_at, read_at: null, synth377: true }, kind: "ah", key: "ah|" + sW.id, ah: sW.id });
+    ahState[sW.id] = { ...sW, hrs: Math.round(Math.max(0, new Date(sW.ended_at).getTime() - new Date(sW.started_at).getTime()) / 360000) / 10 }; }
   for (const it of items) {
     let open = false, done = "";
     if (it.kind === "insp") { const b = B.get(it.order); open = !!b && b.state === "awaiting_inspection"; done = b && ["rework", "fix_job"].includes(b.state) ? "✓ Sent back for a fix" : b && ["production_complete", "complete"].includes(b.state) ? "✓ Passed inspection" : "✓ No longer waiting"; }
@@ -4408,7 +4447,9 @@ const inboxPage = (emp, notes, ahState300 = {}, bell362o = null, o364 = {}) => `
     try { var res = await fetch(what === "decline" ? "/api/afterhours/decline" : "/api/afterhours/signoff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       var out = await res.json();
       if (out.ok) { row.innerHTML = what === "decline" ? '<span style="color:#ff8a80;font-weight:800">\u2715 Denied \u2014 hours don\u2019t count. They\u2019ve been told.</span>' : '<span style="color:#30d158;font-weight:800">\u2713 Approved \u2014 the hours are on the timecard.</span>';
-        var tag = document.getElementById("ahtag-" + id); if (tag) tag.remove(); less362(); return; }   // Block 362: the count goes down by one
+        var tag = document.getElementById("ahtag-" + id), card377 = tag && row.parentNode; if (tag) tag.remove(); less362();
+        if (card377) setTimeout(function(){ card377.style.transition = "opacity .4s"; card377.style.opacity = "0"; setTimeout(function(){ card377.remove(); }, 420); }, 1500);   // Block 377: a decided Needs-you card leaves the list
+        return; }   // Block 362: the count goes down by one
       msg.textContent = out.error || "Something went wrong";
     } catch (e) { msg.textContent = "Network hiccup \u2014 try again"; }
     btn.disabled = false;
@@ -6508,7 +6549,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span></details>
     </div>
   </div>`)}
-  ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
+  ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}${acct189 && o360.cal377 ? calPanel377(o360.cal377) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -16796,6 +16837,7 @@ const handleRequest355 = async (req, res) => {
       // lunch / end-of-day punches) + Tools menu of Pay Worksheet & Reports.
       // No cab lines, no inspection — she thinks in punches, not lines.
       const acct189 = me.role === "manager" && me.department === "Accounting";
+      const cal377P = acct189 ? db(`shop_calendar?select=cal_date,is_open,reason&cal_date=gte.${phxDate(Date.now())}&order=cal_date`).catch(() => []) : null;   // Block 377: her calendar — rides beside the console's waves
       const insp188 = me.role === "manager" && me.department !== "Production" && !acct189;
       // Block 360 (Daniel 11/5 11:01, Plan 84): an ADMIN's console folds every section; the four line cards load only when opened
       // (?part=line99-N fetches one). A line card's per-cab work (the sign-off checklist, the fix status) is skipped until then.
@@ -17227,7 +17269,7 @@ const handleRequest355 = async (req, res) => {
       // Block 61: projected finish per in-progress cab, shown on each active
       // line card. Same shared helper as /coverage + /meeting (one board read).
       const { byOrder: mgrProj } = proj212;
-      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215, canInspect321(me), { fold: fold360, part: part360, tcOpen: Boolean(tcEmpSel) }));   // Block 360: the admin folds · Block 321: sign-off/send-back controls only for Body Shop managers + admins
+      return send(200, "text/html; charset=utf-8", managerPage(rows, reworkReasons, me.role === "admin", onClock, longRunners, recentDone, Boolean(repTog && repTog.enabled), afterHours, (insp188 || acct189) ? false : canCloseLines, (insp188 || acct189) ? null : tc, downReasons, timeoff, fixjob, mgrProj, insp188, acct189, tcard191, odd215, canInspect321(me), { fold: fold360, part: part360, tcOpen: Boolean(tcEmpSel), ...(acct189 ? { cal377: await cal377P } : {}) }));   // Block 360: the admin folds · Block 321: sign-off/send-back controls only for Body Shop managers + admins
     }
 
     // Q92 (part 2): THE MEETING PACK — a read-only living snapshot. Manager +
@@ -19697,7 +19739,11 @@ self.addEventListener("notificationclick", (e) => {
 
     // Q91: SHOP CALENDAR — mark a date closed/open, or clear the override.
     if (url.pathname === "/api/admin/calendar" && req.method === "POST") {
-      const [adminId, fail] = await requireAdmin(); if (fail) return fail;
+      // Block 377 (Daniel 11/11 15:07): the ACCOUNTING MANAGER keeps the holidays up to date too (open / closed days only)
+      const sid377 = await liveSession(req); if (!sid377) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me377] = await db(`employee?select=id,role,department&id=eq.${sid377}`);
+      if (!canCal377(me377)) return json(403, { ok: false, error: "Admins and the accounting manager only" });
+      const adminId = sid377;
       const { action, cal_date, is_open, reason } = await body(req);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(cal_date || "")) || isNaN(new Date(cal_date + "T12:00:00Z").getTime()))
         return json(400, { ok: false, error: "Pick a real date first" });
