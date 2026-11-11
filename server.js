@@ -4683,7 +4683,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
         rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
           (grpS.length ? grpS.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:.95rem;margin-bottom:4px;color:' + LTHD[lt(l.id)] + ';opacity:.85">' + e353(l.name) + '</div>' +
             ((l.upcoming || []).length ? l.upcoming.map(u => '<a class="up353" href="/order/' + encodeURIComponent(u.order) + '" style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;color:inherit;text-decoration:none;background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px">' +
-              '<div style="min-width:0"><b>ORDER ' + e353(u.order) + '</b><div style="opacity:.8;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e353([u.customer, u.dest].filter(Boolean).join(" · ")) + '</div></div>' +
+              '<div style="min-width:0"><b>ORDER ' + e353(u.order) + '</b>' + (u.hold ? ' <span style="background:#ffd60a;color:#000;border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:900;letter-spacing:.04em;vertical-align:middle">Coyote HOLD</span>' : '') + '<div style="opacity:.8;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e353([u.customer, u.dest].filter(Boolean).join(" · ")) + '</div></div>' +
               (u.eld ? '<div style="text-align:right;flex:none"><div style="font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;opacity:.62">Expected Line Date</div><div style="font-weight:700;font-size:1.02rem;font-variant-numeric:tabular-nums">' + mdy353(u.eld) + '</div>' +
                 (u.eldp ? '<div style="font-size:.74rem;opacity:.62;font-variant-numeric:tabular-nums">(at recent pace: ' + mdy353(u.eldp) + ')</div>' : '') + '</div>' : '') + '</a>').join("")
               : '<div style="opacity:.45;margin-bottom:6px">Nothing in the queue.</div>') +
@@ -4697,7 +4697,7 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
         const grp = s.lines.filter(l => l.upcoming && l.upcoming.length);
         rl.innerHTML = '<div style="font-weight:800;font-size:1.2rem;letter-spacing:.04em;margin:2px 0 10px;opacity:.9">UPCOMING</div>' +
           (grp.length ? grp.map(l => '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:.95rem;margin-bottom:4px;color:' + LTHD[lt(l.id)] + ';opacity:.85">' + l.name + '</div>' +
-            l.upcoming.map(u => '<div style="background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b><div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
+            l.upcoming.map(u => '<div style="background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b>' + (u.hold ? ' <span style="background:#ffd60a;color:#000;border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:900;letter-spacing:.04em;vertical-align:middle">Coyote HOLD</span>' : '') + '<div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
           : '<div style="opacity:.45">Nothing in the queue.</div>');
       }
       // Block 266: the RETURNED FOR FIX lane — own strip, own countdown color.
@@ -11048,7 +11048,10 @@ function classifyForBoard(o) {
   // is noted (coyote_status "Processed" = final payment received); an order we never placed stays history.
   if (st === "Processed") return { action: "paid", stamp: true, reason: "Final payment received (Processed) — noted on the cab; never moves it off the board. An order never placed stays history." };
   if (st === "Cancel" || st === "Cancelled" || st === "-") return { action: "cancel", stamp: true, reason: "Cancelled — marked cancelled, kept for the record." };
-  if (st === "Hold") return { action: "place", state: "on_hold", stamp: true, reason: "On hold — placed and parked; resumes when it returns to Queued." };
+  // Block 376 (Daniel 11/11 14:36 — W121364 / 172C fell off the queue for 6 days): Coyote puts an order on Hold by ITSELF when a
+  // customer pays by check (funds clearing). "Hold status should NOT take it off of the order queue." A Hold cab stays UPCOMING in
+  // its spot with a HOLD tag (coyote_status "Hold"); it builds as normal (Daniel 14:41: "Build it anyway"). Queued clears the tag.
+  if (st === "Hold") return { action: "place", state: "upcoming", hold: true, stamp: true, reason: "On hold in Coyote — stays on the queue with a Coyote HOLD tag." };
   if (st === "Queued") return { action: "place", state: "upcoming", stamp: true, reason: "" };
   return { action: "park", stamp: false, reason: 'Unexpected status "' + (st || "—") + '" — held for a look rather than guessing.' };
 }
@@ -11242,7 +11245,7 @@ function buildSyncPlan(ctx) {
           name = want; if (taken.has(name)) { let n = i + 1; while (taken.has(`${o.orderNo}.${n}`)) n++; name = `${o.orderNo}.${n}`; }
           give(name);   // (review 1 blocker 2: the allocator consumes the names it hands out — two new rows never share one)
         }
-        targets.push({ order_number: name, coyote_root: o.orderNo, line_id: cp.line, part_number: cp.part, state: dec.state,
+        targets.push({ hold: Boolean(dec.hold), order_number: name, coyote_root: o.orderNo, line_id: cp.line, part_number: cp.part, state: dec.state,
           customer_name: o.custName || null, destination: o.dest, invoice_note: o.note || null, note_flagged: !!o.note,
           row_key: cp.rowKey350, row_idx: cp.rowIdx350, existing_id: ex ? ex.id : null, row_moved: Boolean(ex && ex.coyote_row_key && String(ex.coyote_row_key).startsWith(ROW_KEY_VER_351) && ex.coyote_row_key !== cp.rowKey350) });   // Block 351: an old-version key being upgraded is not an edit
       });
@@ -11286,6 +11289,19 @@ async function syncRun(apply, actorId) {
   const sum = { applied: !!apply, orders: plan.length, placed: 0, updated: 0, flagged: 0, completed: 0, cancelled: 0, parked: 0, excluded: 0, noop: 0, actions: [] };
   const stampIds = [];
   const A = (order, doWhat, extra) => sum.actions.push(Object.assign({ order, do: doWhat }, extra || {}));
+  // Block 376: a cab the OLD rule set aside (state on_hold, never started) goes back on its line's queue, keeping its spot and its
+  // Hold note. Nothing else ever writes on_hold, so after one run this finds nothing. Audited per cab.
+  if (apply) { try {
+    const aside376 = await db(`build?select=id,order_number,coyote_root,cab_number,line_id,queue_pos&state=eq.on_hold&started_at=is.null`);
+    const roots376 = [...new Set(aside376.map((b) => b.coyote_root || b.order_number))];
+    const wasQ376 = new Set(roots376.length ? (await db(`coyote_intake?select=order_number&order_number=in.(${roots376.map((r) => encodeURIComponent(r)).join(",")})&payload->order->>status=eq.Queued`)).map((r) => r.order_number) : []);
+    for (const bH of aside376.filter((b) => wasQ376.has(b.coyote_root || b.order_number))) {   // Daniel 14:40: an order never Queued (23953, still at "Order") stays off the queue
+      await db(`build?id=eq.${bH.id}`, { method: "PATCH", body: JSON.stringify({ state: "upcoming", coyote_status: "Hold" }) });
+      const bc376 = ctx.buildByOrder[bH.order_number]; if (bc376) { bc376.state = "upcoming"; bc376.coyote_status = "Hold"; }   // Fable: the loop below reads ctx — a Hold push in the same run must not write on_hold back
+      logEvent("sync.hold_back_on_queue", actorId || null, { build_id: bH.id, order_number: bH.order_number, cab_number: bH.cab_number || null, line_id: bH.line_id, queue_pos: bH.queue_pos, because: "Block 376: Coyote Hold no longer takes a cab off the queue" });
+      sum.updated++; A(bH.order_number, "back on the queue — Coyote Hold no longer sets it aside", { line: bH.line_id });
+    }
+  } catch (e376) { console.error("hold back on queue:", e376 && e376.message); } }
   for (const it of plan) {
     // Block 176 (Fable-5): office notices when Aaron's interface flag and the
     // board's part library DISAGREE — the only two drift cases left now.
@@ -11375,8 +11391,11 @@ async function syncRun(apply, actorId) {
       for (const t of it.targets) {
         const b = ctx.buildByOrder[t.order_number];
         if (!b) {
+          // Block 376 (Daniel 14:40, 23953): Hold on an order that was NEVER Queued (still at "Order" — no deposit) creates
+          // nothing. The old rule built a set-aside cab from it. It places when Coyote says Queued.
+          if (t.hold) { sum.parked++; A(t.order_number, "on Hold in Coyote before it was ever Queued — not placed; it places when Coyote says Queued", { line: t.line_id }); continue; }
           const cn = nextCabNumber(ctx, t.part_number);
-          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null, coyote_row_key: t.row_key || null, coyote_row_idx: t.row_idx ?? null, ...(t.behind_at ? { created_at: t.behind_at } : {}), ...(t.behind_pos != null ? { queue_pos: t.behind_pos } : {}) }) });   // Block 350: tied to its Coyote row; queued behind its siblings (R3)
+          if (apply) await db("build", { method: "POST", body: JSON.stringify({ order_number: t.order_number, coyote_root: t.coyote_root, line_id: t.line_id, part_number: t.part_number, cab_number: cn, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.hold ? "Hold" : null, coyote_row_key: t.row_key || null, coyote_row_idx: t.row_idx ?? null, ...(t.behind_at ? { created_at: t.behind_at } : {}), ...(t.behind_pos != null ? { queue_pos: t.behind_pos } : {}) }) });   // Block 350: tied to its Coyote row; queued behind its siblings (R3)
           sum.placed++; A(t.order_number, "place", { line: t.line_id, part: t.part_number, state: t.state, cab: cn });
         } else if (b.started_at) {
           const patch = {};
@@ -11393,7 +11412,7 @@ async function syncRun(apply, actorId) {
           // a state move. (Block 323: "Processed" = final payment received — it no
           // longer removes anything either; it is noted by the "paid" branch above.)
           // Queued clears the note (back to normal).
-          const cs120 = t.state === "on_hold" ? "Hold" : (t.state === "upcoming" ? null : (b.coyote_status || null));
+          const cs120 = t.hold ? "Hold" : (t.state === "upcoming" ? null : (b.coyote_status || null));   // Block 376: Hold now arrives as upcoming + hold
           if ((b.coyote_status || null) !== cs120) patch.coyote_status = cs120;
           const disruptive = (b.line_id !== t.line_id) || (String(b.part_number) !== String(t.part_number));
           if (apply && Object.keys(patch).length) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -11448,9 +11467,9 @@ async function syncRun(apply, actorId) {
           // Block 120: a NOT-started cab follows Coyote — Hold sets it aside
           // (state on_hold, off the line-up), Queued returns it to upcoming in
           // its line's queue and clears the note.
-          const patch = { coyote_row_key: t.row_key || b.coyote_row_key || null, coyote_row_idx: t.row_idx ?? b.coyote_row_idx ?? null, line_id: syncLine318(b, t.line_id), part_number: t.part_number, state: t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.state === "on_hold" ? "Hold" : null };
+          const patch = { coyote_row_key: t.row_key || b.coyote_row_key || null, coyote_row_idx: t.row_idx ?? b.coyote_row_idx ?? null, line_id: syncLine318(b, t.line_id), part_number: t.part_number, state: t.hold && b.state === "on_hold" ? "on_hold" : t.state, customer_name: t.customer_name, destination: t.destination, invoice_note: t.invoice_note, note_flagged: t.note_flagged, coyote_status: t.hold ? "Hold" : null };   // Block 376: Hold keeps a queued cab ON the queue; a cab set aside before it was ever Queued stays aside until Queued
           if (apply) await db(`build?order_number=eq.${encodeURIComponent(t.order_number)}`, { method: "PATCH", body: JSON.stringify(patch) });
-          sum.updated++; A(t.order_number, t.state === "on_hold" ? "set aside — on hold before production" : "update", { line: t.line_id });
+          sum.updated++; A(t.order_number, t.hold ? "on hold in Coyote — stays on the queue (Coyote HOLD tag)" : "update", { line: t.line_id });
           // Block 350 (Daniel R5 "yes, flag it"): the row this cab came from was EDITED in Coyote (price or options) and 3 pushes
           // agree — the cab followed its row; an admin should glance at it (the kit list / upgrade hours may differ now).
           if (apply && t.row_moved) { try { await flagCabAlert176("rows", b, `Coyote edited this cab's order row (price or options changed) and the change has settled. The cab followed its row — check its options and kit list.`, it.orderNo, actorId); sum.flagged++; } catch (eM) { console.error("row-moved flag:", (eM && eM.message) || eM); } }
@@ -11722,7 +11741,7 @@ function whereNow339(b, ctx) {
   const st = String(b.state || "");
   if (st === "cancelled") return W("cancelled", "Cancelled", "this order was cancelled", null, -1, "#6e6e73");
   const coyHold = b.coyote_status && !["Queued", "Processed"].includes(String(b.coyote_status));
-  if (st === "on_hold" || (st === "upcoming" && coyHold)) return W("hold", "On hold", `Coyote says the order is ${b.coyote_status || "on hold"} — set aside until it returns to Queued`, b.created_at, 0, "#6e6e73");
+  if (st === "on_hold" || (st === "upcoming" && coyHold)) return W("hold", "On hold", `Coyote says the order is ${b.coyote_status || "on hold"} — it stays in line on the queue (Block 376)`, b.created_at, 0, "#6e6e73");
   if (st === "upcoming") {
     const kit = b.kit_pull_started_at ? "kit pulled — ready to deliver" : b.kit_status === "verified" ? "kit verified — waiting to be pulled" : b.kit_status === "short" ? "kit short — parts missing" : "kit not checked yet";
     return W("queue", "In the order queue", `${ln ? ln + " · " : ""}${kit}`, b.created_at, 0, "#8e8e93");
@@ -16468,7 +16487,7 @@ const handleRequest355 = async (req, res) => {
       const [lines, emps, builds, namesTogRows212, prods, hrsB] = await Promise.all([
         db(`line?select=id,name,manually_closed,down_today,down_reason,people_planned&enabled=is.true&order=id`),   // Block 314: +people_planned
         db(`employee?select=id,first_name,last_name&active=is.true`),   // Block 332 review: +last_name so the "Test Account" half of isTestAcct215 works on the board
-        db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state
+        db(`build?select=id,order_number,part_number,cab_number,line_id,started_at,promised_finish,state,created_at,queue_pos,customer_name,destination,rework_reason,rework_hours,rework_assigned_at,fix_kind,fix_reason,fix_hours,fix_assigned_at,prep_state,coyote_status&state=in.(active,upcoming,awaiting_inspection,rework,fix_job)&order=created_at`),   // Block 301: +prep_state · Block 376: +coyote_status (the HOLD tag)
         // Block 88 (owner-rep): the TV tile carries the order's BASIC info —
         // order #, customer or business name, ship-to state. The Q65 toggle
         // ("Customer names on the TV") still governs the name; missing row = ON.
@@ -16636,7 +16655,7 @@ const handleRequest355 = async (req, res) => {
       const payload298 = { shop: shopState, tv, fixjobs: fixjobs266, lines: lines.map((l) => {
         const b = cabOf[l.id];
         const deck = deckOf[l.id] ? { order: deckOf[l.id].order_number, family: familyOf[deckOf[l.id].part_number] || "", customer: who88(deckOf[l.id]), dest: dest88(deckOf[l.id]), prep: deckOf[l.id].prep_state || "none" } : null;   // Block 301: panels ready / in progress / not yet
-        const upcoming95 = (upOf[l.id] || []).map((u) => ({ id: u.id, order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u) }));   // Block 353: +id (the lead-time cache is keyed by build)
+        const upcoming95 = (upOf[l.id] || []).map((u) => ({ id: u.id, order: u.order_number, family: familyOf[u.part_number] || "", customer: who88(u), dest: dest88(u), ...(u.coyote_status === "Hold" ? { hold: true } : {}) }));   // Block 376: Coyote Hold → a tag, never off the queue   // Block 353: +id (the lead-time cache is keyed by build)
         // No active cab but one waiting on Mike? The board says so plainly.
         if (!b && waitOf[l.id]) {
           const w = waitOf[l.id];
