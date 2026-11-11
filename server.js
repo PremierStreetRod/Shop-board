@@ -9123,7 +9123,8 @@ async function reportData(startMs, endMs) {
 // catch-up, not counted. Every cab left out of a section is named with the reason — never dropped silently.
 const CLEAN_START_370 = "2026-09-28";
 const SPANS_370 = [["4753", "47-53"], ["5559", "55-59"], ["6466", "64-66"], ["6772", "67-72 Chevy"], ["6972", "69-72 Blazer"], ["F6772", "67-72 Ford"]];
-const CATCHUP_MIN_370 = 15;   // a department whose steps were all tapped done within 15 minutes with no hours = catch-up
+const CATCHUP_MIN_370 = 15;
+const BODY_DAY_H_371 = 8;   // Block 371: Body's planned days = its allowed hours ÷ an 8-hour day (one person on it — Body has no people-planned yet)   // a department whose steps were all tapped done within 15 minutes with no hours = catch-up
 const EARLY_N_370 = 3;        // fewer real cabs than this = EARLY
 const LIFE_EXTRA_370 = ["build.finish", "kit.pull_started", "body.step_done", "build.line_moved"];   // Fable: + line moves (hours follow the cab across lines)
 const r1_370 = (n) => n == null || !Number.isFinite(n) ? null : Math.round(n * 10) / 10;
@@ -9175,14 +9176,17 @@ async function load370fresh(nowMs) {
   const famOf = {}; for (const p of prods || []) famOf[String(p.part_number).toUpperCase()] = p.family;
   const spanOf = (pn) => { const f = famOf[String(pn || "").toUpperCase()]; const hit = SPANS_370.find((s) => s[1] === f); return hit ? hit[0] : null; };
   const ids = builds.map((b) => b.id); const chunks = []; for (let i = 0; i < ids.length; i += 80) chunks.push(ids.slice(i, i + 80));
-  const [taskRows, life] = await Promise.all([
+  const [taskRows, life, bodyRows, whRows] = await Promise.all([
     Promise.all(chunks.map((c) => dbAll252(`task?select=build_id,man_hours,state,completed_by,is_background,source&build_id=in.(${c.join(",")})`))).then((x) => x.flat()),
     loadCabLife342(builds, hrs, isOpen, nowMs, testIds, { extra: LIFE_EXTRA_370, evSinceMs: cleanMs - 60 * 86400000 }),
+    Promise.all(chunks.map((c) => dbAll252(`body_task?select=build_id,round,hours_allowed&build_id=in.(${c.join(",")})`))).then((x) => x.flat()).catch(() => []),   // Block 371: Body's allowed hours
+    Promise.all(chunks.map((c) => dbAll252(`wh_task?select=build_id,round,kind,hours_allowed,started_at&build_id=in.(${c.join(",")})`))).then((x) => x.flat()).catch(() => []),   // Block 371: crating's allowed hours + when it started
   ]);
   const ivs = life.ivs370 || [], evBy = life.evBy370 || {};
   const tBy = {}; for (const t of taskRows) (tBy[t.build_id] = tBy[t.build_id] || []).push(t);
   const floorMs = nowMs - LIFE_FLOOR_DAYS_342 * 86400000;   // Fable: punches older than the 180-day memory were never read — those cabs can't be measured honestly
-  const cabs = builds.map((b) => cab370(b, spanOf(b.part_number), tBy[b.id] || [], evBy[b.id] || [], life[b.id], ivs, hrs, isOpen, nowMs, floorMs));
+  const btBy = {}, wtBy = {}; for (const r of bodyRows) (btBy[r.build_id] = btBy[r.build_id] || []).push(r); for (const r of whRows) (wtBy[r.build_id] = wtBy[r.build_id] || []).push(r);
+  const cabs = builds.map((b) => cab370(b, spanOf(b.part_number), tBy[b.id] || [], evBy[b.id] || [], life[b.id], ivs, hrs, isOpen, nowMs, floorMs, { bt: btBy[b.id] || [], wt: wtBy[b.id] || [] }));
   const nameOf = {}; for (const e of emps || []) nameOf[e.id] = `${e.first_name || ""} ${e.last_name ? e.last_name[0] + "." : ""}`.trim();
   return { cabs, nowRows: (nowRows || []).map((b) => ({ ...b, span: spanOf(b.part_number) })), thruEv: thruEv || [], hrs, isOpen, nowMs, nameOf };
 }
@@ -9191,7 +9195,7 @@ const openDays370 = (aMs, bMs, isOpen) => { if (!(aMs > 0) || !(bMs >= aMs)) ret
   for (let d = phxDate(aMs), i = 0; i < 400; i++) { if (isOpen(d)) n++; if (d >= end) break; d = phxDate(phxDayStart(d) + 36 * 3600000); } return n; };
 const daysCal370 = (a, b) => (a > 0 && b > a) ? (b - a) / 86400000 : null;
 // one cab's whole record: per section either the numbers or the reason it's left out
-function cab370(b, span, tasks, evs, L, ivs, hrs, isOpen, nowMs, floorMs = 0) {
+function cab370(b, span, tasks, evs, L, ivs, hrs, isOpen, nowMs, floorMs = 0, x371 = { bt: [], wt: [] }) {
   const t = (e) => new Date(e.at).getTime();
   const of = (type) => evs.filter((e) => e.event_type === type);
   const S = b.started_at ? new Date(b.started_at).getTime() : null;
@@ -9237,14 +9241,28 @@ function cab370(b, span, tasks, evs, L, ivs, hrs, isOpen, nowMs, floorMs = 0) {
   if (!bDone) out.why.body = jumped("body") ? "moved past Body by hand" : P ? "not through Body yet" : "not through production yet";
   else if (!bIn || t(bIn) > t(bDone)) out.why.body = "no Body entry on record (before Body tracking)";
   else if (caught(steps("body.step_done", t(bIn), t(bDone)))) out.why.body = "tapped through to catch up";
-  else out.body = { inAt: t(bIn), doneAt: t(bDone), days: daysCal370(t(bIn), t(bDone)), idle: L ? L.body.hours : null };
+  else {   // Block 371: hours = everyone clocked into the cab on Body (stamped punches + the open-row intervals, Block 345) between entering and Done in primer
+    const bh = ivs.filter((iv) => iv.fix === b.id && Number(iv.line) === BODY_LINE_ID).reduce((s2, iv) => s2 + overlapHrs(iv, t(bIn), t(bDone)), 0);
+    const r1 = Math.min(...x371.bt.map((r) => Number(r.round || 1)).concat([Infinity])); const ballow = x371.bt.filter((r) => Number(r.round || 1) === r1).reduce((s2, r) => s2 + Number(r.hours_allowed || 0), 0);   // the first round = the Body job as planned
+    const bdays = openDays370(t(bIn), t(bDone), isOpen); const bplan = ballow > 0 ? Math.max(1, Math.ceil(ballow / BODY_DAY_H_371 - 1e-9)) : null;
+    out.body = { inAt: t(bIn), doneAt: t(bDone), days: daysCal370(t(bIn), t(bDone)), shopDays: bdays, plan: bplan, vsPlan: bdays != null && bplan != null ? bdays - bplan : null,
+      hours: bh, allowed: ballow || null, vsStd: ballow > 0 ? bh - ballow : null, idle: L ? L.body.hours : null, sendBacks: of("wh.sent_back").length + of("body.new_round").length };
+  }
   // CRATING & SHIPPING — real = the warehouse steps were done before it shipped
   const shipEv = of("wh.shipped")[0]; const handShip = moves.find((m) => m.to === "shipped");
   if (!shipEv) out.why.wh = handShip ? "marked shipped by hand" : "not shipped yet";
   else { const whSteps = steps("wh.step_done", 0, t(shipEv));
     if (caught(whSteps)) out.why.wh = "tapped through to catch up";
     else { const handIn = moves.find((m) => m.to === "crating");
-      out.wh = { shipAt: t(shipEv), mode: (shipEv.payload || {}).mode || b.ship_mode || "", stepH: whSteps.reduce((s, e) => s + Number((e.payload || {}).hours || 0), 0), idle: L && !handIn ? L.wh.hours : null, waitDays: L ? L.wait.calDays : null, handIn: Boolean(handIn) }; } }   // Fable: a hand move into crating has no true entry time → no crating idle
+      // Block 371: crating hours = everyone clocked into the cab on the warehouse line, pass → shipped; allowed = the latest round's step(s)
+      const wr = Math.max(...x371.wt.map((r) => Number(r.round || 1)).concat([-Infinity])); const wLast = x371.wt.filter((r) => Number(r.round || 1) === wr);
+      const wallow = wLast.reduce((s2, r) => s2 + Number(r.hours_allowed || 0), 0);
+      const wh = ivs.filter((iv) => iv.fix === b.id && Number(iv.line) === WH_LINE_ID).reduce((s2, iv) => s2 + overlapHrs(iv, P || S || 0, t(shipEv)), 0);
+      const kind = (shipEv.payload || {}).handling || (wLast[0] && wLast[0].kind) || "";
+      const firstStart = x371.wt.map((r) => r.started_at ? new Date(r.started_at).getTime() : null).filter((v) => v).sort((a, z) => a - z)[0] || null;
+      const beforeH = !handIn && bDone && firstStart && firstStart > t(bDone) ? idleSinceStart332([], t(bDone), firstStart, hrs, isOpen).rawHours : null;   // Body done → crating started (shop-window hours); a hand move in has no true start
+      out.wh = { shipAt: t(shipEv), mode: (shipEv.payload || {}).mode || b.ship_mode || "", kind, stepH: whSteps.reduce((s, e) => s + Number((e.payload || {}).hours || 0), 0), hours: wh, allowed: wallow || null, vsStd: wallow > 0 ? wh - wallow : null,
+        before: beforeH, idle: L && !handIn ? L.wh.hours : null, waitDays: L && L.windows.wait.length ? L.wait.calDays : null, handIn: Boolean(handIn) }; } }   // Fable: a hand move into crating has no true entry time → no crating idle
   // WHOLE LIFE — only a cab that really left through the warehouse (a hand-marked "shipped" has no true leave time)
   if (out.wh && S) {
     // Fable (live check 11/11): the warehouse's Deliver tap IS the cab's start (kit_delivered_at == started_at on every cab), so there is
@@ -9295,7 +9313,8 @@ function view370(D, ch, prev = false) {
   const glance = {
     life: { avg: r1_370(mean370(Lf.map((c) => c.life.total))), n: Lf.length },
     onUnder: { pct: P.length ? Math.round(100 * onUnder / P.length) : null, x: onUnder, y: P.length },
-    labor: { net: P.length ? r1_370(P.reduce((s, c) => s + c.prod.vsStd, 0)) : null, n: P.length },
+    labor: { net: P.length || B.length || W.length ? r1_370(P.reduce((s, c) => s + c.prod.vsStd, 0) + B.reduce((s, c) => s + (c.body.vsStd || 0), 0) + W.reduce((s, c) => s + (c.wh.vsStd || 0), 0)) : null, n: P.length,
+      parts: { prod: r1_370(P.reduce((s, c) => s + c.prod.vsStd, 0)), body: B.length ? r1_370(B.reduce((s, c) => s + (c.body.vsStd || 0), 0)) : null, wh: W.length ? r1_370(W.reduce((s, c) => s + (c.wh.vsStd || 0), 0)) : null } },   // Block 371: every department
     byPlan: (() => { const r = P.filter((c) => c.prod.byPlan != null); const on = r.filter((c) => c.prod.byPlan).length; const late = r.filter((c) => c.prod.byPlan === false);
       return { pct: r.length ? Math.round(100 * on / r.length) : null, x: on, y: r.length, late: late.length, lateAvg: late.length ? r1_370(mean370(late.map((c) => c.prod.lateDays))) : null }; })(),
     idle: { avg: [idle.prod, idle.body, idle.wh].every((x) => x == null) ? null : r1_370((idle.prod || 0) + (idle.body || 0) + (idle.wh || 0)), most: [["production", idle.prod], ["Body", idle.body], ["crating", idle.wh]].filter((x) => x[1] != null).sort((a, z) => z[1] - a[1])[0] || null, n: P.length },
@@ -9347,7 +9366,7 @@ function glance370(D, ch, V, Vp, T) {
     tile("Shipped this month", `${T.shippedM}`, `pace ≈ ${T.pace == null ? "—" : T.pace} this month · last month ${T.lastM}${T.handM ? ` · +${T.handM} marked shipped by hand` : ""}`, arrow370(T.shippedM, T.lastM, "", false, "more", "fewer").replace("than before", "than last month")),
     tile("Kit pull → shipped", g.life.avg == null ? "—" : `${f1_370(g.life.avg)} d`, `average · ${g.life.n} cab${g.life.n === 1 ? "" : "s"}${early(g.life.n)}`, arrow370(g.life.avg, p && p.life.avg, " d", true, "faster", "slower")),
     tile("Cabs on / under hours", g.onUnder.pct == null ? "—" : `${g.onUnder.pct}%`, `${g.onUnder.x} of ${g.onUnder.y} cabs within their allowed hours${early(g.onUnder.y)}`, arrow370(g.onUnder.pct, p && p.onUnder.pct, " pts", false, "better", "worse")),
-    tile("Labor vs standard", g.labor.net == null ? "—" : `${g.labor.net > 0 ? "+" : ""}${f1_370(g.labor.net)} h`, g.labor.net == null ? "" : `${g.labor.net > 0 ? "over" : "under"} the allowed hours, all cabs counted (production)`, arrow370(g.labor.net, p && p.labor.net, " h", true, "better", "worse")),
+    tile("Labor vs standard", g.labor.net == null ? "—" : `${g.labor.net > 0 ? "+" : ""}${f1_370(g.labor.net)} h`, g.labor.net == null ? "" : `${g.labor.net > 0 ? "over" : "under"} the allowed hours, every department · production ${g.labor.parts.prod > 0 ? "+" : ""}${f1_370(g.labor.parts.prod)}${g.labor.parts.body != null ? ` · Body ${g.labor.parts.body > 0 ? "+" : ""}${f1_370(g.labor.parts.body)}` : ""}${g.labor.parts.wh != null ? ` · crating ${g.labor.parts.wh > 0 ? "+" : ""}${f1_370(g.labor.parts.wh)}` : ""}`, arrow370(g.labor.net, p && p.labor.net, " h", true, "better", "worse")),   // Block 371: every department
     tile("Idle hours per cab", g.idle.avg == null ? "—" : `${f1_370(g.idle.avg)} h`, g.idle.most ? `most in ${g.idle.most[0]} (${f1_370(g.idle.most[1])} h)` : "", arrow370(g.idle.avg, p && p.idle.avg, " h", true, "less", "more")),
     tile("Off the line by the planned date", g.byPlan.pct == null ? "—" : `${g.byPlan.pct}%`, g.byPlan.pct == null ? "no planned dates yet" : `${g.byPlan.x} of ${g.byPlan.y} passed inspection by the line's planned finish${g.byPlan.late ? ` · ${g.byPlan.late} late, ≈ ${f1_370(g.byPlan.lateAvg)} shop day${g.byPlan.lateAvg === 1 ? "" : "s"} each` : ""}${early(g.byPlan.y)}`, arrow370(g.byPlan.pct, p && p.byPlan.pct, " pts", false, "better", "worse")),
     tile("Biggest wait", g.big ? `${f1_370(g.big.days)} d` : "—", g.big ? `${g.big.label}${early(g.big.n)}` : "no waits measured yet", g.big && p && p.big && p.big.label === g.big.label ? arrow370(g.big.days, p.big.days, " d", true, "shorter", "longer") : ""),
@@ -9375,6 +9394,28 @@ function prodRows370() {
     { label: "Send-backs + fix jobs", sub: "per cab", get: (c) => c.prod.sendBacks, fmt: (v) => f1_370(v), note: (v, cabs) => { const h = mean370(cabs.map((c) => c.prod.fixH)); return h ? `fix-job hours ${f1_370(h)} h` : ""; } },
   ];
 }
+// Block 371: Body + Crating & shipping rows
+function bodyRows371() {
+  return [
+    { label: "Days in Body", sub: "entered Body → Done in primer (shop days)", get: (c) => c.body.shopDays, fmt: (v) => `${f1_370(v)} d` },
+    { label: "Hours vs allowed", sub: "everyone clocked into the cab in Body vs Body's allowed hours", get: (c) => c.body.vsStd,
+      fmt: (v, cabs) => `${f1_370(mean370(cabs.map((c) => c.body.hours)))} / ${f1_370(mean370(cabs.map((c) => c.body.allowed)))} h`, note: (v) => ahead370(v, "h"), rfmt: (r) => `${r[0] > 0 ? "+" : ""}${f1_370(r[0])} to ${r[1] > 0 ? "+" : ""}${f1_370(r[1])} h` },
+    { label: "Days vs planned", sub: `Body's allowed hours ÷ ${BODY_DAY_H_371} h a day`, get: (c) => c.body.vsPlan, fmt: (v) => Math.abs(v) < 0.05 ? "on plan" : `${v > 0 ? "+" : "−"}${f1_370(Math.abs(v))} d`, note: (v) => Math.abs(v) < 0.05 ? "" : v > 0 ? "&#9650; behind plan" : "&#9660; ahead of plan" },
+    { label: "Idle in Body", sub: "shop hours nobody was on it in Body", get: (c) => c.body.idle, fmt: (v) => `${f1_370(v)} h` },
+    { label: "Sent back to Body", sub: "from crating, per cab", get: (c) => c.body.sendBacks, fmt: (v) => f1_370(v) },
+  ];
+}
+const KIND_371 = (k) => (WH_HANDLING359.find((h) => h.key === k) || { label: k || "?" }).label;
+function whRows371() {
+  return [
+    { label: "Crating hours vs allowed", sub: "everyone clocked into the cab at the warehouse vs the allowed hours for how it left", get: (c) => c.wh.vsStd,
+      fmt: (v, cabs) => `${f1_370(mean370(cabs.map((c) => c.wh.hours)))} / ${f1_370(mean370(cabs.map((c) => c.wh.allowed)))} h`,
+      note: (v, cabs) => { const m = {}; for (const c of cabs) m[KIND_371(c.wh.kind)] = (m[KIND_371(c.wh.kind)] || 0) + 1; return `${ahead370(v, "h")}<br>${Object.entries(m).map(([k, n]) => `${n} ${k}`).join(" · ")}`; }, rfmt: (r) => `${r[0] > 0 ? "+" : ""}${f1_370(r[0])} to ${r[1] > 0 ? "+" : ""}${f1_370(r[1])} h` },
+    { label: "Idle before crating", sub: "Done in primer → crating started (shop hours)", get: (c) => c.wh.before, fmt: (v) => `${f1_370(v)} h` },
+    { label: "Idle while crating", sub: "shop hours nobody was on it at the warehouse", get: (c) => c.wh.idle, fmt: (v) => `${f1_370(v)} h` },
+    { label: "Sat crated / ready", sub: "ready → shipped or picked up (calendar days)", get: (c) => c.wh.waitDays, fmt: (v) => `${f1_370(v)} d` },
+  ];
+}
 const STAGES_370 = [["pull", "Kit pull", "#5e5ce6", "repeating-linear-gradient(45deg,#000 0 1px,transparent 1px 5px)"], ["prod", "Production", "#C8102E", "none"], ["body", "Body", "#5eaeff", "repeating-linear-gradient(90deg,#000 0 1px,transparent 1px 6px)"], ["crating", "Crating", "#ff9f0a", "repeating-linear-gradient(0deg,#000 0 1px,transparent 1px 5px)"], ["leave", "Waiting to leave", "#30d158", "radial-gradient(#000 1px,transparent 1px) 0 0/5px 5px"], ["gap", "Between depts / untracked", "#3a3a3c", "none"]];   // Fable: the bar adds up to the total — what no stage tracked (the waits between departments, a hand-moved stage) is its own grey piece
 function life370(ch, V) {
   const rows = ch.spans.map((sp) => { const cabs = V.by[sp].life; const st = {}; for (const [k] of STAGES_370) st[k] = r1_370(mean370(cabs.map((c) => c.life.st[k]))); return { sp, cabs, st, total: r1_370(mean370(cabs.map((c) => c.life.total))) }; });
@@ -9393,11 +9434,13 @@ function thruHtml370(T) {
 }
 function used370(D, ch, V) {
   const link = (c) => `<a href="/order/${encodeURIComponent(c.order)}">${escH(c.order)}</a>`;
-  return ch.spans.map((sp) => { const lo = leftOut370(D, "prod", sp, ch), lw = leftOut370(D, "life", sp, ch);
+  return ch.spans.map((sp) => { const lo = leftOut370(D, "prod", sp, ch), lb = leftOut370(D, "body", sp, ch), lw = leftOut370(D, "wh", sp, ch);   // Block 371: + Body + crating (whole life = the crating list)
     return `<div class="used"><b>${spanName370(sp)}</b>
       <div>Production: ${V.by[sp].prod.length ? V.by[sp].prod.map(link).join(", ") : "—"}</div>
+      <div>Body: ${V.by[sp].body.length ? V.by[sp].body.map(link).join(", ") : "—"}</div>
+      <div>Crating &amp; shipping: ${V.by[sp].wh.length ? V.by[sp].wh.map(link).join(", ") : "—"}</div>
       <div>Whole life: ${V.by[sp].life.length ? V.by[sp].life.map(link).join(", ") : "—"}</div>
-      ${lo.length || lw.length ? `<div class="sub">Left out — ${[...lo.map((x) => `${escH(x.order)} (production: ${x.why})`), ...lw.filter((x) => !lo.some((y) => y.order === x.order && y.why === x.why)).map((x) => `${escH(x.order)} (${x.why})`)].join(" · ")}</div>` : ""}</div>`; }).join("");
+      ${lo.length || lb.length || lw.length ? `<div class="sub">Left out — ${[...lo.map((x) => `${escH(x.order)} (production: ${x.why})`), ...lb.map((x) => `${escH(x.order)} (Body: ${x.why})`), ...lw.map((x) => `${escH(x.order)} (crating &amp; shipping: ${x.why})`)].join(" · ")}</div>` : ""}</div>`; }).join("");
 }
 const CSS_370 = `
   .ch{max-width:1180px;margin:0 auto;text-align:left}
@@ -9466,14 +9509,16 @@ function page370(D, ch, me, print) {
     <div class="r"><label><b>Cabs</b> last <input type="number" name="n" min="1" max="50" value="${ch.n}"> off each line</label><span class="lnk">1 = that cab · more = averaged</span>
       <label><b>Dates</b> <select name="dates" id="d370">${[["any", "Any time"], ["pp", "This pay period"], ["lpp", "Last pay period"], ["lpp2", "Last 2 pay periods"], ["custom", "Custom range"]].map(([v, l]) => `<option value="${v}"${ch.dates === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>From <input type="date" name="from" value="${ch.from}" onchange="document.getElementById('d370').value='custom'"></label><label>To <input type="date" name="to" value="${ch.to}" onchange="document.getElementById('d370').value='custom'"></label></div>
-    <div class="r"><button class="run" type="submit">Run report</button><span class="lnk">Your choices stay in the link — bookmark a view</span><span class="rt"><a href="/cab-history?${ch.qs}&print=1" target="_blank" rel="noopener">Print / PDF</a></span></div></form>`;
+    <div class="r"><button class="run" type="submit">Run report</button><span class="lnk">Your choices stay in the link — bookmark a view</span><span class="rt"><a href="/cab-history.xlsx?${ch.qs}">Excel (.xlsx)</a><a href="/cab-history?${ch.qs}&print=1" target="_blank" rel="noopener">Print / PDF</a></span></div></form>`;
   const sec = (title, why, inner, long) => `<div class="sec${long ? " long" : ""}"><h3>${title}</h3>${why ? `<div class="why">${why}</div>` : ""}${inner}</div>`;
   const body = none ? `<div class="sec"><b>Pick at least one year span</b>, then Run report.</div>` : [
     sec("At a glance", `${choices} · arrows compare with ${ch.win ? "the same length of time just before" : `the ${ch.n} cab${ch.n === 1 ? "" : "s"} before these on each line`}`, `<div class="tiles">${glance370(D, ch, V, Vp, T)}</div>`),
     sec("Production", "Each column = the last cabs that passed inspection off that year span's line(s), averaged. Ahead / behind = hours against the cab's allowed hours, and days against the line's planned schedule (not the customer's date).", grid370(ch, V, "prod", prodRows370())),
+    sec("Body", "Each column = the last cabs through Body (Done in primer) for that year span — only cabs that really went through Body's steps; hand moves and tapped-through catch-up are named under Cabs used.", grid370(ch, V, "body", bodyRows371())),
+    sec("Crating &amp; shipping", "Each column = the last cabs that shipped or were picked up through the warehouse steps (tracked since 10/29). A cab moved into crating by hand has no idle-before-crating.", grid370(ch, V, "wh", whRows371())),
     sec("Whole life", "Only cabs that left through the warehouse steps (tracked since 10/29) — kit pull → shipped or picked up, in calendar days. Kit pull runs from the warehouse starting the pull to the cab starting on the line (the kit's delivery IS the start). A stage that wasn't really tracked for a cab (moved by hand) sits in the grey piece.", life370(ch, V)),
     sec("Throughput", "The shop right now and this month — every cab, not limited by the choices above.", thruHtml370(T)),
-    sec("Cabs used", "The cabs behind every number above. Body and Crating & shipping sections arrive with the next block.", used370(D, ch, V), true),
+    sec("Cabs used", "The cabs behind every number above, and every cab left out of a section with the reason.", used370(D, ch, V), true),
   ].join("");
   const honesty = `<p class="hon">Counting starts with cabs started on or after <b>Mon 9/28</b> (when the new 10–13 step lists went live). Body and warehouse tracking began <b>10/29</b>. A section only counts a cab where real data was collected — hand moves and tapped-through catch-up are left out and named under Cabs used. <span class="early">EARLY</span> = fewer than ${EARLY_N_370} cabs behind the number. Ahead / behind = hours against the cab's allowed hours and days against the line's own schedule.</p>`;
   return `<!doctype html>
@@ -9484,6 +9529,197 @@ function page370(D, ch, me, print) {
     : `<div class="logo">SHOP <span>BOARD</span></div>${nav196(me, true)}<h2 style="text-align:center;margin:0 0 10px">Cab History</h2>`}
   <div class="ch">${print ? "" : search}${honesty}${body}</div>
 </div>${print ? `<script>window.addEventListener("load",function(){setTimeout(function(){try{window.print()}catch(e){}},300)})</script>` : ""}</body></html>`;
+}
+
+// ===== Block 371 (Plan 89): the Cab History workbook — "looks and reads clean and is functional as a tool" =====
+// Zero-dependency (zip235). Inline strings; real numbers with number formats; dates as real Excel dates (Phoenix day);
+// the section averages / best / worst are FORMULAS over the Cabs sheet (AVERAGEIFS / MINIFS / MAXIFS by span + the section's
+// in-this-section flag; MINIFS / MAXIFS are post-2007 functions and MUST be stored with the _xlfn. prefix or Excel and LibreOffice show #NAME? — Fable found it with a forced recalculation)
+// in-this-section flag) with their cached values written — so it opens showing numbers everywhere, and deleting a cab's row on
+// the Cabs sheet recomputes them. Frozen header + first two columns + AutoFilter on Cabs; landscape, 1 page wide on every sheet.
+const XE_371 = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+const colL_371 = (n) => { let s = ""; n++; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };   // 0 → A
+const xlDate_371 = (ms) => ms ? Math.round((phxDayStart(phxDate(ms)) - 7 * 3600000 - Date.UTC(1899, 11, 30)) / 86400000) : null;   // the Phoenix day as an Excel serial
+// styles: 0 default · 1 bold · 2 header (white on dark) · 3 0.0 · 4 date · 5 +0.0;-0.0;0.0 · 6 EARLY (pale yellow) · 7 title · 8 0% · 9 0 · 10 wrap text · 11 grey note
+const STYLES_371 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="3"><numFmt numFmtId="164" formatCode="0.0"/><numFmt numFmtId="165" formatCode="+0.0;-0.0;0.0"/><numFmt numFmtId="166" formatCode="m/d/yyyy"/></numFmts>
+<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="16"/><name val="Calibri"/></font></fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2C2C2E"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF3B0"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="12">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment wrapText="1" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+// one cell: { v: number|string|null, s: style, f: formula (cached value = v) }
+function cellXml_371(ref, c) {
+  if (c == null) return "";
+  if (typeof c !== "object") c = { v: c };
+  const s = c.s ? ` s="${c.s}"` : "";
+  if (c.f) { const num = typeof c.v === "number" && Number.isFinite(c.v); return `<c r="${ref}"${s}${num ? "" : ` t="str"`}><f>${XE_371(c.f)}</f>${c.v == null || c.v === "" ? "" : `<v>${num ? c.v : XE_371(c.v)}</v>`}</c>`; }
+  if (c.v == null || c.v === "") return c.s ? `<c r="${ref}"${s}/>` : "";
+  if (typeof c.v === "number") return Number.isFinite(c.v) ? `<c r="${ref}"${s}><v>${c.v}</v></c>` : "";
+  return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${XE_371(c.v)}</t></is></c>`;
+}
+function sheetXml_371(rows, o = {}) {
+  const cols = o.widths ? `<cols>${o.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>` : "";
+  const pane = o.freeze ? `<sheetViews><sheetView workbookViewId="0"><pane xSplit="${o.freeze[0]}" ySplit="${o.freeze[1]}" topLeftCell="${colL_371(o.freeze[0])}${o.freeze[1] + 1}" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>` : `<sheetViews><sheetView workbookViewId="0"/></sheetViews>`;
+  const data = rows.map((r, ri) => r ? `<row r="${ri + 1}"${o.hdrRow === ri + 1 ? ` ht="${o.hdrH || 32}" customHeight="1"` : ""}>${r.map((c, ci) => cellXml_371(`${colL_371(ci)}${ri + 1}`, c)).join("")}</row>` : "").join("");
+  const af = o.filter ? `<autoFilter ref="${o.filter}"/>` : "";
+  const merge = o.merge ? `<mergeCells count="${o.merge.length}">${o.merge.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : "";
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${pane}<sheetFormatPr defaultRowHeight="15"/>${cols}<sheetData>${data}</sheetData>${af}${merge}<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="${o.fitW || 1}" fitToHeight="0"/></worksheet>`;
+}
+function workbook_371(sheets) {   // sheets: [{ name, xml, printTitles? }]
+  const files = [];
+  files.push({ name: "[Content_Types].xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>` });
+  files.push({ name: "_rels/.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>` });
+  files.push({ name: "docProps/core.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>Cab History</dc:title><dc:creator>Shop Board</dc:creator></cp:coreProperties>` });
+  const q371 = (s) => `'${s.name.replace(/'/g, "''")}'`;
+  const names = sheets.map((s, i) => s.printTitles ? `<definedName name="_xlnm.Print_Titles" localSheetId="${i}">${XE_371(`${s.printCols ? `${q371(s)}!${s.printCols},` : ""}${q371(s)}!${s.printTitles}`)}</definedName>` : "").join("")
+    + sheets.map((s, i) => s.filterRef ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">${XE_371(`'${s.name.replace(/'/g, "''")}'!${s.filterRef}`)}</definedName>` : "").join("");
+  files.push({ name: "xl/workbook.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${sheets.map((s, i) => `<sheet name="${XE_371(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets>${names ? `<definedNames>${names}</definedNames>` : ""}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>` });
+  files.push({ name: "xl/_rels/workbook.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` });
+  files.push({ name: "xl/styles.xml", data: STYLES_371 });
+  sheets.forEach((s, i) => files.push({ name: `xl/worksheets/sheet${i + 1}.xml`, data: s.xml }));
+  return zip235(files);
+}
+// THE CABS SHEET columns — the single source the section sheets' formulas read
+const CABCOLS_371 = [
+  ["Order", 11, (c) => ({ v: c.order })], ["Cab #", 7, (c) => ({ v: c.cab || "" })], ["Year span", 13, (c) => ({ v: spanName370(c.span) })],
+  ["Started", 11, (c) => ({ v: xlDate_371(c.S), s: 4 })], ["Passed inspection", 11, (c) => ({ v: xlDate_371(c.P), s: 4 })],
+  ["Body in", 11, (c) => ({ v: c.body ? xlDate_371(c.body.inAt) : null, s: 4 })], ["Done in primer", 11, (c) => ({ v: c.body ? xlDate_371(c.body.doneAt) : null, s: 4 })],
+  ["Shipped / picked up", 11, (c) => ({ v: c.wh ? xlDate_371(c.wh.shipAt) : null, s: 4 })], ["How it left", 10, (c) => ({ v: c.wh ? KIND_371(c.wh.kind) : "" })],
+  ["In Production (1 = counted)", 11, (c) => ({ v: c.inP ? 1 : 0, s: 9 })],
+  ["Days on the jig", 9, (c) => ({ v: c.prod ? c.prod.jig : null, s: 3 })], ["Days vs planned", 9, (c) => ({ v: c.prod ? c.prod.vsPlan : null, s: 5 })],
+  ["Hours worked", 9, (c) => ({ v: c.prod ? r1_370(c.prod.act) : null, s: 3 })], ["Hours allowed", 9, (c) => ({ v: c.prod ? r1_370(c.prod.std) : null, s: 3 })],
+  ["Hours vs allowed (+ over)", 10, (c) => ({ v: c.prod ? r1_370(c.prod.vsStd) : null, s: 5 })], ["Idle on the line (h)", 9, (c) => ({ v: c.prod ? c.prod.idle : null, s: 3 })],
+  ["Waiting for inspection (h)", 10, (c) => ({ v: c.prod && c.prod.insp != null ? c.prod.insp : null, s: 3 })], ["Send-backs + fix jobs", 9, (c) => ({ v: c.prod ? c.prod.sendBacks : null, s: 9 })],
+  ["By the planned date", 9, (c) => ({ v: c.prod && c.prod.byPlan != null ? (c.prod.byPlan ? "Yes" : "No") : "" })],
+  ["In Body (1 = counted)", 10, (c) => ({ v: c.inB ? 1 : 0, s: 9 })],
+  ["Days in Body", 9, (c) => ({ v: c.body ? c.body.shopDays : null, s: 3 })], ["Body hours", 9, (c) => ({ v: c.body ? r1_370(c.body.hours) : null, s: 3 })], ["Body allowed", 9, (c) => ({ v: c.body ? c.body.allowed : null, s: 3 })],
+  ["Body vs allowed (+ over)", 10, (c) => ({ v: c.body && c.body.vsStd != null ? r1_370(c.body.vsStd) : null, s: 5 })], ["Body days vs planned", 9, (c) => ({ v: c.body ? c.body.vsPlan : null, s: 5 })],
+  ["Idle in Body (h)", 9, (c) => ({ v: c.body ? c.body.idle : null, s: 3 })], ["Sent back to Body", 9, (c) => ({ v: c.body ? c.body.sendBacks : null, s: 9 })],
+  ["In Crating (1 = counted)", 10, (c) => ({ v: c.inW ? 1 : 0, s: 9 })],
+  ["Crating hours", 9, (c) => ({ v: c.wh ? r1_370(c.wh.hours) : null, s: 3 })], ["Crating allowed", 9, (c) => ({ v: c.wh ? c.wh.allowed : null, s: 3 })],
+  ["Crating vs allowed (+ over)", 10, (c) => ({ v: c.wh && c.wh.vsStd != null ? r1_370(c.wh.vsStd) : null, s: 5 })], ["Idle before crating (h)", 10, (c) => ({ v: c.wh ? c.wh.before : null, s: 3 })],
+  ["Idle while crating (h)", 9, (c) => ({ v: c.wh ? c.wh.idle : null, s: 3 })], ["Sat crated / ready (d)", 9, (c) => ({ v: c.wh ? r1_370(c.wh.waitDays) : null, s: 3 })],
+  ["In Whole life (1 = counted)", 10, (c) => ({ v: c.inL ? 1 : 0, s: 9 })],
+  ["Kit pull (d)", 8, (c) => ({ v: c.life ? r1_370(c.life.st.pull) : null, s: 3 })], ["Production (d)", 9, (c) => ({ v: c.life ? r1_370(c.life.st.prod) : null, s: 3 })], ["Body (d)", 8, (c) => ({ v: c.life ? r1_370(c.life.st.body) : null, s: 3 })],
+  ["Crating (d)", 8, (c) => ({ v: c.life ? r1_370(c.life.st.crating) : null, s: 3 })], ["Waiting to leave (d)", 9, (c) => ({ v: c.life ? r1_370(c.life.st.leave) : null, s: 3 })],
+  ["Between depts / untracked (d)", 11, (c) => ({ v: c.life ? r1_370(c.life.st.gap) : null, s: 3 })], ["Total pull → gone (d)", 10, (c) => ({ v: c.life ? r1_370(c.life.total) : null, s: 3 })],
+  ["Left out of", 60, (c) => ({ v: c.leftTxt || "" })],   // no wrap — a wrapped cell made its row tall and pushed the numbers to the bottom
+];
+const colOf_371 = (name) => colL_371(CABCOLS_371.findIndex((x) => x[0] === name));
+function xlsx370(D, ch, me) {
+  const V = view370(D, ch, false), Vp = view370(D, ch, true), T = thru370(D);
+  const meName = `${me.first_name || ""} ${me.last_name ? me.last_name[0] + "." : ""}`.trim();
+  const choices = `${ch.spans.length === SPANS_370.length ? "all year spans" : ch.spans.map(spanName370).join(", ")} · last ${ch.n} cab${ch.n === 1 ? "" : "s"} off each line · ${ch.label}`;
+  // the Cabs rows: every cab in any section of the view, then every cab left out (named, with why)
+  const inSet = (sect) => new Set(ch.spans.flatMap((sp) => V.by[sp][sect].map((c) => c.id)));
+  const sP = inSet("prod"), sB = inSet("body"), sW = inSet("wh"), sL = inSet("life");
+  const used = D.cabs.filter((c) => ch.spans.includes(c.span) && (sP.has(c.id) || sB.has(c.id) || sW.has(c.id) || sL.has(c.id)));
+  const lefts = D.cabs.filter((c) => ch.spans.includes(c.span) && !used.includes(c) && ["prod", "body", "wh"].some((k) => c.why[k] && !/not (through|shipped) .*yet$/.test(c.why[k])));
+  const rowsC = [...used, ...lefts].map((c) => ({ ...c, inP: sP.has(c.id), inB: sB.has(c.id), inW: sW.has(c.id), inL: sL.has(c.id),
+    leftTxt: [["prod", "Production"], ["body", "Body"], ["wh", "Crating & shipping"]].filter(([k]) => c.why[k] && !/not (through|shipped) .*yet$/.test(c.why[k])).map(([k, l]) => `${l}: ${c.why[k]}`).join(" · ") }));
+  const nC = rowsC.length, last = nC + 1;
+  const cabsSheet = [CABCOLS_371.map((x) => ({ v: x[0], s: 2 })), ...rowsC.map((c) => CABCOLS_371.map((x) => x[2](c)))];
+  // a section sheet: rows = measure × (average, best, worst); columns = spans; formulas over Cabs
+  const secSheet = (title, sect, flagCol, measures) => {
+    const out = [[{ v: title, s: 7 }], [{ v: `Choices: ${choices}` }], null,
+      [{ v: "Measure", s: 2 }, ...ch.spans.map((sp) => ({ v: spanName370(sp), s: 2 }))],
+      [{ v: "Cabs counted", s: 1 }, ...ch.spans.map((sp) => { const n = V.by[sp][sect].length; return { v: n, s: n && n < EARLY_N_370 ? 6 : 9, f: `COUNTIFS(Cabs!$C$2:$C$${last},"${spanName370(sp)}",Cabs!$${flagCol}$2:$${flagCol}$${last},1)` }; })],
+      [{ v: "EARLY = fewer than 3 cabs (yellow)", s: 11 }]];
+    for (const [label, col, get, st] of measures) {
+      const L = `Cabs!$${col}$2:$${col}$${last}`, crit = (sp) => `Cabs!$C$2:$C$${last},"${spanName370(sp)}",Cabs!$${flagCol}$2:$${flagCol}$${last},1`;
+      const vals = (sp) => V.by[sp][sect].map(get).filter((x) => x != null && Number.isFinite(x));
+      out.push([{ v: `${label} — average`, s: 1 }, ...ch.spans.map((sp) => { const v = vals(sp); return v.length ? { v: r1_370(mean370(v)), s: st, f: `IFERROR(ROUND(AVERAGEIFS(${L},${crit(sp)}),1),"")` } : { v: "", s: st, f: `IFERROR(ROUND(AVERAGEIFS(${L},${crit(sp)}),1),"")` }; })]);
+      out.push([{ v: "   best (lowest)" }, ...ch.spans.map((sp) => { const v = vals(sp); return { v: v.length >= 2 ? r1_370(Math.min(...v)) : "", s: st, f: `IF(COUNTIFS(${crit(sp)},${L},"<>")<2,"",_xlfn.MINIFS(${L},${crit(sp)}))` }; })]);
+      out.push([{ v: "   worst (highest)" }, ...ch.spans.map((sp) => { const v = vals(sp); return { v: v.length >= 2 ? r1_370(Math.max(...v)) : "", s: st, f: `IF(COUNTIFS(${crit(sp)},${L},"<>")<2,"",_xlfn.MAXIFS(${L},${crit(sp)}))` }; })]);
+    }
+    return out;
+  };
+  const C = colOf_371;
+  const prodS = secSheet("Production", "prod", C("In Production (1 = counted)"), [
+    ["Days on the jig", C("Days on the jig"), (c) => c.prod.jig, 3], ["Days vs planned (+ behind)", C("Days vs planned"), (c) => c.prod.vsPlan, 5],
+    ["Hours worked", C("Hours worked"), (c) => r1_370(c.prod.act), 3], ["Hours allowed", C("Hours allowed"), (c) => r1_370(c.prod.std), 3], ["Hours vs allowed (+ over)", C("Hours vs allowed (+ over)"), (c) => r1_370(c.prod.vsStd), 5],
+    ["Idle on the line (h)", C("Idle on the line (h)"), (c) => c.prod.idle, 3], ["Waiting for inspection (h)", C("Waiting for inspection (h)"), (c) => c.prod.insp, 3], ["Send-backs + fix jobs", C("Send-backs + fix jobs"), (c) => c.prod.sendBacks, 3]]);
+  const bodyS = secSheet("Body", "body", C("In Body (1 = counted)"), [
+    ["Days in Body", C("Days in Body"), (c) => c.body.shopDays, 3], ["Body hours", C("Body hours"), (c) => r1_370(c.body.hours), 3], ["Body allowed", C("Body allowed"), (c) => c.body.allowed, 3],
+    ["Body vs allowed (+ over)", C("Body vs allowed (+ over)"), (c) => c.body.vsStd == null ? null : r1_370(c.body.vsStd), 5], ["Body days vs planned (+ behind)", C("Body days vs planned"), (c) => c.body.vsPlan, 5],
+    ["Idle in Body (h)", C("Idle in Body (h)"), (c) => c.body.idle, 3], ["Sent back to Body", C("Sent back to Body"), (c) => c.body.sendBacks, 3]]);
+  const whS = secSheet("Crating & Shipping", "wh", C("In Crating (1 = counted)"), [
+    ["Crating hours", C("Crating hours"), (c) => r1_370(c.wh.hours), 3], ["Crating allowed", C("Crating allowed"), (c) => c.wh.allowed, 3], ["Crating vs allowed (+ over)", C("Crating vs allowed (+ over)"), (c) => c.wh.vsStd == null ? null : r1_370(c.wh.vsStd), 5],
+    ["Idle before crating (h)", C("Idle before crating (h)"), (c) => c.wh.before, 3], ["Idle while crating (h)", C("Idle while crating (h)"), (c) => c.wh.idle, 3], ["Sat crated / ready (d)", C("Sat crated / ready (d)"), (c) => c.wh.waitDays == null ? null : r1_370(c.wh.waitDays), 3]]);
+  const lifeS = secSheet("Whole Life (calendar days)", "life", C("In Whole life (1 = counted)"), [
+    ["Kit pull", C("Kit pull (d)"), (c) => r1_370(c.life.st.pull), 3], ["Production", C("Production (d)"), (c) => r1_370(c.life.st.prod), 3], ["Body", C("Body (d)"), (c) => r1_370(c.life.st.body), 3],
+    ["Crating", C("Crating (d)"), (c) => r1_370(c.life.st.crating), 3], ["Waiting to leave", C("Waiting to leave (d)"), (c) => r1_370(c.life.st.leave), 3], ["Between depts / untracked", C("Between depts / untracked (d)"), (c) => r1_370(c.life.st.gap), 3],
+    ["Total pull → gone", C("Total pull → gone (d)"), (c) => r1_370(c.life.total), 3]]);
+  const g = V.glance, gp = Vp.glance;
+  const sum = [[{ v: "Cab History", s: 7 }], [{ v: `Run ${phxDate(D.nowMs)} by ${meName} · Shop Board` }], [{ v: `Choices: ${choices}` }], null,
+    [{ v: "At a glance", s: 2 }, { v: "Now", s: 2 }, { v: "Before", s: 2 }, { v: "Change", s: 2 }, { v: "", s: 2 }, { v: "Note", s: 2 }],
+    [{ v: "Shipped this month", s: 1 }, { v: T.shippedM, s: 9 }, { v: T.lastM, s: 9 }, { v: T.shippedM - T.lastM, s: 5, f: "B6-C6" }, null, { v: `before = last month · +${T.handM} marked shipped by hand this month (not counted)` }],
+    [{ v: "Kit pull → shipped (avg days)", s: 1 }, { v: g.life.avg, s: 3 }, { v: gp.life.avg, s: 3 }, g.life.avg != null && gp.life.avg != null ? { v: r1_370(g.life.avg - gp.life.avg), s: 5, f: "B7-C7" } : { v: "" }, null, { v: `${g.life.n} cabs` }],
+    [{ v: "Cabs on / under their allowed hours", s: 1 }, { v: g.onUnder.pct == null ? null : g.onUnder.pct / 100, s: 8 }, { v: gp.onUnder.pct == null ? null : gp.onUnder.pct / 100, s: 8 }, g.onUnder.pct != null && gp.onUnder.pct != null ? { v: (g.onUnder.pct - gp.onUnder.pct) / 100, s: 8, f: "B8-C8" } : { v: "" }, null, { v: `${g.onUnder.x} of ${g.onUnder.y} cabs (production)` }],
+    [{ v: "Labor vs standard (net h, + over)", s: 1 }, { v: g.labor.net, s: 5 }, { v: gp.labor.net, s: 5 }, g.labor.net != null && gp.labor.net != null ? { v: r1_370(g.labor.net - gp.labor.net), s: 5, f: "B9-C9" } : { v: "" }, null, { v: `production ${g.labor.parts.prod} · Body ${g.labor.parts.body ?? "—"} · crating ${g.labor.parts.wh ?? "—"}` }],
+    [{ v: "Idle hours per cab (avg, all depts)", s: 1 }, { v: g.idle.avg, s: 3 }, { v: gp.idle.avg, s: 3 }, g.idle.avg != null && gp.idle.avg != null ? { v: r1_370(g.idle.avg - gp.idle.avg), s: 5, f: "B10-C10" } : { v: "" }, null, { v: g.idle.most ? `most in ${g.idle.most[0]}` : "" }],
+    [{ v: "Off the line by the planned date", s: 1 }, { v: g.byPlan.pct == null ? null : g.byPlan.pct / 100, s: 8 }, { v: gp.byPlan.pct == null ? null : gp.byPlan.pct / 100, s: 8 }, g.byPlan.pct != null && gp.byPlan.pct != null ? { v: (g.byPlan.pct - gp.byPlan.pct) / 100, s: 8, f: "B11-C11" } : { v: "" }, null, { v: `${g.byPlan.x} of ${g.byPlan.y} · ${g.byPlan.late} late` }],
+    [{ v: "Biggest wait (days)", s: 1 }, { v: g.big ? g.big.days : null, s: 3 }, { v: gp.big ? gp.big.days : null, s: 3 }, { v: "" }, null, { v: g.big ? g.big.label : "" }],
+    [{ v: "Backlog (ordered, not started)", s: 1 }, { v: T.backlog, s: 9 }, { v: "" }, { v: "" }, null, { v: T.backlogWeeks != null ? `≈ ${T.backlogWeeks} weeks at the current pace` : "" }],
+    null, [{ v: `Before = ${ch.win ? "the same length of time just before" : `the ${ch.n} cab${ch.n === 1 ? "" : "s"} before these on each line`}. A blank Before = no cabs in that earlier stretch yet.` }],
+    [{ v: "Counting starts with cabs started on/after Mon 9/28/2026 (the 10–13 step lists). Body + warehouse tracking began 10/29." }],
+    [{ v: "A section only counts a cab where real data was collected; hand moves and tapped-through catch-up are left out and named on the Cabs sheet." }],
+    [{ v: "EARLY (yellow) = fewer than 3 cabs behind a number. The 'How to read' sheet explains every measure." }]];
+  const thr = [[{ v: "Throughput", s: 7 }], [{ v: "The shop right now and this month — every cab, not limited by the choices." }], null,
+    [{ v: "Measure", s: 2 }, { v: "Value", s: 2 }], [{ v: "Shipped this month" }, { v: T.shippedM, s: 9 }], [{ v: "Marked shipped by hand this month (not counted)" }, { v: T.handM, s: 9 }], [{ v: "Shipped last month" }, { v: T.lastM, s: 9 }],
+    [{ v: "Avg shipped / week (full tracked weeks)" }, { v: T.perWeek, s: 3 }], [{ v: "Off the line this month" }, { v: T.offLine, s: 9 }], [{ v: "Through Body this month" }, { v: T.thruBody, s: 9 }],
+    [{ v: "In production now" }, { v: T.inProd, s: 9 }], [{ v: "In Body now" }, { v: T.inBody, s: 9 }], [{ v: "Crated / ready now" }, { v: T.crated, s: 9 }], [{ v: "Backlog" }, { v: T.backlog, s: 9 }], null,
+    [{ v: "Week starting", s: 2 }, { v: "Shipped (warehouse steps)", s: 2 }, { v: "Marked by hand", s: 2 }, { v: "Tracking", s: 2 }],
+    ...T.weeks.map((w) => [{ v: xlDate_371(phxDayStart(w.start) + 12 * 3600000), s: 4 }, { v: w.real, s: 9 }, { v: w.hand, s: 9 }, { v: w.before ? "before tracking" : w.part ? "partly tracked" : !w.done ? "so far" : "tracked" }])];
+  const how = [[{ v: "How to read", s: 7 }], null, [{ v: "Measure", s: 2 }, { v: "What it is", s: 2 }],
+    ...[["Which cabs", "The last N cabs off each year span's line(s) per section (the section's finish falls in the date window). Each section can be different cabs. Cabs started before Mon 9/28/2026 never count."],
+      ["Days on the jig", "Shop days from the cab starting on the line to passing inspection (the first pass), both days counted."],
+      ["Days vs planned", "Days on the jig minus the line's planned days (allowed hours ÷ people planned ÷ plan hours a day, frozen at the start). + = behind."],
+      ["Hours worked", "Everyone clocked onto the cab's line (crew + helpers, following a line move) plus anyone clocked into the cab by name, start → pass."],
+      ["Idle on the line", "Shop hours between start and pass none of those people covered (one lunch hour a day out)."],
+      ["Waiting for inspection", "Shop-window hours from the crew's Finished tap to the pass."],
+      ["Off the line by the planned date", "Passed inspection within the line's planned days (Days vs planned ≤ 0)."],
+      ["Body", "Only cabs that entered Body and went through its steps. Hours = everyone clocked into the cab in Body. Planned days = Body's allowed hours ÷ 8 h a day. Sent back = from crating."],
+      ["Crating & shipping", "Only cabs that shipped / were picked up through the warehouse steps (tracked since 10/29). Hours = everyone clocked into the cab at the warehouse vs the allowed hours for how it left. A hand move into crating has no idle-before-crating."],
+      ["Whole life", "Calendar days, kit pull started → shipped / picked up. Kit pull runs to the cab starting (the kit's delivery IS the start). The grey 'between depts / untracked' piece is what no stage tracked."],
+      ["Left out", "A hand move cancels only the department(s) it jumped over; a department tapped through in 15 minutes or less with no hours is catch-up. Every left-out cab is on the Cabs sheet with its reason."],
+      ["EARLY", "Fewer than 3 cabs behind a number (yellow)."],
+      ["Formulas", "The section averages, best and worst read the Cabs sheet (by year span + the 1/0 counted column). Delete or change a row there and they recompute."]].map(([a, b]) => [{ v: a, s: 1 }, { v: b, s: 10 }])];
+  const lastCol = colL_371(CABCOLS_371.length - 1);
+  const sheets = [
+    { name: "Summary", xml: sheetXml_371(sum, { widths: [38, 12, 12, 14, 4, 80], merge: ["A1:F1"] }) },
+    { name: "Production", xml: sheetXml_371(prodS, { widths: [42, ...ch.spans.map(() => 14)], hdrRow: 4 }), printTitles: "$4:$4" },
+    { name: "Body", xml: sheetXml_371(bodyS, { widths: [42, ...ch.spans.map(() => 14)], hdrRow: 4 }), printTitles: "$4:$4" },
+    { name: "Crating & Shipping", xml: sheetXml_371(whS, { widths: [42, ...ch.spans.map(() => 14)], hdrRow: 4 }), printTitles: "$4:$4" },
+    { name: "Whole Life", xml: sheetXml_371(lifeS, { widths: [42, ...ch.spans.map(() => 14)], hdrRow: 4 }), printTitles: "$4:$4" },
+    { name: "Throughput", xml: sheetXml_371(thr, { widths: [40, 22, 16, 16] }) },
+    { name: "Cabs", xml: sheetXml_371(cabsSheet, { widths: CABCOLS_371.map((x) => x[1]), freeze: [2, 1], filter: `A1:${lastCol}${last}`, hdrRow: 1, hdrH: 48, fitW: 4 }), printTitles: "$1:$1", printCols: "$A:$B", filterRef: `$A$1:$${lastCol}$${last}` },   // 42 columns: 4 pages wide, order + cab # repeat on each
+    { name: "How to read", xml: sheetXml_371(how, { widths: [30, 110] }) },
+  ];
+  return workbook_371(sheets);
 }
 
 // Block 235: hours display keeps QUARTER precision — "8.25"/"7.75" stay
@@ -17026,7 +17262,7 @@ const handleRequest355 = async (req, res) => {
     }
 
     // ===== Block 370 (Plan 89): CAB HISTORY — same door as Reports (admins; managers only when "Managers can see Reports" is on) =====
-    if (url.pathname === "/cab-history") {
+    if (url.pathname === "/cab-history" || url.pathname === "/cab-history.xlsx") {   // Block 371: + the workbook (same door, same choices)
       const empId = await liveSession(req);
       if (!empId) { res.writeHead(302, { Location: "/login" }); return res.end(); }
       const [me] = await db(`employee?select=id,first_name,last_name,role,department&id=eq.${empId}`);
@@ -17037,6 +17273,12 @@ const handleRequest355 = async (req, res) => {
       }
       const ch = chQuery370(url.searchParams);
       const D = await load370();
+      if (url.pathname === "/cab-history.xlsx") {
+        if (!ch.spans.length) { res.writeHead(302, { Location: `/cab-history?${ch.qs}` }); return res.end(); }
+        const buf = xlsx370(D, ch, me);
+        res.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="shopboard-cab-history-${phxDate(Date.now())}.xlsx"`, "content-length": buf.length });
+        return res.end(buf);
+      }
       return send(200, "text/html; charset=utf-8", page370(D, ch, me, url.searchParams.get("print") === "1"));
     }
     if (url.pathname === "/reports" || url.pathname === "/reports.csv") {
