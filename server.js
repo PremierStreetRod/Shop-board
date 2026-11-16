@@ -7328,13 +7328,33 @@ const PICK_LIST_INFO = {
 // ~5,300 rows and 8 trips on 10/25, growing daily) and Panel prep read Eric's punches over 120 days — on every
 // admin page load, for boxes nobody had opened. Now /api/admin/panel renders them when the box is opened; the
 // small boxes stay on the page (one cheap wave) so their editors work exactly as before.
+// Block 379 (Daniel 11/16 09:35): a Total row at the bottom of BUILD STEPS — Hours and Actual. (He first asked for both
+// tables, then 09:51: "we DONT need hours tallied and shown at the bottom of upgrade options, that doesnt do any good" —
+// a cab only takes the upgrades it ordered, so a sum of all of them means nothing. Steps only.)
+// Hours total = every step that isn't a background reminder. Actual total = the sum of the figures that SHOW (2+ cabs),
+// with coverage — "8 of 9 steps have a number; those 8 carry 41 h of standard" — so the two totals are never read as
+// like-for-like when they aren't. The hours side re-adds live as a box is typed in (tot379).
+const fig379 = (act, id) => { const r = act ? (act.rows || {})[`step:${id}`] : null; return r && r.n >= 2 ? r : null; };
+function totRow379(act, items) {
+  const r1 = (x) => Math.round(x * 10) / 10;
+  let h = 0, a = 0, cov = 0, covH = 0;
+  for (const it of items) { const hh = Number(it.man_hours) || 0; h += hh; const r = fig379(act, it.id); if (r) { a += Number(r.median) || 0; cov++; covH += hh; } }
+  const noun = items.length === 1 ? "step" : "steps";
+  const actCell = act ? `<td style="white-space:nowrap">${cov ? `<b style="color:#8ec9ff">${r1(a)} h</b>` : `<span style="opacity:.45">—</span>`}</td>` : "";
+  const row = `<tr style="border-top:2px solid #636366"><td colspan="2"><b>Total</b></td>
+    <td style="white-space:nowrap"><b id="tot379-h">${r1(h)} h</b></td>${actCell}<td colspan="3"></td></tr>`;
+  const note = !act || !items.length ? "" : `<p style="opacity:.6;font-size:.82rem;margin:4px 0 0">Actual total: ${!cov ? `no ${noun} have a number yet.` : cov === items.length
+    ? `all ${items.length} ${noun} have a number.`
+    : `${cov} of ${items.length} ${noun} have a number — those ${cov} carry <b id="tot379-ch">${r1(covH)}</b> h of standard, so compare the actual to that, not the full total.`}</p>`;
+  return { row, note };
+}
 const stepsPanelHtml324 = (tmpls, tplId, steps, optItems = [], act258 = null) => `  <!-- C18: switching cabs is a full page load (?tpl=), which used to dump
        the scroll back to the top — the #steps fragment lands you right here. -->
   <p>${tmpls.map((t) => t.id === tplId
     ? `<b style="color:var(--red)">${t.family}</b>`
     : `<a href="/admin?tpl=${t.id}#steps" onclick="if(window.stepsFamily324){stepsFamily324('${t.id}');return false}" style="color:#8e8e93">${t.family}</a>`).join(" · ")}</p>
-  <table><tr><th>#</th><th>Step</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
-  ${steps.map((s, i) => `<tr>
+  <table oninput="if(window.tot379)tot379()"><tr><th>#</th><th>Step</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th><th></th></tr>
+  ${steps.map((s, i) => `<tr${s.is_background ? "" : ` data-t379="1" data-a379="${fig379(act258, s.id) ? 1 : ""}"`}>
     <td><input class="dno" id="sn-${s.id}" value="${s.display_no}"></td>
     <td><input class="nm" id="sm-${s.id}" value="${String(s.name).replace(/"/g, "&quot;")}">${s.is_background ? `<small style="opacity:.5"> background</small>` : ""}
       <textarea id="sx-${s.id}" rows="2" placeholder="Full instruction the tech sees behind + details" style="display:block;width:95%;margin-top:3px;font-size:.8rem;background:#111;color:#ddd;border:1px solid #333;border-radius:6px;padding:4px 6px">${String(s.detail || "").replace(/</g, "&lt;")}</textarea>
@@ -7347,15 +7367,16 @@ const stepsPanelHtml324 = (tmpls, tplId, steps, optItems = [], act258 = null) =>
     <td>${i > 0 ? `<button class="b" onclick="moveStep('${s.id}','up',this)">&uarr;</button>` : ""}
         ${i < steps.length - 1 ? `<button class="b" onclick="moveStep('${s.id}','down',this)">&darr;</button>` : ""}</td>
     <td><button class="b red" onclick="arm(this,()=>retireStep('${s.id}'))">Retire</button></td>
-  </tr>`).join("")}</table>
-  ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a number appears at 2 cabs). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
+  </tr>`).join("")}${steps.length ? totRow379(act258, steps.filter((s) => !s.is_background)).row : ""}</table>
+  ${totRow379(act258, steps.filter((s) => !s.is_background)).note}
+  ${act258 ? `<p style="opacity:.55;font-size:.85rem;margin:6px 0 0"><span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:1px 8px;font-weight:800;font-size:.85em">6.2 \u00b74</span> = real crew-hours, median of the last 12 cabs (the \u00b74 is how many cabs are behind it). Gray = not enough data yet (a step's number appears at 2 cabs; an upgrade shows its first cab's hours in gray, \u00b71). Tap any figure for every cab behind it, including the thrown-out samples and why.</p>` : ""}
   <p style="margin-top:10px">Add a step:
     <input class="dno" id="new-no" placeholder="#"> <input class="nm" id="new-name" style="min-width:220px" placeholder="Step name">
     Hrs <input class="num" id="new-hrs" value="1">
     <button class="b" onclick="addStep('${tplId}',this)">Add</button></p>
   <h3 style="margin-top:20px">Upgrade options — ${(tmpls.find((t) => t.id === tplId) || {}).family || ""}</h3>
   <p style="opacity:.55;font-size:.85rem;margin:-4px 0 8px">Type each option EXACTLY as Coyote sends it (Label: Value). Hours extend a cab's clock; "Lands after step" is where it sits in the build (a 0-hour option can be flagged to show on the floor as a reminder). These match automatically when a new cab starts — an option Coyote sends that isn't here gets flagged, never guessed.</p>
-  <table><tr><th>Option (exact Coyote text)</th><th>Hrs</th><th>Lands after step</th>${act258 ? "<th>Actual</th>" : ""}<th></th><th></th></tr>
+  <table><tr><th>Option (exact Coyote text)</th><th>Hours</th>${act258 ? "<th>Actual</th>" : ""}<th>Lands after step</th><th></th><th></th></tr>   <!-- Block 379 (Daniel 11/16 09:51): Actual sits right beside Hours, same as Build steps -->
   ${((esc261) => optItems.filter((o) => !o.kit_only && !o.alias_of).map((o) => {
     const kids261 = optItems.filter((a) => a.alias_of === o.id);
     return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
@@ -7363,10 +7384,10 @@ const stepsPanelHtml324 = (tmpls, tplId, steps, optItems = [], act258 = null) =>
       ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}', this)" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
       ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
+    ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
     <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of the list (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
       <input type="hidden" id="op-d-${o.id}" value="${o.day_no}">
       ${Number(o.man_hours) === 0 ? `<label style="display:block;font-size:.75rem;opacity:.75;margin-top:2px"><input type="checkbox" id="op-f-${o.id}"${o.show_on_floor ? " checked" : ""}> show on the floor as a reminder (0 h)</label>` : ""}</td>
-    ${act258 ? `<td>${actPill258(act258, "opt", o.id, tplId)}</td>` : ""}
     <td>${o.retired ? "" : `<button class="b" onclick="saveOpt('${o.id}',this)">Save</button>`}</td>
     <td><button class="b ${o.retired ? "grn" : "red"}" onclick="arm(this,()=>toggleOpt('${o.id}','${o.retired ? "restore" : "retire"}',this))">${o.retired ? "Restore" : "Retire"}</button></td>
   </tr>`; }).join(""))((x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])))}</table>
@@ -7783,6 +7804,9 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function wcal260(id, a){ var d = document.createElement("div"); d.style.marginTop = "3px";
     d.innerHTML = '<input id="sw-'+id+'" placeholder="What should warehouse deliver when this step starts?" style="width:95%;font-size:.8rem"> <small style="opacity:.5">&#128230; then Save</small>';
     a.parentNode.appendChild(d); a.style.display = "none"; return false; }
+  // Block 379: the Build-steps Hours total (and the "those N carry X h" figure) re-add as a box is typed in — before Save.
+  function tot379(){ var h = 0, ch = 0; document.querySelectorAll('tr[data-t379]').forEach(function (r) { var i = r.querySelector("input.num"); var x = Number(i && i.value) || 0; h += x; if (r.getAttribute("data-a379")) ch += x; });
+    var a = document.getElementById("tot379-h"); if (a) a.textContent = (Math.round(h * 10) / 10) + " h"; var c = document.getElementById("tot379-ch"); if (c) c.textContent = Math.round(ch * 10) / 10; }
   function moveStep(id, dir, btn){ post("/api/admin/step", { action: "move", id, dir }, btn); }
   function retireStep(id){ post("/api/admin/step", { action: "retire", id }); }
   function addOpt(tplId, btn){ post("/api/admin/option", { action: "add", template_id: tplId, match_text: v("op-new-text"), man_hours: Number(v("op-new-hrs")), day_no: 1 }, btn); }   // Block 283: days are gone — pick its anchor on the row after adding
@@ -13036,7 +13060,18 @@ async function stepActuals258(family, tplSteps, optItems) {
   }
   // one sample per completed task; key = the CURRENT editor row it belongs to
   const stepKey258 = {}; for (const st of tplSteps || []) stepKey258[norm258(st.name)] = { kind: "step", id: st.id, std: Number(st.man_hours) };
-  const optKey258 = {}; for (const o of optItems || []) optKey258[norm258(o.match_text)] = { kind: "opt", id: o.id, std: Number(o.man_hours) };
+  // Block 379 (Daniel 11/16): a duplicate-wording (alias) row is hidden in the editor, so a sample filed under its wording
+  // (a cab started before the link) would never show — it now counts toward the canonical row it points at. A retired row
+  // never shadows an active row with the same wording.
+  const optById379 = {}; for (const o of optItems || []) optById379[o.id] = o;
+  const optKey258 = {};
+  for (const o of optItems || []) {
+    const canon = o.alias_of ? optById379[o.alias_of] : o;
+    if (!canon) continue;                                                    // dangling alias: no row to hang it on
+    const k = norm258(o.match_text);
+    if (optKey258[k] && !optKey258[k].retired && (o.retired || canon.retired)) continue;
+    optKey258[k] = { kind: "opt", id: canon.id, std: Number(canon.man_hours), retired: Boolean(o.retired || canon.retired) };
+  }
   const rows = {};   // "<kind>:<id>" -> { samples: [], excluded: [] }
   for (const b of builds258) {
     const evs = evByBuild258[b.id]; if (!evs || !evs.length) continue;
@@ -13077,6 +13112,9 @@ function actPill258(act, kind, id, tplId) {
   const r = (act.rows || {})[`${kind}:${id}`];
   const href = `/admin/step-actual?tpl=${tplId}&kind=${kind}&id=${id}`;
   if (!r || (r.n < 2 && !r.excluded.length && r.n === 0)) return `<a href="${href}" style="text-decoration:none"><span style="display:inline-block;background:#2c2c2e;color:#6e6e73;border-radius:9px;padding:3px 9px;font-size:.82rem">&mdash;</span></a>`;
+  // Block 379 (Daniel 11/16): upgrades are rare per option, so an upgrade with ONE cab shows that cab's hours — gray, ·1 —
+  // instead of "1 cab". Build steps keep the 2-cab rule.
+  if (kind === "opt" && r.n === 1) return `<a href="${href}" style="text-decoration:none" title="one cab so far — not an average yet · tap for the receipt"><span style="display:inline-block;background:#2c2c2e;color:#c7c7cc;border-radius:9px;padding:3px 9px;font-size:.82rem;font-weight:700">${r.median} ·1</span></a>`;
   if (r.n < 2) return `<a href="${href}" style="text-decoration:none"><span style="display:inline-block;background:#2c2c2e;color:#8e8e93;border-radius:9px;padding:3px 9px;font-size:.82rem">${r.n} cab${r.n === 1 ? "" : "s"}</span></a>`;
   return `<a href="${href}" style="text-decoration:none" title="median of the last ${r.n} cabs \u00b7 range ${r.lo}\u2013${r.hi} crew-hrs \u00b7 tap for the receipts"><span style="display:inline-block;background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:3px 9px;font-size:.85rem;font-weight:800">${r.median} <span style="opacity:.65;font-weight:600">\u00b7${r.n}</span></span></a>`;
 }
@@ -17680,7 +17718,7 @@ const handleRequest355 = async (req, res) => {
       if (!tmplSA) return send(404, "text/plain; charset=utf-8", "No such template");
       const [stepsSA, optsSA] = await Promise.all([
         db(`step_template?select=id,display_no,name,man_hours&template_id=eq.${tplSA}&retired=is.false&order=sort_order`),
-        db(`option_item?select=id,match_text,man_hours&family=eq.${encodeURIComponent(tmplSA.family)}`),
+        db(`option_item?select=id,match_text,man_hours,alias_of,retired&family=eq.${encodeURIComponent(tmplSA.family)}`),   // Block 379: alias fold
       ]);
       const rowSA = kindSA === "step" ? stepsSA.find((x) => x.id === idSA) : optsSA.find((x) => x.id === idSA);
       if (!rowSA) return send(404, "text/plain; charset=utf-8", "No such step");
@@ -17703,7 +17741,7 @@ const handleRequest355 = async (req, res) => {
   <div class="lane">
     <div style="opacity:.6;font-size:.85rem">${escSA(tmplSA.family)} \u00b7 ${kindSA === "step" ? "build step" : "upgrade option"}</div>
     <h2 style="margin:2px 0 8px">${escSA(nameSA)}</h2>
-    <div style="font-size:1.05rem">Standard <b>${Number(rowSA.man_hours)}h</b> \u00b7 Actual ${rSA.n >= 2 ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:2px 10px;font-weight:800">${rSA.median} crew-hrs</span> <span class="mut">median of the last ${rSA.n} cab${rSA.n === 1 ? "" : "s"} \u00b7 range ${rSA.lo}\u2013${rSA.hi}</span>` : `<span class="mut">not enough data yet (${rSA.n} qualifying cab${rSA.n === 1 ? "" : "s"} \u2014 a number appears at 2)</span>`}</div>
+    <div style="font-size:1.05rem">Standard <b>${Number(rowSA.man_hours)}h</b> \u00b7 Actual ${rSA.n >= 2 ? `<span style="background:#0e3a5f;color:#8ec9ff;border-radius:9px;padding:2px 10px;font-weight:800">${rSA.median} crew-hrs</span> <span class="mut">median of the last ${rSA.n} cab${rSA.n === 1 ? "" : "s"} \u00b7 range ${rSA.lo}\u2013${rSA.hi}</span>` : kindSA === "opt" && rSA.n === 1 ? `<b>${rSA.median} crew-hrs</b> <span class="mut">from one cab so far \u2014 not an average yet</span>` : `<span class="mut">not enough data yet (${rSA.n} qualifying cab${rSA.n === 1 ? "" : "s"} \u2014 a number appears at 2)</span>`}</div>
   </div>
   <div class="lane"><h3 style="margin:0 0 4px">The cabs behind the number</h3>
     <div class="mut" style="font-size:.85rem;margin-bottom:6px">Crew-hours = every clocked person on the line while the step was open, split across open steps. Newest first; the figure reads the last 12.</div>
