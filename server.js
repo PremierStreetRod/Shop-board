@@ -3803,6 +3803,8 @@ const mytimePage290 = (d) => {
       <span style="opacity:.6">Add hours on another day:</span> <input type="date" id="addd291" min="${esc(p.from)}" max="${esc(p.to)}" value="${esc(p.to <= phxDate(Date.now()) ? p.to : phxDate(Date.now()))}" style="background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:5px">
       IN <input type="time" id="addi291" class="ti291"> OUT <input type="time" id="addo291" class="to291"> ${linePick(d.lastWhere).replace('class="ln291"', 'class="ln291" id="addl291"')}
       <button class="pb290 sm" onclick="edAddDay291(this)">Add</button></div>` : "";
+  // Block 378 (Daniel 11/16 09:20): "Print / Save as PDF" names the file from the page <title> — it now carries the pay period
+  // (YYYY-MM-DD, so saved files sort in date order and a new period never overwrites the last one's PDF).
   // ---- PRINT layout (Block 291): one page. Tight rows, no boxes, recap clamped to 2 lines.
   const printRows = d.days.map((day) => day.stints.map((s, i) => `<tr class="${isWknd(day.date) ? "wk" : ""}">
         <td class="pd">${i === 0 ? dayShort291(day.date) + (isWknd(day.date) ? ' <span class="pw">wknd</span>' : "") : ""}</td>
@@ -3820,7 +3822,7 @@ const mytimePage290 = (d) => {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="manifest" href="/manifest.json"><meta name="apple-mobile-web-app-title" content="Shop Board">
-<meta name="robots" content="noindex, nofollow"><title>Salaried Time Log${name ? " — " + esc(name) : ""}</title>${style}
+<meta name="robots" content="noindex, nofollow"><title>Salaried Time Log${name ? " — " + esc(name) : ""}${p && p.from && p.to ? " — " + esc(p.from) + " to " + esc(p.to) : ""}</title>${style}
 <style>
   .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:10px}.muted{opacity:.6}
   .per290 a{color:#8e8e93;margin-right:10px}.per290 a.on{color:#fff;font-weight:800;text-decoration:underline}
