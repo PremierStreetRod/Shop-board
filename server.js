@@ -7272,6 +7272,10 @@ const ROLES = ["production", "manager", "admin"];
 // nothing downstream breaks.
 const ROLE_LABEL = { production: "Team Member", manager: "Manager", admin: "Admin" };
 // Plain-language names for every toggle key (file 22: no jargon on screens).
+// Block 375 (audit 11/11): three switches seeded in migration 0002 (July) that NO code has ever read — flipping them did
+// nothing, and 'The TV board' read ON / 'Text alerts' read OFF beside the real switches. Hidden from Features; the rows stay
+// in the database untouched (cancel, never delete). The real text switch is notify_sms (Notifications → Text setup).
+const DEAD_TOGGLES_375 = ["tv_board", "sms_alerts", "morning_prebrief"];
 const TOGGLE_INFO = {
   tv_board: ["The TV board", "The big board on the shop TV."],
   past_production_tool: ["Move a waiting cab past production (admin)", "OFF = hidden on every order. ON = the admin order page of a cab that has not started offers 'Built outside the board → past production' into At Body Shop / Crating & shipping / Shipped / Build department. A special case (an owner build pushed from Coyote, 19059) — switch it on when needed, off after (Daniel 10/26 09:07)."],   // Block 330
@@ -7354,7 +7358,7 @@ const stepsPanelHtml324 = (tmpls, tplId, steps, optItems = [], act258 = null) =>
     const kids261 = optItems.filter((a) => a.alias_of === o.id);
     return `<tr${o.retired ? ' style="opacity:.45"' : ""}>
     <td${o.retired ? ' style="text-decoration:line-through"' : ""}><code>${esc261(o.match_text)}</code>
-      ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}')" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
+      ${kids261.length ? `<div style="margin-top:2px;font-size:.78rem;opacity:.6">also matches: ${kids261.map((a) => `<code>${esc261(a.match_text)}</code> <a href="#" onclick="return unDup261('${a.id}', this)" title="Unlink this wording — it becomes its own option row again" style="color:#8e8e93;text-decoration:none">&#10005;</a>`).join(" · ")}</div>` : ""}
       ${o.retired ? "" : `<a href="#" onclick="return dupOpt261('${o.id}',this)" style="font-size:.72rem;color:#8e8e93;text-decoration:none" title="This row is a duplicate wording of another option — link it so only one shows here, but every spelling still matches incoming orders">dup&hellip;</a>`}</td>
     <td><input class="num" id="op-h-${o.id}" value="${o.man_hours}"></td>
     <td><select id="op-a-${o.id}" style="max-width:260px;background:#111;color:#fff;border:1px solid #333;border-radius:6px;padding:4px"><option value="">— end of the list (no anchor) —</option>${steps.map((st) => `<option value="${st.id}"${o.after_step === st.id ? " selected" : ""}>${st.display_no}. ${String(st.name).replace(/</g, "&lt;")}</option>`).join("")}</select>
@@ -7407,6 +7411,17 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   .tglrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line)}
   .tglrow:first-of-type{border-top:none}
   .tglrow small{display:block;opacity:.55}
+  /* Block 375 (Daniel 11/11: "hard to understand what is on and what is off"): ONE rule for every on/off on this page —
+     the STATE is a pill (solid green ● ON / outlined grey ○ OFF), the BUTTON is plain grey and says what it will do.
+     Colour only ever means state; it never decorates an action. */
+  .tglrow.on375{border-left:5px solid #30d158;padding-left:10px;background:rgba(48,209,88,.06)}
+  .tglrow.off375{border-left:5px solid #3a3a3c;padding-left:10px}
+  .tglrow.off375 b{opacity:.8}
+  .st375{display:inline-block;min-width:4.4em;text-align:center;border-radius:999px;padding:4px 10px;font-weight:900;font-size:.82rem;letter-spacing:.04em;white-space:nowrap}
+  .st375.on{background:#1d5a2d;border:1px solid #30d158;color:#fff}
+  .st375.off{background:transparent;border:1px solid #636366;color:#8e8e93}
+  .act375{background:#2c2c2e !important;border:1px solid #48484a !important;color:#fff;min-width:6.2em}
+  .sum375{margin:-4px 0 10px;font-size:.92rem}.sum375 b.on{color:#30d158}.sum375 b.off{color:#8e8e93}
 </style></head>
 <body><div class="wrap" style="max-width:980px">
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
@@ -7480,15 +7495,15 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <!-- Block 117: the admin side of ⚙ My settings — every person's channel
        switches AND contact info, controllable from one table. -->
   <div class="panel" id="channels117"><h3>Notification channels &amp; contact — per person</h3>
-  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. OFF means OFF — nothing overrides these switches right now, and every notice ALWAYS lands in the person's bell inbox regardless. People can also flip their own Push and Text from the &#9881; gear beside the bell (Block 204). Text sending additionally needs the Text channel set up under Tools.</p>
+  <p style="opacity:.6;font-size:.9rem">Their role decides WHICH notices they get; these switches decide HOW they arrive. Green &#9679; ON = it arrives that way; grey &#9675; OFF = it doesn't. One built-in exception: owners get only three pushes (promise-date conflicts, short kits, pace warnings) even with Push ON. Every notice ALWAYS lands in the person's bell inbox regardless. People can also flip their own Push and Text from the &#9881; gear beside the bell (Block 204). Text sending additionally needs the Text channel set up under Tools.</p>
   <!-- Block 171 (owner ruling): the Email toggle + Email address columns are
        hidden with the rest of the email channel — the stored addresses stay in
        the database untouched for a future revisit. -->
   <table><tr><th>Name</th><th>Push</th><th>Text</th><th>Mobile #</th><th></th></tr>
   ${emps.filter((e) => e.active).map((e) => `<tr>
     <td><b>${e.first_name} ${e.last_name}</b></td>
-    <td><button class="b ${e.notify_push === false ? "" : "grn"}" onclick="chan117('${e.id}','push',${e.notify_push === false},this)">${e.notify_push === false ? "OFF" : "ON"}</button></td>
-    <td><button class="b ${e.notify_sms === false ? "" : "grn"}" onclick="chan117('${e.id}','sms',${e.notify_sms === false},this)">${e.notify_sms === false ? "OFF" : "ON"}</button></td>
+    <td style="white-space:nowrap"><span class="st375 ${e.notify_push === false ? "off" : "on"}">${e.notify_push === false ? "&#9675; OFF" : "&#9679; ON"}</span><button class="b act375" style="min-width:0;margin-left:6px" onclick="chan117('${e.id}','push',${e.notify_push === false},this)">Turn ${e.notify_push === false ? "on" : "off"}</button></td>
+    <td style="white-space:nowrap"><span class="st375 ${e.notify_sms === false ? "off" : "on"}">${e.notify_sms === false ? "&#9675; OFF" : "&#9679; ON"}</span><button class="b act375" style="min-width:0;margin-left:6px" onclick="chan117('${e.id}','sms',${e.notify_sms === false},this)">Turn ${e.notify_sms === false ? "on" : "off"}</button></td>
     <td><input id="cm-${e.id}" value="${e.mobile || ""}" placeholder="602 555 0117" style="width:120px"></td>
     <td><button class="b" onclick="contact117('${e.id}',this)">Save</button></td>
   </tr>`).join("")}</table>
@@ -7498,10 +7513,13 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   <div class="panel" id="steps" data-lazy="steps"><h3>Build steps</h3><!-- Block 324: the editor (+ Upgrade options, + the step-actuals math) is fetched when this box is opened — /api/admin/panel?which=steps&tpl= --></div>
 
   <div class="panel" id="features"><h3>Features</h3>
-  ${toggles.filter((t) => t.key !== "notify_email" && t.key !== "email_notifications").map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
-    <div class="tglrow"><div style="flex:1"><b>${info[0]}</b><small>${info[1]}</small></div>
-    <b style="opacity:.7">${t.enabled ? "ON" : "OFF"}</b>
-    <button class="b ${t.enabled ? "red" : "grn"}" onclick="flip('${t.key}',${t.enabled ? "false" : "true"},this)">Turn ${t.enabled ? "OFF" : "ON"}</button></div>`; }).join("")}
+  ${(() => { const shown375 = toggles.filter((t) => t.key !== "notify_email" && t.key !== "email_notifications" && !DEAD_TOGGLES_375.includes(t.key));
+    const lbl375 = (t) => (TOGGLE_INFO[t.key] || [t.key])[0]; const nOn = shown375.filter((t) => t.enabled).length;
+    const sorted375 = shown375.slice().sort((a, b) => (b.enabled - a.enabled) || String(lbl375(a)).localeCompare(String(lbl375(b))));   // ON first, then OFF; A–Z inside each
+    return `<div class="sum375"><b class="on">${nOn} ON</b> &middot; <b class="off">${shown375.length - nOn} OFF</b> <span style="opacity:.55">&mdash; green = ON. The grey button says what tapping it will do.</span></div>` + sorted375.map((t) => { const info = TOGGLE_INFO[t.key] || [t.key, ""]; return `
+    <div class="tglrow ${t.enabled ? "on375" : "off375"}"><div style="flex:1"><b>${info[0]}</b><small>${info[1]}</small></div>
+    <span class="st375 ${t.enabled ? "on" : "off"}">${t.enabled ? "&#9679; ON" : "&#9675; OFF"}</span>
+    <button class="b act375" onclick="flip('${t.key}',${t.enabled ? "false" : "true"},this)">Turn ${t.enabled ? "off" : "on"}</button></div>`; }).join(""); })()}
   <p style="opacity:.5;font-size:.85rem">Everything keeps tracking underneath while a feature is OFF — turning it back ON reveals full history. Every flip is logged.</p>
   </div>
 
@@ -7662,8 +7680,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
         // Block 100 (owner-rep): a silent reload after Save read as "the button
         // does nothing" — the numbers re-render identical, so nothing LOOKS
         // different. Flash the win on the button itself, then refresh.
-        if (btn) { btn.textContent = "\u2713 Saved"; btn.classList.add("grn"); }
-        setTimeout(() => location.reload(), 650); return;
+        if (btn) { btn.textContent = "\u2713 " + (out.note || "Saved"); btn.classList.add("grn"); }
+        setTimeout(() => location.reload(), out.note ? 2000 : 650); return;   // Block 375: a route can say what it did (unlink → which hours); give it time to be read
       }
       showErrA(btn, out.error || "Something went wrong");
     } catch(e){ showErrA(btn, "Network hiccup — try again"); }
@@ -7784,7 +7802,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     b.onclick = function () { if (s.value) post("/api/admin/option", { action: "alias", id: id, of: s.value }, b); };
     d.appendChild(s); d.appendChild(b); a.parentNode.appendChild(d); a.style.display = "none"; return false;
   }
-  function unDup261(id){ post("/api/admin/option", { action: "unalias", id }); return false; }
+  function unDup261(id, a){ if (a) { if (a.dataset.busy375) return false; a.dataset.busy375 = "1"; setTimeout(function(){ a.dataset.busy375 = ""; }, 3000); }   // Fable audit: a link can't be disabled like a button — a second tap would unlink twice and paint an error over the result
+    post("/api/admin/option", { action: "unalias", id }, a); return false; }   // Block 375: the link itself shows what came back (or the error beside it)
   function addStep(tplId, btn){ post("/api/admin/step", { action: "add", template_id: tplId,
     display_no: v("new-no"), name: v("new-name"), day_no: "1", man_hours: Number(v("new-hrs")) }, btn); }   // Block 283: days are gone
   function flip(key, to, btn){ post("/api/admin/toggle", { key, enabled: to === true || to === "true" }, btn); }
@@ -19678,6 +19697,16 @@ self.addEventListener("notificationclick", (e) => {
       const patch = {};
       if (department !== undefined) { if (!DEPTS.includes(department)) return json(400, { ok: false, error: "Unknown department" }); patch.department = department; }
       if (role !== undefined) { if (!ROLES.includes(role)) return json(400, { ok: false, error: "Unknown role" }); patch.role = role; }
+      // Block 375 (admin audit 11/11): nothing locked an admin out of their own console — Deactivate on your own row signed you
+      // out for good, and a role change on your own row dropped you out of /admin. Never yourself, and never the last admin.
+      if (active === false || (role !== undefined && role !== "admin")) {
+        if (id === adminId) return json(400, { ok: false, error: active === false ? "You can't deactivate yourself — ask another admin" : "You can't take admin away from yourself — ask another admin" });
+        const [tgt375] = await db(`employee?select=role,active&id=eq.${id}`);
+        if (tgt375 && tgt375.role === "admin" && tgt375.active) {
+          const admins375 = await db(`employee?select=id&active=is.true&role=eq.admin`);
+          if (admins375.length <= 1) return json(400, { ok: false, error: "That's the last active admin — make someone else admin first" });
+        }
+      }
       // Block 123 (logic audit M4): lines only make sense for Production —
       // match the add path. A save that sets a non-Production department clears
       // the line roster (else a moved-to-Warehouse person keeps stale lines and
@@ -20417,15 +20446,29 @@ self.addEventListener("notificationclick", (e) => {
         if (can261.retired) return json(400, { ok: false, error: "That option is retired — restore it first" });
         const kids261 = await db(`option_item?select=id&alias_of=eq.${p.id}&limit=1`);
         if (kids261.length) return json(400, { ok: false, error: "Other wordings point at this one — unlink them first" });
+        // Fable audit: a wording that is ALREADY linked and gets pointed at another option carries its saved own-hours forward —
+        // otherwise the hours copied from the first main option would be recorded as "its own".
+        let own375 = { h: row261.man_hours, d: row261.day_no };
+        if (row261.alias_of) { const [lkP] = await db(`event_log?select=payload&event_type=eq.option.aliased&payload->>id=eq.${p.id}&order=at.desc&limit=1`).catch(() => []);
+          if (lkP && lkP.payload && lkP.payload.alias_of === row261.alias_of && lkP.payload.prev_man_hours !== undefined) own375 = { h: lkP.payload.prev_man_hours, d: lkP.payload.prev_day_no }; }
         await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ alias_of: p.of, man_hours: can261.man_hours, day_no: can261.day_no, retired: false }) });
-        logEvent("option.aliased", adminId, { id: p.id, alias_of: p.of, family: row261.family });
+        // Block 375 (Daniel 11/11 14:36, parked → 11/16 08:52 "take your recommendation"): linking copies the main option's hours over this
+        // wording's own. Keep what it had, so an unlink can put it back (no migration — it rides the link's own log entry).
+        // awaited (not fire-and-forget): an unlink tapped right after must find THIS entry, not an older link's
+        await db("event_log", { method: "POST", body: JSON.stringify({ event_type: "option.aliased", actor_id: adminId, payload: { id: p.id, alias_of: p.of, family: row261.family, prev_man_hours: own375.h, prev_day_no: own375.d } }) }).catch((e) => console.error("event_log write failed:", e.message));
         return json(200, { ok: true });
       }
       if (act === "unalias") {
         if (!row261.alias_of) return json(400, { ok: false, error: "This wording stands on its own already" });
-        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ alias_of: null }) });
-        logEvent("option.unaliased", adminId, { id: p.id, was_alias_of: row261.alias_of });
-        return json(200, { ok: true });
+        // Block 375: put back the hours / day this wording had before it was linked (from the link's log entry). A link made before
+        // that entry carried them keeps today's numbers — and the answer says so plainly.
+        const [lk375] = await db(`event_log?select=payload&event_type=eq.option.aliased&payload->>id=eq.${p.id}&order=at.desc&limit=1`).catch(() => []);
+        const pv375 = lk375 && lk375.payload && lk375.payload.alias_of === row261.alias_of && lk375.payload.prev_man_hours !== undefined ? lk375.payload : null;
+        const back375 = pv375 ? { man_hours: Number(pv375.prev_man_hours) || 0, ...(pv375.prev_day_no != null ? { day_no: pv375.prev_day_no } : {}) } : {};
+        await db(`option_item?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ alias_of: null, ...back375 }) });
+        logEvent("option.unaliased", adminId, { id: p.id, was_alias_of: row261.alias_of, restored: pv375 ? { man_hours: back375.man_hours, from: Number(row261.man_hours) || 0 } : null });
+        const hh375 = (x) => `${Math.round((Number(x) || 0) * 100) / 100} h`;
+        return json(200, { ok: true, note: pv375 ? `Unlinked \u2014 back to its own ${hh375(back375.man_hours)}` : `Unlinked \u2014 kept ${hh375(row261.man_hours)} (no earlier hours on record)` });
       }
       return json(400, { ok: false, error: "Unknown action" });
     }
@@ -20619,6 +20662,10 @@ self.addEventListener("notificationclick", (e) => {
     if (url.pathname === "/api/admin/toggle" && req.method === "POST") {
       const [adminId, fail] = await requireAdmin(); if (fail) return fail;
       const { key, enabled } = await body(req);
+      // Block 375 (audit): a key that isn't a real switch used to "save" (the PATCH matched nothing) and log a flip anyway
+      const [tg375] = await db(`feature_toggle?select=key,enabled&key=eq.${encodeURIComponent(String(key || ""))}`);
+      if (!tg375) return json(404, { ok: false, error: "That switch doesn't exist — reload the page" });
+      if (typeof enabled !== "boolean") return json(400, { ok: false, error: "On or off?" });
       await db(`feature_toggle?key=eq.${encodeURIComponent(key)}`, { method: "PATCH",
         body: JSON.stringify({ enabled: Boolean(enabled), changed_by: adminId, changed_at: new Date().toISOString() }) });
       logEvent("toggle.flipped", adminId, { key, enabled: Boolean(enabled) });
