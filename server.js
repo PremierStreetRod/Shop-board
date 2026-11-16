@@ -1065,6 +1065,12 @@ function lead353() {
   }
   return LEAD353.data && now - LEAD353.data.at <= LEAD353_STALE ? LEAD353.data : null;   // stale beyond an hour = no dates, never wrong dates
 }
+// Block 381 (Daniel 11/16 10:23: "many times when we click over to the shop board, the lead times dont show. not until we
+// refresh"): the estimate only refreshed when a SIGNED-IN board viewer asked for it (the TV never does), so after an hour
+// with no signed-in viewer — or any restart (every deploy) — the first visitor got the board with no dates while the
+// compute started behind them. Now the server keeps it warm on its own: one look a minute (and 5 s after boot); lead353()
+// itself still recomputes only when the 5-minute TTL has passed, single-flight, so this is at most one compute per 5 min.
+if (DB_READY) { setTimeout(() => { try { lead353(); } catch (e) {} }, 5000); setInterval(() => { try { lead353(); } catch (e) {} }, 60 * 1000); }
 // Block 332 (Daniel 10/27 17:36: "Line Idle for: TIME … the complete time that line has had no one
 // working a step since it started on the line … make sure it calculates for lunch time so it doesnt
 // track that, one hour per day"): the one idle number the TV tile and the reports share.
@@ -4743,6 +4749,9 @@ const boardPage = (tv98 = false, emp196 = null) => `<!doctype html>
             l.upcoming.map(u => '<div style="background:linear-gradient(' + LTBG[lt(l.id)] + ',' + LTBG[lt(l.id)] + '),#1c1c1e;border:1px solid #2c2c2e;border-radius:10px;padding:8px 12px;margin-bottom:6px"><b>ORDER ' + ol(u.order) + '</b>' + (u.hold ? ' <span style="background:#ffd60a;color:#000;border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:900;letter-spacing:.04em;vertical-align:middle">Coyote HOLD</span>' : '') + '<div style="opacity:.8;font-size:.92rem">' + [u.customer, u.dest].filter(Boolean).join(" · ") + '</div></div>').join("") + '</div>').join("")
           : '<div style="opacity:.45">Nothing in the queue.</div>');
       }
+      // Block 381: the lead-time estimate wasn't ready when this answer was built (right after a restart) — re-check in 3 s,
+      // up to 10 times (~30 s), so the dates fill in on their own instead of needing a refresh. The 30 s poll stays as the backstop.
+      if (!TVMODE && s.lead_wait) { window.leadTry381 = (window.leadTry381 || 0) + 1; if (window.leadTry381 <= 10) setTimeout(refresh, 3000); } else { window.leadTry381 = 0; }
       // Block 266: the RETURNED FOR FIX lane — own strip, own countdown color.
       const fx266 = document.getElementById("fixstrip");
       if (fx266) fx266.innerHTML = (s.fixjobs && s.fixjobs.length)
@@ -16868,7 +16877,8 @@ const handleRequest355 = async (req, res) => {
       // Block 353: Expected Line Dates + the line's lead time — read from the 5-minute background cache (no DB trip here)
       // Fable audit: SIGNED-IN viewers only (Daniel 11/3: "on the shop board, NOT on the live TV board"; Block 173: the public JSON is
       // structure, not shop performance) — and the build id is used here, never shipped.
-      try { const L353 = sessB133 ? lead353() : null; for (const pl of payload298.lines) { const ll = L353 && L353.lines ? L353.lines[pl.id] : null; if (ll) pl.lead = ll.lead;
+      try { const L353 = sessB133 ? lead353() : null; if (sessB133 && !L353) payload298.lead_wait = true;   // Block 381: estimate not ready yet — the staff board re-checks shortly
+        for (const pl of payload298.lines) { const ll = L353 && L353.lines ? L353.lines[pl.id] : null; if (ll) pl.lead = ll.lead;
         for (const u of pl.upcoming || []) { const c = ll ? ll.cabs[u.id] : null; delete u.id; if (c) { u.eld = c.date; u.eldp = c.pace_date; } } } } catch (e353) { /* the board never waits on, or breaks over, the estimate */ }
       const body298 = JSON.stringify(payload298);
       clearTimeout(pendTimer298); boardCache298[bsKey298] = { at: Date.now(), body: body298, pending: null }; resolve298(body298);
