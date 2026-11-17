@@ -1770,7 +1770,7 @@ function render(){
     } else {
       var subs = [], bySub = {};   // one heading per sub-group, in the order the list first meets it
       (S.st.items || []).filter(function(it){ return it.grp === v.tab; }).forEach(function(it){ var k = it.sub || ""; if (!bySub[k]) { bySub[k] = []; subs.push(k); } bySub[k].push(it); });
-      subs.forEach(function(k){ body += '<div class="gh"><span>' + esc(k) + '</span></div>' + bySub[k].map(function(it){ return itemRow(it, bId); }).join(""); });
+      subs.forEach(function(k){ body += (k ? '<div class="gh"><span>' + esc(k) + '</span></div>' : '<div style="height:6px"></div>') + bySub[k].map(function(it){ return itemRow(it, bId); }).join(""); });   // Block 383: no headings → no empty strip
     }
   }
   h += '<div id="sup382list">' + body + '</div>' + wrHtml() + '<div class="msg" id="sup382m"></div>';
@@ -4610,7 +4610,6 @@ const supBtn382 = (emp) => emp && SUP_DEPTS382.includes(emp.department)
 // ── Kailey's / the admin's list editor ───────────────────────────────────────────────────────────────────────────────
 function supAdminHtml382(items, wis, emps) {
   const e = supEsc382, live = items.filter((i) => !i.retired), ret = items.filter((i) => i.retired);
-  const subsOf = (g) => [...new Set(items.filter((i) => i.grp === g).map((i) => i.sub).filter(Boolean))];
   const unitSel = (id, u) => `<select onchange="supA382('update',{id:'${id}',unit:this.value},this)">${SUP_UNITS382.map((x) => `<option${x === u ? " selected" : ""}>${x}</option>`).join("")}</select>`;
   const grpSel = (attr, g) => `<select ${attr}>${SUP_GRPS382.map(([k, l]) => `<option value="${k}"${k === g ? " selected" : ""}>${l}</option>`).join("")}</select>`;
   const nm = (id) => { const p = emps[id]; return p ? `${p.first_name || ""}` : "?"; };
@@ -4627,26 +4626,22 @@ function supAdminHtml382(items, wis, emps) {
       </div>
       <div id="wia382-${n}" style="display:none;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center">
         <input id="wip382-${n}" placeholder="P# (optional)" style="width:90px"><input id="win382-${n}" value="${e(g.text)}" style="min-width:220px;flex:1">
-        ${grpSel(`id="wig382-${n}"`, "misc")}<input id="wis382-${n}" value="Added from write-ins" style="width:170px">
+        ${grpSel(`id="wig382-${n}"`, "misc")}
         <select id="wiu382-${n}">${SUP_UNITS382.map((x) => `<option${x === g.unit ? " selected" : ""}>${x}</option>`).join("")}</select>
-        <button class="b382 grn" onclick="supA382('wi_add',{ids:'${g.ids.join(",")}',pnum:document.getElementById('wip382-${n}').value,name:document.getElementById('win382-${n}').value,grp:document.getElementById('wig382-${n}').value,sub:document.getElementById('wis382-${n}').value,unit:document.getElementById('wiu382-${n}').value},this)">Add &amp; match</button>
+        <button class="b382 grn" onclick="supA382('wi_add',{ids:'${g.ids.join(",")}',pnum:document.getElementById('wip382-${n}').value,name:document.getElementById('win382-${n}').value,grp:document.getElementById('wig382-${n}').value,sub:'',unit:document.getElementById('wiu382-${n}').value},this)">Add &amp; match</button>
       </div></div>`).join("");
-  const rowHtml = (i, k, arr) => `<div class="row382">
-      <div class="r1"><input value="${e(i.pnum || "")}" placeholder="P#" style="width:76px" onchange="supA382('update',{id:'${i.id}',pnum:this.value},this)"><input value="${e(i.name)}" style="flex:1;min-width:200px" onchange="supA382('update',{id:'${i.id}',name:this.value},this)"></div>
-      <div class="r2"><span class="lb">Heading</span><input value="${e(i.sub)}" list="subs382-${i.grp}" style="width:170px" onchange="supA382('update',{id:'${i.id}',sub:this.value},this)">
-        <span class="lb">Unit</span>${unitSel(i.id, i.unit)}
-        ${i.retired ? `<button class="b382 grn" onclick="supA382('restore',{id:'${i.id}'},this)">Restore</button>`
-        : `<button class="b382" title="Move up" ${k === 0 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:-1},this)">&uarr;</button><button class="b382" title="Move down" ${k === arr.length - 1 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:1},this)">&darr;</button>
-           ${grpSel(`title="Move to another tab" onchange="supA382('update',{id:'${i.id}',grp:this.value},this)"`, i.grp)}
-           <button class="b382 red" onclick="supArm382(this,function(b){supA382('retire',{id:'${i.id}'},b)})">Remove</button>`}</div></div>`;
-  const tab = (g) => { const arr = live.filter((i) => i.grp === g); const subs = [...new Set(arr.map((i) => i.sub || ""))];   // one heading per sub-group (same as the staff screen)
-    return subs.map((sb) => `<div class="sub382">${e(sb || "\u2014")}</div>` + arr.filter((i) => (i.sub || "") === sb).map((i) => rowHtml(i, arr.indexOf(i), arr)).join("")).join(""); };
+  // Block 383 (Daniel 11/17 10:45): "get rid of the heading part … make each part fit onto one line" — one row per item:
+  // P# · description · unit · ↑ ↓ · tab · Remove. The description is the only part that stretches.
+  const rowHtml = (i, k, arr) => `<div class="row382"><input class="pn382" value="${e(i.pnum || "")}" placeholder="P#" onchange="supA382('update',{id:'${i.id}',pnum:this.value},this)"><input class="nm382" value="${e(i.name)}" title="${e(i.name)}" onchange="supA382('update',{id:'${i.id}',name:this.value},this)">${unitSel(i.id, i.unit)}${i.retired ? `<button class="b382 grn" onclick="supA382('restore',{id:'${i.id}'},this)">Restore</button>`
+      : `<button class="b382" title="Move up" ${k === 0 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:-1},this)">&uarr;</button><button class="b382" title="Move down" ${k === arr.length - 1 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:1},this)">&darr;</button>${grpSel(`class="tb382s" title="Move to another tab" onchange="supA382('update',{id:'${i.id}',grp:this.value},this)"`, i.grp)}<button class="b382 red" onclick="supArm382(this,function(b){supA382('retire',{id:'${i.id}'},b)})">Remove</button>`}</div>`;
+  const tab = (g) => { const arr = live.filter((i) => i.grp === g); return arr.map((i, k) => rowHtml(i, k, arr)).join(""); };   // Block 383: the paper's order, no headings
   return `<div id="supwrap382">
   <style>
     #supwrap382 input,#supwrap382 select{background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-size:15px}
     #supwrap382 table{width:100%;border-collapse:collapse;font-size:.92rem}#supwrap382 th{opacity:.55;text-align:left;font-weight:600;padding:5px 6px}#supwrap382 td{padding:5px 6px;border-top:1px solid var(--line)}
-    #supwrap382 .sub382{background:#151517;color:#8e8e93;font-size:.76rem;letter-spacing:.06em;text-transform:uppercase;padding:7px 8px;margin-top:8px;border-radius:6px}
-    #supwrap382 .row382{border-bottom:1px solid var(--line);padding:8px 2px}#supwrap382 .r1,#supwrap382 .r2{display:flex;gap:6px;flex-wrap:wrap;align-items:center}#supwrap382 .r2{margin-top:6px}#supwrap382 .lb{opacity:.5;font-size:.8rem}
+    #supwrap382 .row382{display:flex;gap:5px;align-items:center;border-bottom:1px solid var(--line);padding:5px 0}
+    #supwrap382 .row382 input,#supwrap382 .row382 select{padding:6px 6px;font-size:14px}#supwrap382 .row382 .b382{padding:6px 8px;margin:0}
+    #supwrap382 .pn382{width:58px;flex:none}#supwrap382 .nm382{flex:1;min-width:0}#supwrap382 .row382 select{flex:none}#supwrap382 .tb382s{width:96px}
     .b382{background:#2c2c2e;border:none;border-radius:8px;color:#fff;padding:7px 10px;font-weight:700;font-size:.85rem;cursor:pointer;margin:1px}.b382.grn{background:#1d3a24;color:#7ee39a}.b382.blu{background:#10263f;color:#8ec9ff}.b382.red{background:#3a1d1d;color:#ff8a80}.b382:disabled{opacity:.3}
     .tab382{background:#2c2c2e;border:none;border-radius:9px;color:#fff;padding:8px 14px;font-weight:700;margin:0 4px 6px 0;cursor:pointer}.tab382.a{background:#ffd60a;color:#000}
     .wi382{border-top:1px solid #3a3200;padding:8px 0}.wi382:first-of-type{border-top:none}
@@ -4654,14 +4649,13 @@ function supAdminHtml382(items, wis, emps) {
   <p style="opacity:.7;margin:0 0 8px;font-size:.9rem">What Production, Body Shop, Build and Warehouse see on <b>+ Supplies used</b>. Changes show on their screens right away. <a href="/supplies/report" style="color:#8ec9ff;font-weight:700;margin-left:6px">&#128202; Supplies report &rsaquo;</a></p>
   ${wis.length ? `<div style="background:#2a2200;border:1px solid #ffd60a;border-radius:10px;padding:10px 12px;margin:0 0 12px"><b style="color:#ffd60a">&#9998; Write-ins to sort (${Object.keys(groups).length})</b>${wiHtml}</div>` : ""}
   <div>${SUP_GRPS382.map(([g, l]) => `<button class="tab382${g === "abrasives" ? " a" : ""}" data-t382="${g}" onclick="supTab382('${g}')">${l} ${live.filter((i) => i.grp === g).length}</button>`).join("")}<button class="tab382" data-t382="retired" onclick="supTab382('retired')" style="background:none;color:#8e8e93">Retired ${ret.length}</button></div>
-  ${SUP_GRPS382.map(([g]) => `<datalist id="subs382-${g}">${subsOf(g).map((s) => `<option value="${e(s)}">`).join("")}</datalist>`).join("")}
   ${SUP_GRPS382.map(([g]) => `<div class="tb382" data-tb382="${g}" style="display:${g === "abrasives" ? "" : "none"}">${tab(g)}</div>`).join("")}
   <div class="tb382" data-tb382="retired" style="display:none;overflow-x:auto">${ret.length ? ret.map((i, k) => rowHtml(i, k, ret)).join("") : `<p style="opacity:.6">Nothing retired. Removing an item retires it — it leaves the staff screens, and past reports keep its name. Restore brings it back.</p>`}</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:10px;border-top:2px dashed #3a3a3c">
     <b>+ Add item</b><input id="supnp382" placeholder="P# (optional)" style="width:100px"><input id="supnn382" placeholder="Description" style="flex:1;min-width:220px">
-    ${grpSel(`id="supng382"`, "abrasives")}<input id="supns382" placeholder="Heading (e.g. Sanding rolls)" style="width:190px">
+    ${grpSel(`id="supng382"`, "abrasives")}
     <select id="supnu382">${SUP_UNITS382.map((x) => `<option>${x}</option>`).join("")}</select>
-    <button class="b382 grn" onclick="supA382('add',{pnum:document.getElementById('supnp382').value,name:document.getElementById('supnn382').value,grp:document.getElementById('supng382').value,sub:document.getElementById('supns382').value,unit:document.getElementById('supnu382').value},this)">Add</button>
+    <button class="b382 grn" onclick="supA382('add',{pnum:document.getElementById('supnp382').value,name:document.getElementById('supnn382').value,grp:document.getElementById('supng382').value,sub:'',unit:document.getElementById('supnu382').value},this)">Add</button>
   </div>
   <div id="supmsg382" style="min-height:1.2em;margin-top:6px;color:#ffd60a;font-size:.9rem"></div>
 </div>`;
