@@ -170,7 +170,7 @@ function dbRequest355(urlStr, method, headers, body) {
 // Every answer from memory is a deep copy (callers may sort / push / edit what they get). DB_CACHE=off (Railway env) = no memory.
 const CACHE356_OFF = String(process.env.DB_CACHE || "").toLowerCase() === "off";
 const CACHE356_TTL = 60000;
-const CACHE356_TABLES = new Set(["employee", "feature_toggle", "shop_setting", "shop_calendar", "line", "product", "step_template", "build_template", "pick_list_item", "body_standard", "wh_standard", "prep_standard", "option_item"]);
+const CACHE356_TABLES = new Set(["employee", "feature_toggle", "shop_setting", "shop_calendar", "line", "product", "step_template", "build_template", "pick_list_item", "body_standard", "wh_standard", "prep_standard", "option_item", "supply_item"]);   // Block 382: + supply_item (Kailey's list)
 const cache356 = new Map();   // path -> { at, val }
 const inflight356 = new Map();   // path -> the pending read (shared tables)
 const cacheStat356 = { hits: 0, misses: 0, memo: 0, wipes: 0, since: new Date().toISOString() };
@@ -1626,7 +1626,243 @@ const guardMsg372 = (ageMs, reason) => {
   const s = Math.max(0, Math.round(ageMs / 1000));
   return `You clocked IN ${s < 2 ? "just now" : s + " seconds ago"}.\n\nClock OUT now${reason ? " (" + reason + ")" : ""}?\n\nOK = clock out · Cancel = stay clocked in`;
 };
+// Block 382: the supplies screen (staff side) — served once as /sup382.js (cached a day; the ?v= busts it on every change)
+const SUP_JS382 = String.raw`(function(){
+if (window.SUP382) return;
+var S = window.SUP382 = { st: null, loading: null, pend: {}, chain: {}, cab: undefined, view: { mode: "day", tab: "mine", q: "" }, n: 0 };
+var GRP = [["abrasives","Abrasives"],["liquids","Liquids"],["masking","Masking"],["misc","Misc"]];
+var UNITS = ["each","sheet","pair","ft","oz","roll","can","tube","kit","box","gal","qt"];
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+function nq(q){ q = Number(q) || 0; return String(Math.round(q * 100) / 100); }
+function el(id){ return document.getElementById(id); }
+function css(){
+  if (el("sup382css")) return;
+  var s = document.createElement("style"); s.id = "sup382css";
+  s.textContent = ".s382{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.72);z-index:9000;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 10px 40px}"
+   + ".s382 .sh{max-width:760px;margin:0 auto;background:#1c1c1e;border:1px solid #3a3a3c;border-radius:18px;padding:16px;color:#fff;text-align:left;font-size:16px}"
+   + ".s382 .tp{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.s382 .h{font-size:1.3rem;font-weight:800}"
+   + ".s382 .x{background:none;border:none;color:#8e8e93;font-size:1.05rem;padding:8px;cursor:pointer}"
+   + ".s382 .cab{display:inline-block;background:#2c2c2e;border-radius:20px;padding:7px 13px;font-size:.92rem;margin-bottom:10px;border:none;color:#fff;cursor:pointer}.s382 .cab b{color:#ffd60a}"
+   + ".s382 .srch{width:100%;box-sizing:border-box;background:#111;border:1px solid #3a3a3c;border-radius:12px;padding:12px 14px;font-size:16px;color:#fff;margin-bottom:10px}"
+   + ".s382 .tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}.s382 .tab{flex:1;min-width:84px;text-align:center;padding:11px 4px;border-radius:10px;background:#2c2c2e;font-weight:700;border:none;color:#fff;font-size:.95rem;cursor:pointer}.s382 .tab.a{background:#ffd60a;color:#000}"
+   + ".s382 .gh{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:#8e8e93;margin:14px 2px 4px;display:flex;justify-content:space-between}"
+   + ".s382 .it{display:flex;align-items:center;gap:8px;padding:7px 6px;border-top:1px solid #2c2c2e}.s382 .it.has{background:#152a1b;border-radius:12px;border-top-color:transparent}"
+   + ".s382 .pn{width:46px;font-weight:800;color:#8e8e93;font-size:.85rem;flex:none}.s382 .nm{flex:1;line-height:1.2;font-size:.98rem}.s382 .nm small{display:block;color:#8e8e93;font-size:.78rem;margin-top:2px}"
+   + ".s382 .u{width:42px;text-align:center;font-size:.72rem;color:#8e8e93;text-transform:uppercase;letter-spacing:.05em;flex:none}"
+   + ".s382 .sb{width:48px;height:46px;border-radius:12px;background:#2c2c2e;border:none;color:#fff;font-size:1.6rem;font-weight:700;cursor:pointer;flex:none;touch-action:manipulation}.s382 .sb.p{background:#1d3a5c;color:#8ec9ff}"
+   + ".s382 .q{width:48px;text-align:center;font-size:1.25rem;font-weight:800;flex:none;background:none;border:none;color:#fff;cursor:pointer}.s382 .it.has .q{color:#30d158}"
+   + ".s382 .q4{background:#2c2c2e;border:none;border-radius:9px;color:#8ec9ff;font-weight:700;padding:8px 7px;font-size:.82rem;cursor:pointer;flex:none}"
+   + ".s382 .cb{font-size:.72rem;color:#ffd60a;width:62px;text-align:right;flex:none}"
+   + ".s382 .wr{border:2px dashed #3a3a3c;border-radius:12px;padding:12px;margin-top:14px}.s382 .wr input,.s382 .wr select{background:#111;border:1px solid #3a3a3c;border-radius:10px;padding:11px;font-size:16px;color:#fff}"
+   + ".s382 .big{display:block;width:100%;border:none;border-radius:12px;padding:16px;font-size:1.1rem;font-weight:800;margin-top:14px;cursor:pointer}"
+   + ".s382 .ok{background:#30d158;color:#000}.s382 .no{background:#2c2c2e;color:#fff;border:1px solid #3a3a3c}.s382 .lk{display:block;text-align:center;color:#8e8e93;margin-top:12px;background:none;border:none;font-size:.95rem;width:100%;cursor:pointer}"
+   + ".s382 .msg{color:#ffd60a;min-height:1.1em;margin-top:8px;font-size:.92rem}.s382 .mut{color:#8e8e93}"
+   + ".s382 .pk{display:block;width:100%;text-align:left;background:#2c2c2e;border:none;border-radius:10px;color:#fff;padding:12px;margin-top:6px;font-size:1rem;cursor:pointer}.s382 .pk.a{outline:2px solid #ffd60a}"
+   + "";
+  document.body.appendChild(s);   // body, never head: the in-place redraw (Block 357) compares the head and would fall back to a full reload
+}
+function itemsById(){ var m = {}; (S.st.items || []).forEach(function(i){ m[i.id] = i; }); (S.st.gone || []).forEach(function(i){ if (!m[i.id]) m[i.id] = i; }); return m; }
+function cabId(){ return S.cab && S.cab.id ? S.cab.id : null; }
+function cabTxt(c){ return c && c.id ? (c.label || "cab") : "Shop (no cab)"; }
+function rowsToday(){ return (S.st && S.st.today) || []; }
+function rowFor(itemId, bId){ var r = rowsToday(); for (var i = 0; i < r.length; i++) if (r[i].item_id === itemId && (r[i].build_id || null) === (bId || null)) return r[i]; return null; }
+function totalFor(itemId){ var t = 0; rowsToday().forEach(function(r){ if (r.item_id === itemId) t += Number(r.qty) || 0; }); return t; }
+function keyOf(r){ if (!r.k) r.k = r.id ? "r" + r.id : "n" + (++S.n); return r.k; }
+function toast(t){ var m = el("sup382m"); if (m) m.textContent = t || ""; }
+function send(r){
+  var k = keyOf(r);
+  S.chain[k] = (S.chain[k] || Promise.resolve()).then(function(){
+    var b = { qty: Number(r.qty) || 0, build_id: r.build_id || null, line_id: r.line_id || null, src: S.view.mode };
+    if (r.id) b.row_id = r.id; else if (r.item_id) b.item_id = r.item_id; else { b.write_in = r.write_in; b.unit = r.unit; }
+    return fetch("/api/supplies/set", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", keepalive: true, body: JSON.stringify(b) })   // keepalive: a tap still lands if the page is leaving
+      .then(function(x){ return x.json(); })
+      .then(function(o){ if (o && o.ok && o.row) { r.id = o.row.id; toast(""); paintBtn(); } else toast((o && o.error) || "Didn't save — tap again"); })
+      .catch(function(){ toast("Wi-Fi hiccup — tap again (nothing lost on screen)"); });
+  });
+  return S.chain[k];
+}
+function later(r){ var k = keyOf(r); if (S.pend[k]) clearTimeout(S.pend[k]); S.pend[k] = setTimeout(function(){ delete S.pend[k]; send(r); }, 450); }
+S.flush = function(){
+  Object.keys(S.pend).forEach(function(k){ clearTimeout(S.pend[k]); delete S.pend[k]; var r = null; rowsToday().forEach(function(x){ if (x.k === k) r = x; }); if (r) send(r); });
+  var all = Object.keys(S.chain).map(function(k){ return S.chain[k]; });
+  return Promise.all(all);
+};
+function setQty(itemId, bId, q, r){
+  q = Math.max(0, Math.min(9999, Math.round((Number(q) || 0) * 100) / 100));
+  if (!r) r = rowFor(itemId, bId);
+  if (!r) { var it = itemsById()[itemId]; r = { id: null, item_id: itemId, unit: it ? it.unit : "each", qty: 0, build_id: bId || null, line_id: S.cab && S.cab.line_id || null, cab: bId ? cabTxt(S.cab) : "" }; S.st.today.push(r); }
+  r.qty = q; later(r); render(); paintBtn();
+}
+S.load = function(force){
+  if (S.st && !force) return Promise.resolve(S.st);
+  if (S.loading) return S.loading;
+  S.loading = fetch("/api/supplies/me", { credentials: "same-origin", cache: "no-store" }).then(function(r){ return r.json(); }).then(function(j){
+    S.loading = null; if (!j || !j.ok) throw new Error((j && j.error) || "Couldn't load the supplies list");
+    if (S.st && S.st.today) { var keep = S.st.today.filter(function(r){ return !r.id; }); j.today = (j.today || []).concat(keep); }
+    S.st = j; S.at = Date.now(); if (S.cab === undefined || force) S.cab = j.cab || null; paintBtn(); return j;
+  }, function(e){ S.loading = null; throw e; });
+  return S.loading;
+};
+function paintBtn(){
+  var b = el("sup382btn"); if (!b || !S.st) return;
+  if (!(S.st.on && S.st.eligible)) { b.hidden = true; return; }
+  b.hidden = false;
+  var t = el("sup382tally"); if (!t) return;
+  var ids = itemsById(), parts = [];
+  rowsToday().forEach(function(r){ if (!(Number(r.qty) > 0)) return; var it = r.item_id ? ids[r.item_id] : null;
+    parts.push("<b>" + esc(it ? (it.pnum || it.name) : "✎ " + (r.write_in || "")) + "</b> " + nq(r.qty) + " " + esc(r.unit || (it && it.unit) || "")); });
+  t.innerHTML = parts.length ? "Logged today: " + parts.slice(0, 5).join(" · ") + (parts.length > 5 ? " · +" + (parts.length - 5) + " more" : "") : "Nothing logged yet today";
+}
+function stepper(itemId, bId, q, unit, r){
+  var a = r && r.k ? ' data-k="' + r.k + '"' : ' data-i="' + itemId + '" data-b="' + (bId || "") + '"';
+  return '<button class="sb" data-a="dec"' + a + '>−</button><button class="q" data-a="type"' + a + '>' + nq(q) + '</button><button class="sb p" data-a="inc"' + a + '>+</button>'
+    + (unit === "oz" ? '<button class="q4" data-a="q4"' + a + '>+4</button>' : "");
+}
+function itemRow(it, bId){
+  var r = rowFor(it.id, bId), q = r ? r.qty : 0;
+  return '<div class="it' + (q > 0 ? " has" : "") + '"><div class="pn">' + esc(it.pnum || "") + '</div><div class="nm">' + esc(it.name) + '</div><div class="u">' + esc(it.unit) + '</div>' + stepper(it.id, bId, q, it.unit, null) + '</div>';
+}
+function match(it, q){ var h = ((it.pnum || "") + " " + it.name + " " + it.sub).toLowerCase(); return q.toLowerCase().split(/\s+/).filter(Boolean).every(function(w){ return h.indexOf(w) > -1; }); }
+function wrHtml(){
+  return '<div class="wr" id="sup382wr"><button class="lk" style="text-align:left;color:#fff;font-weight:800;margin:0" data-a="wi-open">✎ Not on the list? Write it in</button>'
+    + '<div id="sup382wrb" style="display:' + (S.view.wi ? "block" : "none") + ';margin-top:8px"><input id="sup382wt" maxlength="80" placeholder="What was it? (e.g. red scotch pad)" style="width:100%;box-sizing:border-box">'
+    + '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="sup382wq" type="number" inputmode="decimal" min="0" step="any" value="1" style="width:90px"><select id="sup382wu">'
+    + UNITS.map(function(u){ return '<option>' + u + '</option>'; }).join("") + '</select><button class="sb p" style="width:auto;padding:0 18px;font-size:1rem" data-a="wi-add">Add</button></div>'
+    + '<div class="mut" style="font-size:.82rem;margin-top:6px">It goes to accounting, who matches it to the list or adds it for everyone.</div></div></div>';
+}
+function render(){
+  var box = el("sup382"); if (!box || !S.st) return;
+  var v = S.view, ids = itemsById(), bId = cabId(), h = "";
+  var eod = v.mode === "eod", logged = rowsToday().filter(function(r){ return Number(r.qty) > 0; });
+  h += '<div class="tp"><div class="h">' + (eod ? "🏁 Supplies used today?" : "🧰 Supplies used") + '</div>'
+    + (eod ? (logged.length ? "" : '<button class="big no" style="width:auto;margin:0;padding:11px 16px;font-size:1rem" data-a="none">Nothing today</button>') : '<button class="x" data-a="close">Done ✕</button>') + '</div>';
+  h += '<button class="cab" data-a="cab">Logging to <b>' + esc(cabTxt(S.cab)) + '</b> <span class="mut">· change</span></button>';
+  if (S.view.pick) {
+    h += '<div class="gh"><span>Which cab is this for?</span></div><button class="pk' + (!bId ? " a" : "") + '" data-a="pickcab" data-c="">Shop — no cab</button>';
+    (S.cabs || []).forEach(function(c){ h += '<button class="pk' + (bId === c.id ? " a" : "") + '" data-a="pickcab" data-c="' + c.id + '">' + esc(c.label) + ' <span class="mut">· ' + esc(c.where || "") + '</span></button>'; });
+    if (!S.cabs) h += '<div class="mut" style="margin-top:8px">Loading cabs…</div>';
+    box.innerHTML = '<div class="sh">' + h + '<button class="lk" data-a="pickback">← Back</button></div>'; return;
+  }
+  h += '<input class="srch" id="sup382q" placeholder="🔍 Find an item — type “320”, “disc”, “P99”…" value="' + esc(v.q) + '" autocomplete="off">';
+  var body = "";
+  if (v.q.trim()) {
+    var hits = (S.st.items || []).filter(function(it){ return match(it, v.q.trim()); });
+    body += '<div class="gh"><span>' + hits.length + ' match' + (hits.length === 1 ? "" : "es") + '</span></div>' + hits.slice(0, 40).map(function(it){ return itemRow(it, bId); }).join("");
+    if (!hits.length) body += '<div class="mut" style="padding:8px 4px">Nothing on the list matches — write it in below.</div>';
+  } else if (eod) {
+    if (logged.length) {
+      body += '<div class="gh"><span>Already logged today</span><span>cab</span></div>';
+      logged.forEach(function(r){ keyOf(r); var it = r.item_id ? ids[r.item_id] : null;
+        body += '<div class="it has"><div class="pn">' + esc(it ? it.pnum || "" : "✎") + '</div><div class="nm">' + esc(it ? it.name : r.write_in) + (it ? "" : ' <small>write-in</small>') + '</div><div class="u">' + esc(r.unit || (it && it.unit) || "") + '</div>' + stepper(r.item_id, r.build_id, r.qty, r.unit, r) + '<div class="cb">' + esc(r.build_id ? r.cab || "cab" : "shop") + '</div></div>'; });
+    }
+    var usual = (S.st.usual || []).map(function(i){ return ids[i]; }).filter(function(it){ return it && !totalFor(it.id); });
+    if (usual.length) { body += '<div class="gh"><span>' + (logged.length ? "Your usual — anything else?" : "Your usual") + '</span></div>' + usual.map(function(it){ return itemRow(it, bId); }).join(""); }
+    if (!logged.length && !usual.length) body += '<div class="mut" style="padding:8px 4px">Search above for anything you used today, or tap <b>Nothing today</b>.</div>';
+  } else {
+    body += '<div class="tabs">' + [["mine", "★ Mine"]].concat(GRP).map(function(t){ return '<button class="tab' + (v.tab === t[0] ? " a" : "") + '" data-a="tab" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join("") + '</div>';
+    if (v.tab === "mine") {
+      var mine = [], seen = {};
+      rowsToday().forEach(function(r){ if (r.item_id && ids[r.item_id] && !seen[r.item_id] && (r.build_id || null) === bId) { seen[r.item_id] = 1; mine.push(ids[r.item_id]); } });
+      (S.st.usual || []).forEach(function(i){ if (ids[i] && !seen[i]) { seen[i] = 1; mine.push(ids[i]); } });
+      body += mine.length ? mine.map(function(it){ return itemRow(it, bId); }).join("") : '<div class="mut" style="padding:10px 4px">Your most-used items show up here as you log. Pick a tab above or search.</div>';
+      var wis = rowsToday().filter(function(r){ return !r.item_id && Number(r.qty) > 0; });
+      if (wis.length) { body += '<div class="gh"><span>Written in today</span></div>'; wis.forEach(function(r){ keyOf(r); body += '<div class="it has"><div class="pn">✎</div><div class="nm">' + esc(r.write_in) + '</div><div class="u">' + esc(r.unit) + '</div>' + stepper(null, r.build_id, r.qty, r.unit, r) + '</div>'; }); }
+    } else {
+      var subs = [], bySub = {};   // one heading per sub-group, in the order the list first meets it
+      (S.st.items || []).filter(function(it){ return it.grp === v.tab; }).forEach(function(it){ var k = it.sub || ""; if (!bySub[k]) { bySub[k] = []; subs.push(k); } bySub[k].push(it); });
+      subs.forEach(function(k){ body += '<div class="gh"><span>' + esc(k) + '</span></div>' + bySub[k].map(function(it){ return itemRow(it, bId); }).join(""); });
+    }
+  }
+  h += '<div id="sup382list">' + body + '</div>' + wrHtml() + '<div class="msg" id="sup382m"></div>';
+  if (eod) {
+    h += '<button class="big ok" data-a="save">✓ ' + (logged.length ? "Save &amp; clock out" : "Clock out — nothing used") + '</button>';
+    if (!S.eodReq) h += '<button class="lk" data-a="skip">Skip for today</button>';
+    h += '<button class="lk" data-a="back">← Back — stay clocked in</button>';
+  }
+  var keepFocus = document.activeElement && document.activeElement.id === "sup382q", pos = keepFocus ? document.activeElement.selectionStart : 0;
+  box.innerHTML = '<div class="sh">' + h + '</div>';
+  if (keepFocus) { var qi = el("sup382q"); qi.focus(); try { qi.setSelectionRange(pos, pos); } catch (e) {} }
+  if (S.eodMsg) { toast(S.eodMsg); }
+}
+function rowOfBtn(b){
+  if (b.dataset.k) { var hit = null; rowsToday().forEach(function(r){ if (r.k === b.dataset.k) hit = r; }); return hit; }
+  return rowFor(b.dataset.i, b.dataset.b || null);
+}
+function onClick(e){
+  var b = e.target.closest("[data-a]"); if (!b) { if (e.target.id === "sup382") close(null); return; }
+  var a = b.dataset.a, r;
+  if (a === "inc" || a === "dec" || a === "q4" || a === "type") {
+    r = rowOfBtn(b); var cur = r ? Number(r.qty) || 0 : 0, nv = cur;
+    if (a === "inc") nv = cur + 1; else if (a === "dec") nv = Math.max(0, cur - 1); else if (a === "q4") nv = cur + 4;
+    else { var t = window.prompt("How many?", nq(cur)); if (t === null) return; nv = Number(String(t).replace(",", ".")); if (!(nv >= 0)) return; }
+    if (r && b.dataset.k) setQty(r.item_id, r.build_id, nv, r); else setQty(b.dataset.i, b.dataset.b || null, nv, r);
+    return;
+  }
+  if (a === "tab") { S.view.tab = b.dataset.t; S.view.q = ""; render(); return; }
+  if (a === "close") { close(null); return; }
+  if (a === "cab") { S.view.pick = true; render(); if (!S.cabs) fetch("/api/supplies/cabs", { credentials: "same-origin" }).then(function(x){ return x.json(); }).then(function(j){ S.cabs = (j && j.cabs) || []; render(); }).catch(function(){ S.cabs = []; render(); }); return; }
+  if (a === "pickcab") { var cid = b.dataset.c || null; if (!cid) S.cab = { id: null, label: "", line_id: S.cab && S.cab.line_id || null }; else { (S.cabs || []).forEach(function(c){ if (c.id === cid) S.cab = { id: c.id, label: c.short || c.label, line_id: S.cab && S.cab.line_id || null }; }); } S.view.pick = false; render(); return; }
+  if (a === "pickback") { S.view.pick = false; render(); return; }
+  if (a === "wi-open") { S.view.wi = !S.view.wi; var wb = el("sup382wrb"); if (wb) wb.style.display = S.view.wi ? "block" : "none"; if (S.view.wi) { var wt = el("sup382wt"); if (wt) wt.focus(); } return; }
+  if (a === "wi-add") {
+    var txt = (el("sup382wt").value || "").trim(), wq = Number(el("sup382wq").value), wu = el("sup382wu").value;
+    if (!txt) { toast("Type what it was first"); el("sup382wt").focus(); return; }
+    if (!(wq > 0)) { toast("How many? (more than 0)"); return; }
+    r = { id: null, item_id: null, write_in: txt.slice(0, 80), unit: wu, qty: Math.round(wq * 100) / 100, build_id: cabId(), line_id: S.cab && S.cab.line_id || null, cab: cabTxt(S.cab) };
+    S.st.today.push(r); send(r); S.view.wi = false; S.view.q = ""; if (S.view.mode === "day") S.view.tab = "mine"; render(); paintBtn(); return;
+  }
+  if (a === "fail") { close("fail"); return; }
+  if (a === "none") { finish("none"); return; }
+  if (a === "save") { finish(rowsToday().some(function(x){ return Number(x.qty) > 0; }) ? "done" : "none"); return; }
+  if (a === "skip") { finish("skip"); return; }
+  if (a === "back") { close(null); return; }
+}
+function onInput(e){ if (e.target.id === "sup382q") { S.view.q = e.target.value; render(); } }
+function finish(ans){
+  var box = el("sup382"); if (box) [].forEach.call(box.querySelectorAll("button"), function(x){ x.disabled = true; });
+  toast("Saving…");
+  S.flush().then(function(){ close(ans); }, function(){ close(ans); });
+}
+function close(ans){
+  var box = el("sup382"); if (box) box.remove();
+  document.documentElement.style.overflow = S.ovf || "";
+  var cb = S.done; S.done = null; S.eodMsg = ""; if (cb) cb(ans);
+  paintBtn();
+}
+S.open = function(mode, opt){
+  css(); opt = opt || {};
+  var old = el("sup382"); if (old) old.remove();
+  var st292 = el("stay292"); if (st292) { try { st292.click(); } catch (e) {} }   // shared tablet: opening the sheet cancels the "back to sign-in" countdown
+  var box = document.createElement("div"); box.id = "sup382"; box.className = "s382"; box.innerHTML = '<div class="sh"><div class="mut">Loading…</div></div>';
+  document.body.appendChild(box); S.ovf = document.documentElement.style.overflow; document.documentElement.style.overflow = "hidden";
+  box.addEventListener("click", onClick); box.addEventListener("input", onInput);
+  S.view = { mode: mode || "day", tab: "mine", q: "", wi: false, pick: false };
+  if (S.st) { try { render(); } catch (e) {} }   // draw at once from what the page already loaded; the fresh copy follows
+  // a fresh copy at End of day, and whenever what the page holds is from another day or over 10 minutes old (a tablet left on Home)
+  var fresh = mode === "eod" || !S.st || S.st.day !== new Date(Date.now() - 7 * 3600000).toISOString().slice(0, 10) || Date.now() - (S.at || 0) > 600000;
+  return (fresh && S.st ? S.flush() : Promise.resolve()).then(function(){ return S.load(fresh); }).then(function(){ if (S.view.mode === "day" && !(S.st.usual || []).length && !rowsToday().length) S.view.tab = "abrasives"; render(); }, function(e){
+    // the list could not load: say so. At End of day the clock-out must still be possible — "Clock out anyway" (recorded), never a dead end.
+    box.innerHTML = '<div class="sh"><div class="h">Supplies</div><div class="msg">' + esc(e.message || "Couldn't load the supplies list") + '</div>'
+      + (mode === "eod" ? '<button class="big ok" data-a="fail">Clock out anyway</button><button class="lk" data-a="back">\u2190 Back \u2014 stay clocked in</button>' : '<button class="big no" data-a="close">Close</button>') + '</div>'; });
+};
+S.eod = function(o){
+  return new Promise(function(res){ S.eodReq = Boolean(o && o.required); S.eodMsg = o && o.again ? (o.error || "") : ""; S.done = res; S.open("eod"); });
+};
+function boot(){ if (el("sup382btn")) setTimeout(function(){ S.load().catch(function(){}); }, 700); }
+document.addEventListener("quiet357", function(){ paintBtn(); });   // an in-place redraw brings a fresh (hidden) button — show it again
+// Fable audit: the warehouse Home and the dept clock card redraw themselves in place after every tap (swapIn292) — that
+// brought back a HIDDEN button and + Supplies vanished after the first tap. Watch for a fresh hidden button and show it.
+try { var mo382 = new MutationObserver(function(){ if (S.mt) return; S.mt = setTimeout(function(){ S.mt = 0; var b = el("sup382btn"); if (b && b.hidden && S.st) paintBtn(); }, 60); });
+  var arm382 = function(){ if (document.body) mo382.observe(document.body, { childList: true, subtree: true }); };
+  if (document.body) arm382(); else document.addEventListener("DOMContentLoaded", arm382); } catch (e) {}
+window.addEventListener("pagehide", function(){ try { S.flush(); } catch (e) {} });   // a tap made in the last half-second still saves
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
+})();
+`;
+const SUP_VER382 = crypto.createHash("md5").update(SUP_JS382).digest("hex").slice(0, 10);
 const netJs = `
+  // Block 382: a clock-out answered { sup382 } opens the supplies screen (loading it if this page hasn't yet), then resends with the answer
+  function supAsk382(o){ return new Promise(function(res){ function go(){ try { window.SUP382.eod(o).then(res, function(){ res(null); }); } catch (e) { res(null); } } if (window.SUP382) return go(); var s = document.createElement("script"); s.src = "/sup382.js"; s.onload = go; s.onerror = function(){ res(null); }; document.head.appendChild(s); }); }
   function mark372(){ try { sessionStorage.setItem("in372", String(Date.now())); } catch (e) {} }
   function lock372(root){ try {
     var t = Number(sessionStorage.getItem("in372") || 0); if (!t || Date.now() - t > 20000) return;
@@ -1651,6 +1887,12 @@ const netJs = `
           return { ok: false, kept372: true, error: "Still clocked in — nothing changed." };
         }
         if (o372 && o372.ok && url === "/api/clock/in") mark372();
+        // Block 382: End of day asks "supplies used today?" once — the answer rides the resend
+        if (o372 && o372.sup382 && url === "/api/clock/out") {
+          const a382 = await supAsk382(o372);
+          if (!a382) return { ok: false, kept382: true, error: "Still clocked in \u2014 nothing changed." };
+          payload = Object.assign({}, payload, { sup382: a382 }); i = -1; continue;
+        }
         return o372;
       } catch (e) {
         if (i >= delays.length)
@@ -2232,6 +2474,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
   </div><script>setInterval(() => { const f = document.activeElement, wp = document.getElementById("wrap107");
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp && wp.style.display !== "none") return;
+    if (document.getElementById("sup382")) return;   // Block 382: the supplies sheet is open
     // Block 124 (logic audit L2): don't wipe a half-entered time-off request —
     // hold the refresh while any of its fields carry text.
     const tof124 = ["to-start","to-end","to-note"].map((id) => document.getElementById(id)).filter(Boolean);
@@ -2260,6 +2503,7 @@ const homePage = (emp, state, usualLines, otherLines, reasons, ah = { now: false
       <button class="name" id="wrapgo107" style="display:inline-block;width:auto;padding:12px 22px;margin-top:10px;border-color:#30d158">Submit wrap-up &amp; clock out</button>
     </div>
     <p class="msg" style="color:#ffd60a">AFTER HOURS — clocking out asks for a one-line wrap-up (+ photos if you like).</p>` : ""}
+    ${typeof supBtn382 === "function" ? supBtn382(emp) : ""}   <!-- Block 382: + Supplies used, any time -->
     <p class="msg">Clocking out — what kind?</p>
     <!-- Block 168 (owner-rep): the two everyday outs — LUNCH and END OF DAY —
          stand alone, big and first. Every other reason folds behind ONE
@@ -2551,6 +2795,7 @@ const cabPage = (emp, build, tasks, lineName, notes = [], tphotos = [], otherLin
     <button onclick="quickOut198('End of day',this)" style="flex:1;background:#2c2c2e;color:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 10px;font-size:1rem;font-weight:700;cursor:pointer">&#127937; End of day</button>
   </div>
   <div style="text-align:center;max-width:560px;margin:0 auto 12px;font-size:.85rem;opacity:.6">Lunch holds your line — your cab and steps will be right here when you're back.</div>
+  ${typeof supBtn382 === "function" ? supBtn382(emp) : ""}   <!-- Block 382: + Supplies used, any time -->
   <div class="msg err" id="qerr198" style="margin:0 0 8px"></div>
   ${prog209.ask ? `
   <!-- Block 209 (owner, Sat 8/22): the END-OF-DAY PROGRESS ASK — customers
@@ -3093,7 +3338,8 @@ const prepBox366 = (b, canPrep, clockedIn, open) => {
 // background and only the named region is swapped — no navigation, so a
 // Sign out tap a second later is never swallowed. Any failure → plain reload
 // (the pre-292 behavior), never a stuck screen.
-const swapIn292Script = () => `function swapIn292(sel, what, autoOut, html373){
+const swapIn292Script = () => `function supAsk382(o){ return new Promise(function(res){ function go(){ try { window.SUP382.eod(o).then(res, function(){ res(null); }); } catch (e) { res(null); } } if (window.SUP382) return go(); var s = document.createElement("script"); s.src = "/sup382.js"; s.onload = go; s.onerror = function(){ res(null); }; document.head.appendChild(s); }); }   // Block 382 (the Body/Build home card has no netJs)
+function swapIn292(sel, what, autoOut, html373){
     var el = document.querySelector(sel);
     try { var now = new Date(); var hh = now.getHours() % 12 || 12, mm = String(now.getMinutes()).padStart(2, "0"), ap = now.getHours() >= 12 ? "PM" : "AM";
       var ack = document.createElement("div"); ack.id = "ack292"; ack.style.cssText = "text-align:center;margin:6px auto;max-width:560px;padding:10px 14px;border-radius:12px;background:#1d5a2d;color:#fff;font-weight:800;font-size:1.1rem";
@@ -3363,6 +3609,8 @@ const whPageScript328 = (ah) => `${netJs}
         body: JSON.stringify({ ...payload, claimed_at: new Date().toISOString() }), signal: ctl304 ? ctl304.signal : undefined });
       if (tm304) clearTimeout(tm304);
       const out = await r.json();
+      // Block 382: End of day asks "supplies used today?" once, then resends with the answer
+      if (out.sup382 && url === "/api/clock/out") { if (tm304) clearTimeout(tm304); if (btn) btn.disabled = false; const a382 = await supAsk382(out); if (!a382) { showErr97(btn, "Still clocked in \u2014 nothing changed."); return; } return post(url, Object.assign({}, payload, { sup382: a382 }), btn); }
       // Block 372: a clock-out right after a clock-in asks first
       if (out.guard372 && !payload.confirm372) { if (btn) btn.disabled = false; if (window.confirm(out.error)) return post(url, Object.assign({}, payload, { confirm372: true }), btn); showErr97(btn, "Still clocked in — nothing changed."); return; }
       if (out.ok) {
@@ -3459,6 +3707,7 @@ const whPageScript328 = (ah) => `${netJs}
     if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA")) return;
     if (wp107 && wp107.style.display !== "none") return;
     if (noteOpen288()) return;   // Block 288: an open parts-note panel is mid-task
+    if (document.getElementById("sup382")) return;   // Block 382: the supplies sheet is open
     location.reload(); }, 600000); // the board keeps itself fresh — never mid-typing · Block 368: a 10-minute BACKSTOP now (was every 60 s — 29% of the shop's
                                    // database work on 11/9); the 6 s change check below (?wh=1) reloads the moment anything this screen shows changes
   // Block 84: fast queue-freshness. When admin OR another warehouse screen
@@ -3467,7 +3716,7 @@ const whPageScript328 = (ah) => `${netJs}
   // /api/queue/state version hash the White Board polls, so the two screens
   // never fork. Skips a cycle while a field is focused (60s backstop covers it).
   var QVER=null;
-  function qpoll(){fetch('/api/queue/state?wh=1',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
+  function qpoll(){fetch('/api/queue/state?wh=1',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j||!j.v)return;if(QVER===null){QVER=j.v;return;}if(j.v!==QVER){var f=document.activeElement;var wp=document.getElementById('ahwrapW107');if((!f||f.tagName!=='INPUT')&&!(wp&&wp.style.display!=='none')&&!document.getElementById('sup382')&&!noteOpen288()){location.reload();}}}).catch(function(){});}
   qpoll();setInterval(qpoll,6000);
 `;
 // ===== Block 337 (Daniel 10/28 14:28: "HOW are we separating all of this so warehouse has an EASILY navigatable home
@@ -3614,6 +3863,7 @@ ${whCss288}</head>
   <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&#8592; Back</a></p>
   ${nav196(emp)}   <!-- Block 196: the ONE shared nav (Order Queue rides in the admin bar; for staff it only bounced to /home) -->
   <div style="text-align:center;margin:4px auto 14px;max-width:560px;padding:14px 18px;border-radius:14px;font-size:1.25rem;font-weight:800;letter-spacing:.02em;${clockedIn ? "background:#1d5a2d;color:#fff;border:2px solid #30d158" : "background:#2c2c2e;color:#9a9aa0;border:2px solid #3a3a3c"}">${emp.first_name} · ${clockedIn ? `&#9679; ON THE CLOCK — ${tabs337 && tabs337.help && tabs337.help.label ? tabs337.help.label : curLine326 === 10 ? "Shop time" : "Warehouse"}` : "&#9675; NOT CLOCKED IN"}</div>
+  ${clockedIn && typeof supBtn382 === "function" ? supBtn382(emp) : ""}   <!-- Block 382: + Supplies used, any time -->
   ${tabs337 && tabs337.help && (clockedIn || tabs337.help.open345) ? stepCard338(tabs337.help) : ""}
   <div class="lane">
     ${ah.stay ? stayCard334(ah.stay) : ""}
@@ -4117,6 +4367,7 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
   <h2>Welcome, ${emp.first_name}.</h2>
   ${inspStrip308(insp308)}${ot374 ? otStrip374(ot374) : ""}
   ${clk && clk.show ? clkCard373(emp, clk) : ""}
+  ${clk && clk.show && typeof supBtn382 === "function" ? supBtn382(emp) : ""}   <!-- Block 382: + Supplies used, any time (Body Shop / Build) -->
   ${body326 ? bodyList326(body326, true) : `<p style="text-align:center;opacity:.75">
     The production board is live and building.<br>
     ${emp.department === "Owner" || emp.role === "admin"
@@ -4187,6 +4438,7 @@ const watcherPage = (emp, clk = null, mt290 = null, insp308 = [], body326 = null
     b.disabled = true;
     try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p, card373: true, claimed_at: new Date().toISOString() }) });   // Block 373: ask for the fresh card in the answer
       const o = await r.json();
+      if (o.sup382 && u.indexOf("/out") > -1) { b.disabled = false; const a382 = await supAsk382(o); if (!a382) { document.getElementById("werr").textContent = "Still clocked in \u2014 nothing changed."; return; } return wclk(u, Object.assign({}, p, { sup382: a382 }), b); }   // Block 382
       if (o.guard372 && !p.confirm372) { b.disabled = false; if (window.confirm(o.error)) return wclk(u, Object.assign({}, p, { confirm372: true }), b); document.getElementById("werr").textContent = "Still clocked in — nothing changed."; return; }   // Block 372
       if (o.ok && u.indexOf("/in") > -1) mark372();   // Block 372: the out buttons wait 3 s
       if (o.ok) return swapIn292("#clkcard292", u.indexOf("/in") > -1 ? "Clocked IN" : "Clocked OUT" + (p && p.reason ? " \u2014 " + String(p.reason).toUpperCase() : ""), true, o.card373);   // Block 373: the answer carries the new card — no second trip   // Block 292: tablet returns to sign-in by itself (phones: no)
@@ -4294,6 +4546,249 @@ const calPanel377 = (days) => `<div class="lane" id="cal377" style="border-color
       m.textContent = out.error || "Something went wrong"; } catch (e) { m.textContent = "Network hiccup \u2014 try again"; }
     btn.disabled = false; }
 </script></div>`;
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Block 382 (Daniel 11/16 10:45 → 11/17 09:07, Plan 102): SUPPLIES USED — the back of the paper punch card moves onto
+// the board. Production, Body Shop, Build and Warehouse log the abrasives / liquids / masking / misc they use, any time
+// ("+ Supplies used" on their Home screen) and at End of day (the clock-out asks once — the 372 guard pattern, so EVERY
+// clock-out screen gets it). Each line carries the person's department + the cab they're on. Kailey (accounting
+// manager) + admins keep the list (units by dropdown, never deleted — retired) and pull the report by period /
+// department / product / cab for QuickBooks. Quantities only. Switches: supplies_log (ON at launch) · supplies_required
+// (OFF at launch = skippable; ON = log or "Nothing today" before the clock-out goes through).
+const SUP_DEPTS382 = ["Production", "Body Shop", "Build", "Warehouse"];
+const SUP_UNITS382 = ["each", "sheet", "pair", "ft", "oz", "roll", "can", "tube", "kit", "box", "gal", "qt"];
+const SUP_GRPS382 = [["abrasives", "Abrasives"], ["liquids", "Liquids"], ["masking", "Masking"], ["misc", "Misc"]];
+const canSup382 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting")));
+const supEsc382 = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const supQ382 = (q) => String(Math.round((Number(q) || 0) * 100) / 100);
+async function supCfg382() {   // feature_toggle is in the 60 s read memory — near free
+  const rows = await db(`feature_toggle?select=key,enabled&key=in.(supplies_log,supplies_required)`).catch(() => []);
+  const on = (k) => Boolean((rows || []).find((r) => r.key === k && r.enabled === true));
+  return { on: on("supplies_log"), required: on("supplies_required") };
+}
+// the cab a person is on RIGHT NOW (null = shop / no cab): Body = their open Body step · Warehouse = the crate/stage step
+// they started · a production line = that line's cab. Build punches dept time (no cab) — they pick one, or it's Shop.
+async function supCab382(empId, dept) {
+  const [lastRows, bodyOpen, whTask] = await Promise.all([
+    db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
+    dept === "Body Shop" ? db(`body_step_open?select=build_id,opened_at&employee_id=eq.${empId}&closed_at=is.null&order=opened_at.desc&limit=1`).catch(() => []) : [],
+    dept === "Warehouse" ? db(`wh_task?select=build_id,started_at&state=eq.in_progress&started_by=eq.${empId}&order=started_at.desc&limit=1`).catch(() => []) : [],
+  ]);
+  const last = lastRows[0]; const lineId = last && last.kind === "clock_in" ? Number(last.line_id) || null : null;
+  if (bodyOpen[0]) return { id: bodyOpen[0].build_id, line_id: lineId };
+  if (whTask[0]) return { id: whTask[0].build_id, line_id: lineId };
+  if (lineId && [1, 2, 3, 4].includes(lineId)) {
+    const [b] = await db(`build?select=id&line_id=eq.${lineId}&state=in.(active,rework,fix_job)&order=started_at.desc&limit=1`);
+    if (b) return { id: b.id, line_id: lineId };
+  }
+  return { id: null, line_id: lineId };
+}
+const supCabLabel382 = (b) => b ? `ORDER ${b.order_number}${b.customer_name ? " · " + String(b.customer_name).split(/\s+/).slice(-1)[0] : ""}` : "";
+// End of day: called from /api/clock/out for End of day / End of shift. null = go ahead; an object = answer with it
+// (the client opens the supplies screen and resends with sup382 = done | none | skip).
+async function supGate382(empId, ans) {
+  const cfg = await supCfg382(); if (!cfg.on) return null;
+  const [me] = await db(`employee?select=department&id=eq.${empId}`);
+  if (!me || !SUP_DEPTS382.includes(me.department)) return null;
+  // Fable audit: "fail" = the supplies screen could not load on the device — a supplies fault never keeps anyone on the clock
+  if (ans === "fail") { logEvent("supplies.eod_unavailable", empId, { department: me.department }); return null; }
+  if (ans !== "done" && ans !== "none" && ans !== "skip")
+    return { ok: false, sup382: true, required: cfg.required, error: "Supplies used today? — log them (or tap Nothing today), then you're out." };
+  if (ans === "skip" && cfg.required)
+    return { ok: false, sup382: true, again: true, required: true, error: "Supplies are required now — log what you used, or tap Nothing today." };
+  const day = phxDate(Date.now());
+  // Fable audit: what was actually logged decides the day's marker — lines logged = no marker (even if Skip was tapped); "done" with nothing = none
+  const got = await db(`supply_use?select=id&employee_id=eq.${empId}&day=eq.${day}&kind=eq.use&qty=gt.0&limit=1`);
+  if (got.length) ans = "done"; else if (ans === "done") ans = "none";
+  if (ans !== "done") void db("supply_use", { method: "POST", body: JSON.stringify({ employee_id: empId, day, kind: ans, qty: 0, department: me.department, source: "eod" }) }).catch((e) => console.error("supply marker failed:", e.message));
+  return null;
+}
+// the "+ Supplies used" button on a Home screen (only the four departments; the switch is checked when it loads)
+const supBtn382 = (emp) => emp && SUP_DEPTS382.includes(emp.department)
+  ? `<div id="sup382btn" hidden style="max-width:560px;margin:8px auto 10px"><style>#sup382btn .sup382b{display:flex;width:100%;align-items:center;justify-content:space-between;background:#10263f;border:2px solid #0a84ff;border-radius:12px;padding:14px 16px;font-weight:800;font-size:1.05rem;color:#8ec9ff;cursor:pointer}#sup382btn .sup382b span{font-size:.85rem;font-weight:700;opacity:.85}#sup382tally{font-size:.88rem;color:#8e8e93;text-align:center;margin:6px 0 2px}#sup382tally b{color:#fff}</style><button type="button" class="sup382b" onclick="if(window.SUP382)SUP382.open('day')">&#129520; + Supplies used <span>tap any time &rsaquo;</span></button><div id="sup382tally"></div></div><script src="/sup382.js?v=${SUP_VER382}" defer></script>`
+  : "";
+
+// ── Kailey's / the admin's list editor ───────────────────────────────────────────────────────────────────────────────
+function supAdminHtml382(items, wis, emps) {
+  const e = supEsc382, live = items.filter((i) => !i.retired), ret = items.filter((i) => i.retired);
+  const subsOf = (g) => [...new Set(items.filter((i) => i.grp === g).map((i) => i.sub).filter(Boolean))];
+  const unitSel = (id, u) => `<select onchange="supA382('update',{id:'${id}',unit:this.value},this)">${SUP_UNITS382.map((x) => `<option${x === u ? " selected" : ""}>${x}</option>`).join("")}</select>`;
+  const grpSel = (attr, g) => `<select ${attr}>${SUP_GRPS382.map(([k, l]) => `<option value="${k}"${k === g ? " selected" : ""}>${l}</option>`).join("")}</select>`;
+  const nm = (id) => { const p = emps[id]; return p ? `${p.first_name || ""}` : "?"; };
+  // write-ins waiting: grouped by what was typed + unit
+  const groups = {}; for (const w of wis) { const k = String(w.write_in || "").trim().toLowerCase() + "|" + (w.unit || ""); (groups[k] = groups[k] || { text: w.write_in, unit: w.unit, ids: [], qty: 0, who: new Set(), dept: new Set() }); groups[k].ids.push(w.id); groups[k].qty += Number(w.qty) || 0; groups[k].who.add(nm(w.employee_id)); if (w.department) groups[k].dept.add(w.department); }
+  const itemOpts = live.map((i) => `<option value="${i.id}">${e((i.pnum ? i.pnum + " · " : "") + i.name)} (${e(i.unit)})</option>`).join("");
+  const wiHtml = Object.values(groups).map((g, n) => `<div class="wi382">
+      <div><b>“${e(g.text)}”</b> · ${supQ382(g.qty)} ${e(g.unit)} · ${g.ids.length} entr${g.ids.length === 1 ? "y" : "ies"} · ${e([...g.who].join(", "))} · ${e([...g.dept].join(", "))}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center">
+        <select id="wim382-${n}" style="max-width:340px"><option value="">Match to an item on the list…</option>${itemOpts}</select>
+        <button class="b382 blu" onclick="var s=document.getElementById('wim382-${n}');if(!s.value){s.focus();return}supA382('wi_match',{ids:'${g.ids.join(",")}',item_id:s.value},this)">Match</button>
+        <button class="b382 grn" onclick="var f=document.getElementById('wia382-${n}');f.style.display=f.style.display==='none'?'flex':'none'">+ Add to list</button>
+        <button class="b382" onclick="supA382('wi_keep',{ids:'${g.ids.join(",")}'},this)">Leave as-is</button>
+      </div>
+      <div id="wia382-${n}" style="display:none;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center">
+        <input id="wip382-${n}" placeholder="P# (optional)" style="width:90px"><input id="win382-${n}" value="${e(g.text)}" style="min-width:220px;flex:1">
+        ${grpSel(`id="wig382-${n}"`, "misc")}<input id="wis382-${n}" value="Added from write-ins" style="width:170px">
+        <select id="wiu382-${n}">${SUP_UNITS382.map((x) => `<option${x === g.unit ? " selected" : ""}>${x}</option>`).join("")}</select>
+        <button class="b382 grn" onclick="supA382('wi_add',{ids:'${g.ids.join(",")}',pnum:document.getElementById('wip382-${n}').value,name:document.getElementById('win382-${n}').value,grp:document.getElementById('wig382-${n}').value,sub:document.getElementById('wis382-${n}').value,unit:document.getElementById('wiu382-${n}').value},this)">Add &amp; match</button>
+      </div></div>`).join("");
+  const rowHtml = (i, k, arr) => `<div class="row382">
+      <div class="r1"><input value="${e(i.pnum || "")}" placeholder="P#" style="width:76px" onchange="supA382('update',{id:'${i.id}',pnum:this.value},this)"><input value="${e(i.name)}" style="flex:1;min-width:200px" onchange="supA382('update',{id:'${i.id}',name:this.value},this)"></div>
+      <div class="r2"><span class="lb">Heading</span><input value="${e(i.sub)}" list="subs382-${i.grp}" style="width:170px" onchange="supA382('update',{id:'${i.id}',sub:this.value},this)">
+        <span class="lb">Unit</span>${unitSel(i.id, i.unit)}
+        ${i.retired ? `<button class="b382 grn" onclick="supA382('restore',{id:'${i.id}'},this)">Restore</button>`
+        : `<button class="b382" title="Move up" ${k === 0 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:-1},this)">&uarr;</button><button class="b382" title="Move down" ${k === arr.length - 1 ? "disabled" : ""} onclick="supA382('move',{id:'${i.id}',dir:1},this)">&darr;</button>
+           ${grpSel(`title="Move to another tab" onchange="supA382('update',{id:'${i.id}',grp:this.value},this)"`, i.grp)}
+           <button class="b382 red" onclick="supArm382(this,function(b){supA382('retire',{id:'${i.id}'},b)})">Remove</button>`}</div></div>`;
+  const tab = (g) => { const arr = live.filter((i) => i.grp === g); const subs = [...new Set(arr.map((i) => i.sub || ""))];   // one heading per sub-group (same as the staff screen)
+    return subs.map((sb) => `<div class="sub382">${e(sb || "\u2014")}</div>` + arr.filter((i) => (i.sub || "") === sb).map((i) => rowHtml(i, arr.indexOf(i), arr)).join("")).join(""); };
+  return `<div id="supwrap382">
+  <style>
+    #supwrap382 input,#supwrap382 select{background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-size:15px}
+    #supwrap382 table{width:100%;border-collapse:collapse;font-size:.92rem}#supwrap382 th{opacity:.55;text-align:left;font-weight:600;padding:5px 6px}#supwrap382 td{padding:5px 6px;border-top:1px solid var(--line)}
+    #supwrap382 .sub382{background:#151517;color:#8e8e93;font-size:.76rem;letter-spacing:.06em;text-transform:uppercase;padding:7px 8px;margin-top:8px;border-radius:6px}
+    #supwrap382 .row382{border-bottom:1px solid var(--line);padding:8px 2px}#supwrap382 .r1,#supwrap382 .r2{display:flex;gap:6px;flex-wrap:wrap;align-items:center}#supwrap382 .r2{margin-top:6px}#supwrap382 .lb{opacity:.5;font-size:.8rem}
+    .b382{background:#2c2c2e;border:none;border-radius:8px;color:#fff;padding:7px 10px;font-weight:700;font-size:.85rem;cursor:pointer;margin:1px}.b382.grn{background:#1d3a24;color:#7ee39a}.b382.blu{background:#10263f;color:#8ec9ff}.b382.red{background:#3a1d1d;color:#ff8a80}.b382:disabled{opacity:.3}
+    .tab382{background:#2c2c2e;border:none;border-radius:9px;color:#fff;padding:8px 14px;font-weight:700;margin:0 4px 6px 0;cursor:pointer}.tab382.a{background:#ffd60a;color:#000}
+    .wi382{border-top:1px solid #3a3200;padding:8px 0}.wi382:first-of-type{border-top:none}
+  </style>
+  <p style="opacity:.7;margin:0 0 8px;font-size:.9rem">What Production, Body Shop, Build and Warehouse see on <b>+ Supplies used</b>. Changes show on their screens right away. <a href="/supplies/report" style="color:#8ec9ff;font-weight:700;margin-left:6px">&#128202; Supplies report &rsaquo;</a></p>
+  ${wis.length ? `<div style="background:#2a2200;border:1px solid #ffd60a;border-radius:10px;padding:10px 12px;margin:0 0 12px"><b style="color:#ffd60a">&#9998; Write-ins to sort (${Object.keys(groups).length})</b>${wiHtml}</div>` : ""}
+  <div>${SUP_GRPS382.map(([g, l]) => `<button class="tab382${g === "abrasives" ? " a" : ""}" data-t382="${g}" onclick="supTab382('${g}')">${l} ${live.filter((i) => i.grp === g).length}</button>`).join("")}<button class="tab382" data-t382="retired" onclick="supTab382('retired')" style="background:none;color:#8e8e93">Retired ${ret.length}</button></div>
+  ${SUP_GRPS382.map(([g]) => `<datalist id="subs382-${g}">${subsOf(g).map((s) => `<option value="${e(s)}">`).join("")}</datalist>`).join("")}
+  ${SUP_GRPS382.map(([g]) => `<div class="tb382" data-tb382="${g}" style="display:${g === "abrasives" ? "" : "none"}">${tab(g)}</div>`).join("")}
+  <div class="tb382" data-tb382="retired" style="display:none;overflow-x:auto">${ret.length ? ret.map((i, k) => rowHtml(i, k, ret)).join("") : `<p style="opacity:.6">Nothing retired. Removing an item retires it — it leaves the staff screens, and past reports keep its name. Restore brings it back.</p>`}</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:10px;border-top:2px dashed #3a3a3c">
+    <b>+ Add item</b><input id="supnp382" placeholder="P# (optional)" style="width:100px"><input id="supnn382" placeholder="Description" style="flex:1;min-width:220px">
+    ${grpSel(`id="supng382"`, "abrasives")}<input id="supns382" placeholder="Heading (e.g. Sanding rolls)" style="width:190px">
+    <select id="supnu382">${SUP_UNITS382.map((x) => `<option>${x}</option>`).join("")}</select>
+    <button class="b382 grn" onclick="supA382('add',{pnum:document.getElementById('supnp382').value,name:document.getElementById('supnn382').value,grp:document.getElementById('supng382').value,sub:document.getElementById('supns382').value,unit:document.getElementById('supnu382').value},this)">Add</button>
+  </div>
+  <div id="supmsg382" style="min-height:1.2em;margin-top:6px;color:#ffd60a;font-size:.9rem"></div>
+</div>`;
+}
+// the client side of the editor — rides on the admin console AND Kailey's manager console (plain functions, no backticks)
+const SUP_ADMIN_JS382 = `
+  window.SUPTAB382 = window.SUPTAB382 || "abrasives";
+  function supTab382(g){ window.SUPTAB382 = g; [].forEach.call(document.querySelectorAll("[data-tb382]"), function(d){ d.style.display = d.getAttribute("data-tb382") === g ? "" : "none"; });
+    [].forEach.call(document.querySelectorAll("[data-t382]"), function(b){ b.classList.toggle("a", b.getAttribute("data-t382") === g); }); }
+  function supReload382(){ var w = document.getElementById("supwrap382"); if (!w) return;
+    fetch("/api/admin/panel?which=supplies", { credentials: "same-origin", cache: "no-store" }).then(function(r){ return r.json(); }).then(function(j){
+      if (!j || !j.ok) { w.innerHTML = '<div style="color:#ffd60a">' + ((j && j.error) || "Couldn't load the supplies list") + '</div>'; return; }
+      var t = document.createElement("div"); t.innerHTML = j.html; var n = t.querySelector("#supwrap382"); if (n) w.replaceWith(n); supTab382(window.SUPTAB382); })
+    .catch(function(){ w.innerHTML = '<div style="color:#ffd60a">Network hiccup — reload the page</div>'; }); }
+  function supArm382(b, go){ if (!b.dataset.armed) { b.dataset.armed = "1"; var o = b.textContent; b.textContent = "Sure? Tap again"; setTimeout(function(){ b.dataset.armed = ""; b.textContent = o; }, 4000); return; } go(b); }
+  async function supA382(action, data, el){
+    var m = document.getElementById("supmsg382"); if (m) m.textContent = ""; if (el) el.disabled = true;
+    try { var r = await fetch("/api/supplies/admin", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(Object.assign({ action: action }, data)) });
+      var out = await r.json();
+      if (out.ok) { if (el && el.tagName !== "BUTTON") { el.style.borderColor = "#30d158"; setTimeout(function(){ el.style.borderColor = ""; }, 1200); el.disabled = false; if (action === "update" && !data.grp) return; } supReload382(); return; }
+      if (m) m.textContent = out.error || "Something went wrong"; } catch (e) { if (m) m.textContent = "Network hiccup — try again"; }
+    if (el) el.disabled = false; }
+`;
+const supLane382 = () => `<div class="lane" id="supplies382" style="border-color:#4a90d9"><h3>&#129520; Supplies list &mdash; abrasives, liquids, masking &amp; misc</h3><div id="supwrap382"><div style="opacity:.6">Loading&hellip;</div></div></div>
+<script>${SUP_ADMIN_JS382}
+  supReload382();</script>`;
+
+// ── the report (period × department × product × cab) ────────────────────────────────────────────────────────────────
+async function supReportData382(period, f) {
+  const [rows, items, emps] = await Promise.all([
+    dbAll252(`supply_use?select=id,employee_id,day,kind,item_id,write_in,unit,qty,department,build_id,source,fix_reason&day=gte.${period.from}&day=lte.${period.to}&order=day.asc,created_at.asc`),
+    db(`supply_item?select=id,pnum,name,grp,sub,unit,sort,retired&order=sort.asc`),
+    db(`employee?select=id,first_name,last_name,department`),
+  ]);
+  const byItem = {}; for (const i of items) byItem[i.id] = i;
+  const bIds = [...new Set(rows.map((r) => r.build_id).filter(Boolean))];
+  const builds = bIds.length ? await db(`build?select=id,order_number,customer_name&id=in.(${bIds.join(",")})`) : [];
+  const byB = {}; for (const b of builds) byB[b.id] = b;
+  const empBy = {}; for (const p of emps) empBy[p.id] = p;
+  const use = rows.filter((r) => r.kind === "use" && Number(r.qty) > 0)
+    .filter((r) => !f.dept || r.department === f.dept)
+    .filter((r) => !f.item || r.item_id === f.item);
+  const keyOf = (r) => r.item_id ? r.item_id : "w:" + String(r.write_in || "").trim().toLowerCase() + "|" + (r.unit || "");
+  const labelOf = (r) => { const it = r.item_id ? byItem[r.item_id] : null; return it ? { pnum: it.pnum || "", name: it.name, unit: it.unit, sort: it.sort, wi: false } : { pnum: "", name: String(r.write_in || "").trim(), unit: r.unit || "", sort: 1e9, wi: true }; };
+  const seenSkip = new Set(), usedDay = new Set(rows.filter((r) => r.kind === "use" && Number(r.qty) > 0).map((r) => r.employee_id + "|" + r.day));
+  const skips = rows.filter((r) => r.kind === "skip").filter((r) => !f.dept || r.department === f.dept)
+    .filter((r) => { const k = r.employee_id + "|" + r.day; if (seenSkip.has(k) || usedDay.has(k)) return false; seenSkip.add(k); return true; });   // Fable audit: once per person per day; a day with lines is not a skip
+  return { rows: use, all: rows, skips, byItem, byB, empBy, keyOf, labelOf, items };
+}
+const SUP_DEPT_ORDER382 = ["Production", "Body Shop", "Build", "Warehouse"];
+function supReportPage382(d, p, f, isAdmin) {
+  const e = supEsc382, qs = (extra) => { const u = new URLSearchParams(p.qs); if (f.dept) u.set("dept", f.dept); if (f.item) u.set("item", f.item); u.set("view", f.view); for (const [k, v] of Object.entries(extra || {})) { if (v == null || v === "") u.delete(k); else u.set(k, v); } return u.toString(); };
+  const sum = (rs) => rs.reduce((a, r) => a + (Number(r.qty) || 0), 0);
+  const groupBy = (rs, kf) => { const m = new Map(); for (const r of rs) { const k = kf(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); } return m; };
+  const itemLines = (rs) => [...groupBy(rs, d.keyOf).values()].map((g) => ({ L: d.labelOf(g[0]), q: sum(g), n: g.length })).sort((a, b) => a.L.sort - b.L.sort || a.L.name.localeCompare(b.L.name));
+  const itemTable = (rs) => `<table><tr><th style="width:70px">P#</th><th>Item</th><th style="width:70px">Unit</th><th class="num" style="width:90px">Qty</th><th class="num" style="width:70px">Lines</th></tr>${itemLines(rs).map((x) => `<tr><td>${e(x.L.pnum)}</td><td>${x.L.wi ? "&#9998; " : ""}${e(x.L.name)}${x.L.wi ? ' <span class="muted">(write-in)</span>' : ""}</td><td>${e(x.L.unit)}</td><td class="num"><b>${supQ382(x.q)}</b></td><td class="num muted">${x.n}</td></tr>`).join("")}</table>`;
+  const cabName = (id) => id ? (d.byB[id] ? supCabLabel382(d.byB[id]) : "cab") : "Shop / no cab";
+  const who = (id) => { const x = d.empBy[id]; return x ? `${x.first_name || ""} ${(x.last_name || "").slice(0, 1)}.`.trim() : "?"; };
+  let body = "";
+  if (!d.rows.length) body = `<div class="lane muted">Nothing logged for these filters.</div>`;
+  else if (f.view === "product") {
+    const depts = [...SUP_DEPT_ORDER382, ...[...new Set(d.rows.map((r) => r.department || "Other"))].filter((x) => !SUP_DEPT_ORDER382.includes(x))];
+    const lines = [...groupBy(d.rows, d.keyOf).values()].map((g) => ({ L: d.labelOf(g[0]), g })).sort((a, b) => a.L.sort - b.L.sort || a.L.name.localeCompare(b.L.name));
+    body = `<div class="lane" style="overflow-x:auto"><h3>By product</h3><table><tr><th>P#</th><th>Item</th><th>Unit</th>${depts.map((x) => `<th class="num">${e(x)}</th>`).join("")}<th class="num">Total</th></tr>
+      ${lines.map(({ L, g }) => `<tr><td>${e(L.pnum)}</td><td>${L.wi ? "&#9998; " : ""}${e(L.name)}</td><td>${e(L.unit)}</td>${depts.map((x) => { const q = sum(g.filter((r) => (r.department || "Other") === x)); return `<td class="num">${q ? supQ382(q) : '<span class="muted">·</span>'}</td>`; }).join("")}<td class="num"><b>${supQ382(sum(g))}</b></td></tr>`).join("")}</table></div>`;
+  } else if (f.view === "cab") {
+    const cabs = [...groupBy(d.rows, (r) => r.build_id || "").entries()].sort((a, b) => (a[0] ? 0 : 1) - (b[0] ? 0 : 1) || cabName(a[0]).localeCompare(cabName(b[0])));
+    body = cabs.map(([id, rs]) => `<div class="lane"><h3>${e(cabName(id))} <span class="muted" style="font-weight:400;font-size:.85rem">· ${e([...new Set(rs.map((r) => r.department || "?"))].join(", "))}</span></h3>${itemTable(rs)}</div>`).join("");
+  } else if (f.view === "detail") {
+    body = `<div class="lane" style="overflow-x:auto"><h3>Every line</h3><table><tr><th>Date</th><th>Who</th><th>Department</th><th>Cab</th><th>P#</th><th>Item</th><th>Unit</th><th class="num">Qty</th><th></th></tr>
+      ${d.rows.map((r) => { const L = d.labelOf(r); return `<tr><td>${e(r.day)}</td><td>${e(who(r.employee_id))}</td><td>${e(r.department || "")}</td><td>${e(cabName(r.build_id))}</td><td>${e(L.pnum)}</td><td>${L.wi ? "&#9998; " : ""}${e(L.name)}${r.fix_reason ? ` <span class="muted" title="${e(r.fix_reason)}">(fixed)</span>` : ""}</td><td>${e(L.unit)}</td><td class="num"><b>${supQ382(r.qty)}</b></td>
+        <td><button class="fx382" onclick="supFix382('${r.id}','${supQ382(r.qty)}',this)">Fix</button></td></tr>`; }).join("")}</table>
+      <div id="fxm382" style="color:#ffd60a;min-height:1em"></div></div>`;
+  } else {
+    const depts = [...groupBy(d.rows, (r) => r.department || "Other").entries()].sort((a, b) => { const ia = SUP_DEPT_ORDER382.indexOf(a[0]), ib = SUP_DEPT_ORDER382.indexOf(b[0]); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+    body = depts.map(([dep, rs]) => `<div class="lane"><h3>${e(dep)} <span class="muted" style="font-weight:400;font-size:.85rem">· ${rs.length} line${rs.length === 1 ? "" : "s"} · ${((n) => n + (n === 1 ? " person" : " people"))(new Set(rs.map((r) => r.employee_id)).size)}</span></h3>${itemTable(rs)}</div>`).join("");
+  }
+  const views = [["dept", "By department"], ["product", "By product"], ["cab", "By cab"], ["detail", "Every line"]];
+  const itemOpts = d.items.map((i) => `<option value="${i.id}"${f.item === i.id ? " selected" : ""}>${e((i.pnum ? i.pnum + " · " : "") + i.name)}${i.retired ? " (retired)" : ""}</option>`).join("");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<meta name="robots" content="noindex, nofollow"><title>Supplies Report ${e(p.from)} to ${e(p.to)}</title>${style}
+<style>
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}th{opacity:.55;text-align:left;padding:5px 7px;font-weight:600;border-bottom:1px solid var(--line)}td{padding:5px 7px;border-bottom:1px solid var(--line)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}.muted{opacity:.55}
+  .per a{color:#8e8e93;margin-right:12px}.per a.on{color:#fff;font-weight:700}
+  .per select,.per input{background:#111;color:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:15px}
+  .fx382{background:#2c2c2e;border:none;border-radius:7px;color:#fff;padding:4px 9px;cursor:pointer}
+  .csv{float:right;font-size:.85rem;color:#8e8e93;margin-left:14px}
+  @media print{ a,.per,.fx382,button{display:none} }
+</style></head>
+<body><div class="wrap" style="max-width:1200px">
+  <div class="logo">SHOP <span>BOARD</span></div><p style="text-align:center;margin:2px 0 10px"><a href="/home" onclick="if(window.history.length>1){history.back();return false}" style="color:#8e8e93;font-size:.9rem;text-decoration:none">&larr; Back</a></p>
+  ${navBar95(isAdmin, false, isAdmin ? true : "time")}
+  <h2>&#129520; Supplies report</h2>
+  <p class="muted" style="margin-top:-8px">What Production, Body Shop, Build and Warehouse logged — quantities in each item's own unit. For QuickBooks: <b>By department</b>, or download the CSV.</p>
+  <div class="lane per" style="line-height:2.3">
+    <span class="muted">Period:</span>
+    <a href="/supplies/report?${qs({ preset: "this", from: null, to: null })}" class="${p.preset === "this" ? "on" : ""}">Current pay period</a>
+    <a href="/supplies/report?${qs({ preset: "last", from: null, to: null })}" class="${p.preset === "last" ? "on" : ""}">Last pay period</a>
+    From <input type="date" id="sr-from" value="${e(p.from)}"> To <input type="date" id="sr-to" value="${e(p.to)}">
+    <button onclick="srGo()" style="background:#3a3a3c;border:none;border-radius:8px;color:#fff;padding:7px 12px;cursor:pointer;${p.preset === "custom" ? "outline:2px solid #30d158" : ""}">Show</button><br>
+    <span class="muted">Department:</span> <select id="sr-dept" onchange="srGo()"><option value="">All</option>${SUP_DEPT_ORDER382.map((x) => `<option${f.dept === x ? " selected" : ""}>${x}</option>`).join("")}</select>
+    <span class="muted" style="margin-left:8px">Product:</span> <select id="sr-item" onchange="srGo()" style="max-width:360px"><option value="">All</option>${itemOpts}</select><br>
+    <span class="muted">View:</span> ${views.map(([k, l]) => `<a href="/supplies/report?${qs({ view: k })}" class="${f.view === k ? "on" : ""}">${l}</a>`).join("")}
+    <p style="margin:6px 0 0"><b>${e(p.label)}</b> · <b>${e(p.from)} → ${e(p.to)}</b> <span class="muted">(Phoenix dates)</span></p>
+  </div>
+  <div class="lane" style="padding:10px 16px">
+    <a class="csv" href="/supplies/report.csv?${qs({ csv: "lines" })}">&#11015; CSV — every line</a><a class="csv" href="/supplies/report.csv?${qs({ csv: "dept" })}" style="color:#30d158;font-weight:700">&#11015; CSV — totals by department</a>
+    <b>${d.rows.length}</b> line${d.rows.length === 1 ? "" : "s"} · <b>${new Set(d.rows.map((r) => r.employee_id)).size}</b> ${new Set(d.rows.map((r) => r.employee_id)).size === 1 ? "person" : "people"} · <b>${new Set(d.rows.map((r) => r.build_id).filter(Boolean)).size}</b> cabs
+    ${d.skips.length ? ` · <span style="color:#ffd60a">${d.skips.length} skipped day${d.skips.length === 1 ? "" : "s"}: ${e([...new Set(d.skips.map((r) => who(r.employee_id)))].join(", "))}</span>` : ""}
+  </div>
+  ${body}
+  <script>
+    function srGo(){ var f = document.getElementById("sr-from").value, t = document.getElementById("sr-to").value, u = new URLSearchParams();
+      if (f && t) { u.set("from", f); u.set("to", t); } else u.set("preset", "${p.preset === "last" ? "last" : "this"}");
+      var dp = document.getElementById("sr-dept").value, it = document.getElementById("sr-item").value; if (dp) u.set("dept", dp); if (it) u.set("item", it); u.set("view", "${f.view}");
+      location.href = "/supplies/report?" + u.toString(); }
+    async function supFix382(id, cur, b){ var q = window.prompt("Correct quantity:", cur); if (q === null) return; var n = Number(String(q).replace(",", ".")); if (!(n >= 0)) return;
+      var why = window.prompt("Why? (kept with the change)", ""); if (!why || !why.trim()) { document.getElementById("fxm382").textContent = "A reason is needed for a correction."; return; }
+      b.disabled = true; try { var r = await fetch("/api/supplies/admin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "fix", id: id, qty: n, reason: why.trim() }) }); var o = await r.json();
+        if (o.ok) { location.reload(); return; } document.getElementById("fxm382").textContent = o.error || "Didn't save"; } catch (e) { document.getElementById("fxm382").textContent = "Network hiccup — try again"; } b.disabled = false; }
+  </script>
+</div></body></html>`;
+}
+
 const canOT374 = (me) => Boolean(me && (me.role === "admin" || (me.role === "manager" && me.department === "Accounting")));
 const ACCT_MGRS_Q374 = `employee?select=id&active=is.true&role=eq.manager&department=eq.Accounting`;   // byte-identical to week40Check221's read → the 60 s memory shares it
 const actFor362 = (n, me) => { const k = ACT362[n && n.event_type]; if (!k) return false; if (k === "insp" && !canInspect321(me)) return false; if (k === "ah" && !canOT374(me)) return false; if (k === "kit" && !(me && me.role === "admin")) return false; return true; };   // Block 374: after-hours → admins + the accounting manager   // inspection: the people who inspect · after-hours + a short kit: admins (they decide / chase the parts) — anyone else gets it as news
@@ -6560,7 +7055,7 @@ const managerPage = (rows, reworkReasons = [], isAdmin = false, onClock = [], lo
       <span style="opacity:.5;font-size:.85rem">The fix ALWAYS runs on its own lane on the shop board &mdash; the picked line never needs to be open, and whatever cab is on it keeps running untouched. The crew grabs the fix from the Open-fixes lane on their screens; hours ride the Fix-work bucket, never a line's pace. When it's done, it re-inspects through the sign-off on the line picked here (that list doesn't need the line free either).</span></details>
     </div>
   </div>`)}
-  ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}${acct189 && o360.cal377 ? calPanel377(o360.cal377) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
+  ${!isAdmin && !insp188 && !acct189 ? prodLanes295(onClock, longRunners, recentDone) : ""}${acct189 ? supLane382() : ""}${acct189 && o360.cal377 ? calPanel377(o360.cal377) : ""}   <!-- Block 295: Michael's three lists, folded, at the bottom -->
   <div class="msg err" id="err"></div>
   <p style="text-align:center"><a href="/shopboard" style="color:#8e8e93;margin-right:24px">Shop board</a>
   <a href="/logout" style="color:#8e8e93">Sign out</a></p>
@@ -7293,6 +7788,8 @@ const TOGGLE_INFO = {
   body_pace_tv: ["Body pace on the TV", "OFF = Body never shows on the TV board (Daniel 10/25: Body does not run against a clock at launch). ON = a BODY strip under the line tiles — each cab's hours vs allowed, same colors as production."],   // Block 326
   body_pace_notices: ["Body pace notices", "OFF = silence. ON = a bell-only fact to the Body managers when a step runs well past its allowed hours — never a buzz, never to the crew."],   // Block 326
   body_customer_photos_all: ["Customer sees ALL body photos", "OFF = customers see only the in-primer set (work photos stay internal — the filler stigma). ON = every Body photo shows on customer reports and share links."],   // Block 326 (owners' call)
+  supplies_log: ["Supplies used \u2014 staff log (Production, Body Shop, Build, Warehouse)", "ON = '+ Supplies used' on their Home screen any time, and End of day asks 'Supplies used today?' once before the clock-out. OFF = hidden everywhere; End of day asks nothing."],   // Block 382
+  supplies_required: ["Supplies at End of day \u2014 REQUIRED", "OFF = End of day asks for supplies used but lets people skip (the training phase; skips show on the Supplies report). ON = they log what they used, or tap 'Nothing today', before the clock-out goes through."],   // Block 382
   eod_progress_photo_required: ["End-of-day cab photos — REQUIRED (production)", "OFF = the end-of-day clock-out ASKS for cab progress photos & notes but lets people skip (the training phase). ON = production can't clock out End-of-day from a line until TODAY's cab has at least one progress photo or note — the customer build-report feed. Flip it when the crew is ready; no deploy needed."],
   sms_alerts: ["Text alerts", "Text messages for red lines and daily events. Stays OFF until we go live."],
   email_notifications: ["Email notifications", "System emails. Stays OFF until we go live."],
@@ -7466,6 +7963,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
               text-align:center;border-bottom:1px solid var(--line)">
     <a href="#people" style="color:#fff;font-weight:700;margin-right:16px">People</a>
     <a href="#steps" style="color:#fff;font-weight:700;margin-right:16px">Build steps</a>
+    <a href="#supplies" style="color:#fff;font-weight:700;margin-right:16px">Supplies</a>
     <a href="#features" style="color:#fff;font-weight:700;margin-right:16px">Features</a>
     <a href="#setup154" onclick="var d=document.getElementById('setup154');if(d)d.open=true" style="color:#fff;font-weight:700;margin-right:16px">Setup</a>
     <a href="#hours" style="color:#fff;font-weight:700;margin-right:16px">Shop hours</a>
@@ -7543,6 +8041,8 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   </div>
 
   <div class="panel" id="steps" data-lazy="steps"><h3>Build steps</h3><!-- Block 324: the editor (+ Upgrade options, + the step-actuals math) is fetched when this box is opened — /api/admin/panel?which=steps&tpl= --></div>
+
+  <div class="panel" id="supplies" data-lazy="supplies"><h3>Supplies list &mdash; abrasives, liquids, masking &amp; misc</h3><!-- Block 382: fetched when opened — /api/admin/panel?which=supplies (Kailey's console shows the same section) --></div>
 
   <div class="panel" id="features"><h3>Features</h3>
   ${(() => { const shown375 = toggles.filter((t) => t.key !== "notify_email" && t.key !== "email_notifications" && !DEAD_TOGGLES_375.includes(t.key));
@@ -7933,6 +8433,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
     people: "Everyone on the board. Add a person; set role, department, lines, pay type, panel-prep duty; reset a PIN; deactivate (never delete).",
     channels117: "Per person: the mobile number on file and whether notices arrive by push and text. Every notice always lands in the bell regardless.",
     steps: "The build steps and hours for each cab family (pick the family) — add, rename, reorder, retire. Below them, that family's Upgrade options: exact Coyote text, hours, where each lands in the build, and the kit-only dropdowns the warehouse checks at crating.",
+    supplies: "The supplies list Production, Body Shop, Build and Warehouse log from — add, rename, set the unit (each, ft, oz, pair…), reorder, retire; sort the write-ins. The report is linked inside.",   // Block 382
     features: "The on/off switches for how the board behaves — nudges, gates, pace colors, after-hours rules.",
     channels116: "The text-message (SMS) sending setup and a test send.",
     cabnums: "Wall cab numbers for every open cab, with the next number up per family.",
@@ -7949,6 +8450,7 @@ const adminPage = (emps, tmpls, tplId, steps, toggles, cabs = [], nextUp = "", s
   function panelRemember324(id, open){ try { var a = panelOpenSet324().filter(function (x) { return x !== id; }); if (open) a.push(id); localStorage.setItem("admin_open_324", JSON.stringify(a)); } catch (e) {} }
   var LAZY324 = {};
   function panelLoad324(id, extra){ var pnl = document.getElementById(id), body = document.getElementById("pbody324-" + id); if (!pnl || !body) return; var which = pnl.getAttribute("data-lazy"); if (!which) return; LAZY324[id] = { loading: true }; body.innerHTML = '<div style="opacity:.6">Loading…</div>'; var q = "/api/admin/panel?which=" + which + (extra || ""); if (which === "steps" && !/[&?]tpl=/.test(q)) { var m = location.search.match(/[?&]tpl=([^&]+)/); if (m) q += "&tpl=" + m[1]; } fetch(q, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">' + ((j && j.error) || "Could not load this box — tap Open again") + "</div>"; return; } body.innerHTML = j.html; LAZY324[id] = j; if (j.opts261) window.OPTS261 = j.opts261; }).catch(function () { delete LAZY324[id]; body.innerHTML = '<div style="opacity:.6">Network hiccup — tap Open again</div>'; }); }
+  ${SUP_ADMIN_JS382}
   function panelToggle324(id, open){ var body = document.getElementById("pbody324-" + id), btn = document.getElementById("pbtn324-" + id); if (!body) return; if (open == null) open = body.style.display === "none"; body.style.display = open ? "" : "none"; if (btn) btn.innerHTML = open ? "&#9662; Close" : "&#9656; Open"; panelRemember324(id, open); if (open && !LAZY324[id] && document.getElementById(id).getAttribute("data-lazy")) panelLoad324(id, ""); }
   // Block 324: the Build-steps family links switch the family inside the open box (no page reload); the URL keeps tpl so a reload after Save lands on the same family.
   function stepsFamily324(tpl){ LAZY324.steps = null; var u = new URL(location.href); u.searchParams.set("tpl", tpl); u.hash = "steps"; history.replaceState(null, "", u.toString()); panelLoad324("steps", "&tpl=" + encodeURIComponent(tpl)); }
@@ -12459,7 +12961,7 @@ function payrollPage(d, isAdmin189 = true) {   // Block 189: accounting managers
   </div>
   <script>function ppGo(){var f=document.getElementById("pp-from").value,t=document.getElementById("pp-to").value;if(!f||!t)return;location.href="/payroll?from="+f+"&to="+t;}</script>
   <div class="lane">
-    <a class="csv" href="/payroll.xlsx?${d.qs}" style="color:#30d158;font-weight:700">⬇ Excel for payroll</a><a class="csv" href="/payroll.csv?${d.qs}" style="margin-right:14px">CSV</a>
+    <a class="csv" href="/supplies/report?${d.qs}" style="color:#8ec9ff;font-weight:700;margin-left:14px">&#129520; Supplies report</a><a class="csv" href="/payroll.xlsx?${d.qs}" style="color:#30d158;font-weight:700">⬇ Excel for payroll</a><a class="csv" href="/payroll.csv?${d.qs}" style="margin-right:14px">CSV</a>
     <h3>Totals for the period</h3>
     ${d.rows.length ? `<table><tr><th>Employee</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Sick</th><th class="num">Vacation</th><th class="num">Unpaid</th><th class="num">AH not counted</th><th class="num">Total</th></tr>
       ${d.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${h1(r.reg)}</td><td class="num ${r.ot ? "ot" : ""}">${h1(r.ot)}</td><td class="num ${r.sick ? "sk" : ""}">${h1(r.sick)}</td><td class="num ${r.vac ? "vc" : ""}">${h1(r.vac)}</td><td class="num ${r.unpaid ? "up" : ""}">${h1(r.unpaid)}</td><td class="num ${r.ahx ? "up" : "muted"}">${r.ahx ? h1(r.ahx) : "·"}</td><td class="num"><b>${h1(r.total)}</b></td></tr>`).join("")}
@@ -15256,7 +15758,7 @@ const handleRequest355 = async (req, res) => {
       const empId = await liveSession(req);
       if (!empId) return json(401, { ok: false, error: "Signed out — sign in again" });
       const gate = wifiGate(req); if (gate) return json(403, { ok: false, error: gate });
-      const { reason, claimed_at, wrap_note, note, confirm163, confirm372, card373 } = await body(req);
+      const { reason, claimed_at, wrap_note, note, confirm163, confirm372, card373, sup382 } = await body(req);
       // Timecard-audit fix: an out while NOT clocked in wrote a misleading
       // flagged row (pay math skips orphan outs, people reading don't).
       // Same guard the switch endpoint has.
@@ -15335,6 +15837,13 @@ const handleRequest355 = async (req, res) => {
             }
           }
         }
+      }
+      // Block 382: End of day / End of shift asks "supplies used today?" once (the four departments, switch ON). The client
+      // opens the supplies screen and resends with sup382 = done | none | skip. Nothing is written before the answer.
+      if (reason === "End of day" || reason === "End of shift") {
+        let g382 = null;
+        try { g382 = await supGate382(empId, sup382); } catch (e382) { console.error("supplies gate skipped:", e382 && e382.message); }   // Fable audit: a supplies hiccup never blocks a clock-out
+        if (g382) return json(200, g382);
       }
       // Q112 + block 107: an open after-hours session can't close without its
       // wrap-up. Closing it starts the SIGN-OFF loop — the approver + admins
@@ -19814,6 +20323,198 @@ self.addEventListener("notificationclick", (e) => {
       SHOP_HOURS.loadedAt = 0; // next read refreshes immediately
       logEvent("shop.hours_set", adminId, { open: o, close: c });
       return json(200, { ok: true });
+    }
+
+    // ── Block 382: SUPPLIES USED ────────────────────────────────────────────────────────────────────────────────────
+    if (url.pathname === "/sup382.js") {   // the staff screen's script — one cached file for every page that needs it
+      if (req.headers["if-none-match"] === `"${SUP_VER382}"`) { res.writeHead(304, { etag: `"${SUP_VER382}"` }); return res.end(); }   // a quick "unchanged" — new code shows right after a deploy
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-cache", etag: `"${SUP_VER382}"` });
+      return res.end(SUP_JS382);
+    }
+    if (url.pathname === "/api/supplies/me" && req.method === "GET") {
+      const sidS = await liveSession(req); if (!sidS) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me] = await db(`employee?select=id,department&id=eq.${sidS}`);
+      const cfg = await supCfg382(), eligible = Boolean(me && SUP_DEPTS382.includes(me.department));
+      if (!cfg.on || !eligible) return json(200, { ok: true, on: cfg.on, eligible, required: cfg.required });
+      const day = phxDate(Date.now()), d30 = phxDate(Date.now() - 30 * 86400000);
+      const [items, mine, team, cab] = await Promise.all([
+        db(`supply_item?select=id,pnum,name,grp,sub,unit,sort&retired=is.false&order=sort.asc`),
+        db(`supply_use?select=id,item_id,write_in,unit,qty,build_id,line_id,day,kind&employee_id=eq.${sidS}&day=gte.${d30}&order=day.desc&limit=3000`),
+        db(`supply_use?select=item_id&department=eq.${encodeURIComponent(me.department)}&kind=eq.use&item_id=not.is.null&qty=gt.0&day=gte.${d30}&limit=3000`),
+        supCab382(sidS, me.department),
+      ]);
+      const live = new Set(items.map((i) => i.id));
+      const today = mine.filter((r) => r.day === day && r.kind === "use");
+      // "your usual": the items YOU logged on the most days (last 30) — topped up from your department's most-used
+      const score = new Map(); const days = new Map();
+      for (const r of mine) if (r.kind === "use" && r.item_id && Number(r.qty) > 0 && live.has(r.item_id)) { const k = r.item_id + "|" + r.day; if (!days.has(k)) { days.set(k, 1); score.set(r.item_id, (score.get(r.item_id) || 0) + 1); } }
+      const usual = [...score.entries()].sort((a, b) => b[1] - a[1]).map((x) => x[0]).slice(0, 8);
+      if (usual.length < 8) { const t = new Map(); for (const r of team) if (live.has(r.item_id)) t.set(r.item_id, (t.get(r.item_id) || 0) + 1);
+        for (const [id] of [...t.entries()].sort((a, b) => b[1] - a[1])) { if (usual.length >= 8) break; if (!usual.includes(id)) usual.push(id); } }
+      const bIds = [...new Set(today.map((r) => r.build_id).concat(cab.id ? [cab.id] : []).filter(Boolean))];
+      const bs = bIds.length ? await db(`build?select=id,order_number,customer_name&id=in.(${bIds.join(",")})`) : [];
+      const lab = {}; for (const b of bs) lab[b.id] = supCabLabel382(b);
+      const goneIds = [...new Set(today.map((r) => r.item_id).filter((x) => x && !live.has(x)))];   // Fable audit: a line whose item was retired today still reads by name
+      const gone = goneIds.length ? await db(`supply_item?select=id,pnum,name,grp,sub,unit&id=in.(${goneIds.join(",")})`) : [];
+      return json(200, { ok: true, on: true, eligible: true, required: cfg.required, day, gone,
+        items: items.map((i) => ({ id: i.id, pnum: i.pnum, name: i.name, grp: i.grp, sub: i.sub, unit: i.unit })),
+        today: today.map((r) => ({ id: r.id, item_id: r.item_id, write_in: r.write_in, unit: r.unit, qty: Number(r.qty) || 0, build_id: r.build_id, line_id: r.line_id, cab: r.build_id ? lab[r.build_id] || "cab" : "" })),
+        usual, cab: { id: cab.id, label: cab.id ? lab[cab.id] || "cab" : "", line_id: cab.line_id } });
+    }
+    if (url.pathname === "/api/supplies/cabs" && req.method === "GET") {   // the "change cab" list — only fetched when tapped
+      const sidS = await liveSession(req); if (!sidS) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const bs = await db(`build?select=id,order_number,customer_name,line_id,state,left_production_at,body_done_at,body_moved_to_build_at&started_at=not.is.null&shipped_at=is.null&state=neq.cancelled&order=started_at.desc&limit=80`);
+      const where = (b) => !b.left_production_at ? (b.line_id ? `Line ${b.line_id}` : "Production") : b.body_done_at ? "Warehouse" : b.body_moved_to_build_at ? "Build" : "Body";
+      return json(200, { ok: true, cabs: bs.map((b) => ({ id: b.id, label: supCabLabel382(b), short: supCabLabel382(b), where: where(b) })) });
+    }
+    if (url.pathname === "/api/supplies/set" && req.method === "POST") {   // one tap = the line's quantity (absolute — taps can't double-count)
+      const sidS = await liveSession(req); if (!sidS) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me] = await db(`employee?select=id,department&id=eq.${sidS}`);
+      const cfg = await supCfg382();
+      if (!cfg.on) return json(403, { ok: false, error: "Supplies logging is switched off" });
+      if (!me || !SUP_DEPTS382.includes(me.department)) return json(403, { ok: false, error: "Supplies are logged by Production, Body Shop, Build and Warehouse" });
+      const b = await body(req);
+      const qty = Math.round(Number(b.qty) * 100) / 100;
+      if (!isFinite(qty) || qty < 0 || qty > 9999) return json(400, { ok: false, error: "That quantity doesn't look right" });
+      const day = phxDate(Date.now()), nowIso = new Date().toISOString();
+      const src = b.src === "eod" ? "eod" : "day";
+      const buildId = b.build_id && isUuid(b.build_id) ? b.build_id : null;
+      const lineId = Number.isInteger(Number(b.line_id)) && Number(b.line_id) > 0 ? Number(b.line_id) : null;
+      if (b.row_id) {
+        if (!isUuid(b.row_id)) return json(400, { ok: false, error: "Unknown line" });
+        const [row] = await db(`supply_use?select=id,employee_id,day,kind&id=eq.${b.row_id}`);
+        if (!row || row.employee_id !== sidS || row.day !== day || row.kind !== "use") return json(403, { ok: false, error: "Only today's own lines can change — accounting fixes older ones" });
+        await db(`supply_use?id=eq.${row.id}`, { method: "PATCH", body: JSON.stringify({ qty, updated_at: nowIso, updated_by: sidS }) });
+        return json(200, { ok: true, row: { id: row.id, qty } });
+      }
+      if (b.item_id) {
+        if (!isUuid(b.item_id)) return json(400, { ok: false, error: "Unknown item" });
+        const [it] = await db(`supply_item?select=id,unit,retired&id=eq.${b.item_id}`);
+        if (!it || it.retired) return json(400, { ok: false, error: "That item is no longer on the list — refresh" });
+        const [ex] = await db(`supply_use?select=id&employee_id=eq.${sidS}&day=eq.${day}&kind=eq.use&item_id=eq.${it.id}&build_id=${buildId ? "eq." + buildId : "is.null"}&limit=1`);
+        if (ex) { await db(`supply_use?id=eq.${ex.id}`, { method: "PATCH", body: JSON.stringify({ qty, updated_at: nowIso, updated_by: sidS }) }); return json(200, { ok: true, row: { id: ex.id, qty } }); }
+        const [ins] = await db("supply_use", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ employee_id: sidS, day, kind: "use", item_id: it.id, unit: it.unit, qty, department: me.department, build_id: buildId, line_id: lineId, source: src, updated_by: sidS }) });
+        return json(200, { ok: true, row: { id: ins && ins.id, qty } });
+      }
+      const wi = String(b.write_in || "").trim().slice(0, 80), unit = SUP_UNITS382.includes(b.unit) ? b.unit : "each";
+      if (!wi) return json(400, { ok: false, error: "Type what it was first" });
+      const [ins] = await db("supply_use", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ employee_id: sidS, day, kind: "use", write_in: wi, wi_state: "open", unit, qty, department: me.department, build_id: buildId, line_id: lineId, source: src, updated_by: sidS }) });
+      logEvent("supplies.write_in", sidS, { text: wi, unit, qty });
+      return json(200, { ok: true, row: { id: ins && ins.id, qty } });
+    }
+    if (url.pathname === "/api/admin/panel" && url.searchParams.get("which") === "supplies") {   // Kailey's console AND the admin console
+      const sidS = await liveSession(req); if (!sidS) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me] = await db(`employee?select=id,role,department&id=eq.${sidS}`);
+      if (!canSup382(me)) return json(403, { ok: false, error: "Admins and the accounting manager only" });
+      const [items, wis, emps] = await Promise.all([
+        db(`supply_item?select=id,pnum,name,grp,sub,unit,sort,retired&order=sort.asc`),
+        db(`supply_use?select=id,employee_id,write_in,unit,qty,department,day&wi_state=eq.open&order=created_at.asc&limit=500`),
+        db(`employee?select=id,first_name,last_name`),
+      ]);
+      const eb = {}; for (const p of emps) eb[p.id] = p;
+      return json(200, { ok: true, which: "supplies", html: supAdminHtml382(items, wis, eb) });
+    }
+    if (url.pathname === "/api/supplies/admin" && req.method === "POST") {
+      const sidS = await liveSession(req); if (!sidS) return json(401, { ok: false, error: "Signed out — sign in again" });
+      const [me] = await db(`employee?select=id,role,department&id=eq.${sidS}`);
+      if (!canSup382(me)) return json(403, { ok: false, error: "Admins and the accounting manager only" });
+      const b = await body(req), nowIso = new Date().toISOString(), a = String(b.action || "");
+      const grpOk = (g) => SUP_GRPS382.some(([k]) => k === g);
+      const idsOf = (s) => String(s || "").split(",").filter((x) => isUuid(x));
+      const pn = (x) => { const t = String(x || "").trim().toUpperCase().slice(0, 20); return t || null; };
+      const dupP = async (p, notId) => { if (!p) return false; const r = await db(`supply_item?select=id,pnum&retired=is.false`); return r.some((x) => x.id !== notId && String(x.pnum || "").toUpperCase() === p); };
+      const newItem = async (x) => {
+        const name = String(x.name || "").trim().slice(0, 120); if (!name) return [null, "Give it a description"];
+        if (!grpOk(x.grp)) return [null, "Pick a tab (Abrasives, Liquids, Masking or Misc)"];
+        if (!SUP_UNITS382.includes(x.unit)) return [null, "Pick a unit"];
+        const p = pn(x.pnum); if (await dupP(p)) return [null, `${p} is already on the list`];
+        const last = await db(`supply_item?select=sort&order=sort.desc&limit=1`);
+        const [it] = await db("supply_item", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ pnum: p, name, grp: x.grp, sub: String(x.sub || "").trim().slice(0, 60), unit: x.unit, sort: ((last[0] && last[0].sort) || 0) + 10 }) });
+        return [it, null];
+      };
+      if (a === "add") {
+        const [it, err] = await newItem(b); if (err) return json(400, { ok: false, error: err });
+        logEvent("supplies.item_added", sidS, { id: it && it.id, pnum: it && it.pnum, name: it && it.name, unit: it && it.unit });
+        return json(200, { ok: true });
+      }
+      if (["update", "move", "retire", "restore"].includes(a)) {
+        if (!isUuid(b.id)) return json(400, { ok: false, error: "Unknown item" });
+        const [it] = await db(`supply_item?select=id,pnum,name,grp,sub,unit,sort,retired&id=eq.${b.id}`);
+        if (!it) return json(404, { ok: false, error: "Unknown item" });
+        if (a === "update") {
+          const patch = {};
+          if (b.name !== undefined) { const n = String(b.name).trim().slice(0, 120); if (!n) return json(400, { ok: false, error: "The description can't be empty" }); patch.name = n; }
+          if (b.pnum !== undefined) { const p = pn(b.pnum); if (await dupP(p, it.id)) return json(400, { ok: false, error: `${p} is already on the list` }); patch.pnum = p; }
+          if (b.sub !== undefined) patch.sub = String(b.sub).trim().slice(0, 60);
+          if (b.unit !== undefined) { if (!SUP_UNITS382.includes(b.unit)) return json(400, { ok: false, error: "Pick a unit" }); patch.unit = b.unit; }
+          if (b.grp !== undefined) { if (!grpOk(b.grp)) return json(400, { ok: false, error: "Unknown tab" }); patch.grp = b.grp; }
+          if (!Object.keys(patch).length) return json(200, { ok: true });
+          patch.updated_at = nowIso;
+          await db(`supply_item?id=eq.${it.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+          logEvent("supplies.item_changed", sidS, { id: it.id, pnum: it.pnum, before: Object.fromEntries(Object.keys(patch).filter((k) => k !== "updated_at").map((k) => [k, it[k]])), after: patch });
+          return json(200, { ok: true });
+        }
+        if (a === "move") {   // swap places with the neighbour in the same tab
+          const sib = (await db(`supply_item?select=id,sort&grp=eq.${it.grp}&retired=is.false&order=sort.asc`));
+          const k = sib.findIndex((x) => x.id === it.id), j = k + (Number(b.dir) < 0 ? -1 : 1);
+          if (k < 0 || j < 0 || j >= sib.length) return json(200, { ok: true });
+          const o = sib[j], s1 = it.sort, s2 = o.sort === s1 ? s1 + (j > k ? 1 : -1) : o.sort;
+          await Promise.all([db(`supply_item?id=eq.${it.id}`, { method: "PATCH", body: JSON.stringify({ sort: s2, updated_at: nowIso }) }), db(`supply_item?id=eq.${o.id}`, { method: "PATCH", body: JSON.stringify({ sort: s1, updated_at: nowIso }) })]);
+          return json(200, { ok: true });
+        }
+        if (a === "restore" && it.pnum && await dupP(String(it.pnum).toUpperCase(), it.id)) return json(400, { ok: false, error: `${it.pnum} is already on the list again — rename one first` });
+        await db(`supply_item?id=eq.${it.id}`, { method: "PATCH", body: JSON.stringify({ retired: a === "retire", updated_at: nowIso }) });   // never deleted — history keeps its name
+        logEvent(a === "retire" ? "supplies.item_retired" : "supplies.item_restored", sidS, { id: it.id, pnum: it.pnum, name: it.name });
+        return json(200, { ok: true });
+      }
+      if (a === "wi_match" || a === "wi_add" || a === "wi_keep") {
+        const ids = idsOf(b.ids); if (!ids.length) return json(400, { ok: false, error: "Nothing to sort" });
+        let target = null, state = "kept";
+        if (a === "wi_match") { if (!isUuid(b.item_id)) return json(400, { ok: false, error: "Pick the item first" }); [target] = await db(`supply_item?select=id,unit,name&id=eq.${b.item_id}`); if (!target) return json(400, { ok: false, error: "Unknown item" }); state = "matched"; }
+        if (a === "wi_add") { const [it, err] = await newItem(b); if (err) return json(400, { ok: false, error: err }); target = it; state = "added"; logEvent("supplies.item_added", sidS, { id: it && it.id, name: it && it.name, from_write_in: true }); }
+        const patch = target ? { item_id: target.id, unit: target.unit, wi_state: state, updated_at: nowIso, updated_by: sidS } : { wi_state: state, updated_at: nowIso, updated_by: sidS };
+        await db(`supply_use?id=in.(${ids.join(",")})&wi_state=eq.open`, { method: "PATCH", body: JSON.stringify(patch) });
+        logEvent("supplies.write_in_" + state, sidS, { rows: ids.length, item_id: target && target.id });
+        return json(200, { ok: true });
+      }
+      if (a === "fix") {   // Kailey's correction on any line — with a reason, logged
+        if (!isUuid(b.id)) return json(400, { ok: false, error: "Unknown line" });
+        const q = Math.round(Number(b.qty) * 100) / 100; if (!isFinite(q) || q < 0 || q > 9999) return json(400, { ok: false, error: "That quantity doesn't look right" });
+        const why = String(b.reason || "").trim().slice(0, 200); if (!why) return json(400, { ok: false, error: "A reason is needed for a correction" });
+        const [row] = await db(`supply_use?select=id,qty,employee_id,day&id=eq.${b.id}`); if (!row) return json(404, { ok: false, error: "Unknown line" });
+        await db(`supply_use?id=eq.${row.id}`, { method: "PATCH", body: JSON.stringify({ qty: q, fix_reason: why, updated_at: nowIso, updated_by: sidS }) });
+        logEvent("supplies.fixed", sidS, { id: row.id, employee_id: row.employee_id, day: row.day, before: Number(row.qty), after: q, reason: why });
+        return json(200, { ok: true });
+      }
+      return json(400, { ok: false, error: "Unknown action" });
+    }
+    if (url.pathname === "/supplies/report" || url.pathname === "/supplies/report.csv") {
+      const sidS = await liveSession(req); if (!sidS) { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      const [me] = await db(`employee?select=id,role,department,must_change_pin&id=eq.${sidS}`);
+      if (!canSup382(me)) { res.writeHead(302, { Location: "/home" }); return res.end(); }
+      if (me.must_change_pin) { res.writeHead(302, { Location: "/change-pin" }); return res.end(); }
+      const period = payPeriod(url.searchParams);
+      const f = { dept: SUP_DEPT_ORDER382.includes(url.searchParams.get("dept")) ? url.searchParams.get("dept") : "", item: isUuid(url.searchParams.get("item") || "") ? url.searchParams.get("item") : "",
+        view: ["dept", "product", "cab", "detail"].includes(url.searchParams.get("view")) ? url.searchParams.get("view") : "dept" };
+      const d = await supReportData382(period, f);
+      if (url.pathname === "/supplies/report.csv") {
+        const c = (x) => { let s = String(x == null ? "" : x); if (/^[=+\-@]/.test(s) && isNaN(Number(s))) s = "'" + s;   // Fable audit: a write-in can't become a spreadsheet formula
+          return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        const who = (id) => { const x = d.empBy[id]; return x ? `${x.first_name || ""} ${x.last_name || ""}`.trim() : ""; };
+        const cab = (id) => id ? (d.byB[id] ? d.byB[id].order_number : "") : "Shop";
+        let out;
+        if (url.searchParams.get("csv") === "dept") {
+          const m = new Map(); for (const r of d.rows) { const k = (r.department || "Other") + "\u0000" + d.keyOf(r); if (!m.has(k)) m.set(k, { dep: r.department || "Other", L: d.labelOf(r), q: 0 }); m.get(k).q += Number(r.qty) || 0; }
+          const lines = [...m.values()].sort((a, b) => SUP_DEPT_ORDER382.indexOf(a.dep) - SUP_DEPT_ORDER382.indexOf(b.dep) || a.L.sort - b.L.sort || a.L.name.localeCompare(b.L.name));
+          out = ["Department,P#,Item,Unit,Quantity,From,To"].concat(lines.map((x) => [x.dep, x.L.pnum, (x.L.wi ? "(write-in) " : "") + x.L.name, x.L.unit, supQ382(x.q), period.from, period.to].map(c).join(","))).join("\n");
+        } else {
+          out = ["Date,Employee,Department,Cab,P#,Item,Unit,Quantity,Correction note"].concat(d.rows.map((r) => { const L = d.labelOf(r); return [r.day, who(r.employee_id), r.department || "", cab(r.build_id), L.pnum, (L.wi ? "(write-in) " : "") + L.name, L.unit, supQ382(r.qty), r.fix_reason || ""].map(c).join(","); })).join("\n");
+        }
+        const tag = `${period.from}_to_${period.to}${f.dept ? "_" + f.dept.replace(/\s+/g, "") : ""}`;
+        res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="shopboard-supplies-${url.searchParams.get("csv") === "dept" ? "by-department" : "lines"}-${tag}.csv"` });
+        return res.end("﻿" + out + "\n");
+      }
+      return send(200, "text/html; charset=utf-8", supReportPage382(d, period, f, me.role === "admin"));
     }
 
     // Q91: SHOP CALENDAR — mark a date closed/open, or clear the override.
