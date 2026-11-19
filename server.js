@@ -519,7 +519,7 @@ function klPage385(me, mode, on) {
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2 style="margin:6px 0">&#9889; Kill List${adm ? "" : ` <span style="opacity:.6;font-size:.6em;font-weight:400">— ${klEsc385(me.first_name)}</span>`}</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap">${adm ? `<button class="kl-b kl-dn" data-new="task">+ New task</button><button class="kl-b" data-new="job">+ New job</button>${acct ? `<a class="kl-b" href="/killlist/labor" style="text-decoration:none">Labor by job</a>` : ""}` : `<button class="kl-b" data-new="req">+ Request a task</button>${isAdm || klMgr385(me) ? `<a class="kl-b" href="/killlist" style="text-decoration:none">Manage</a>` : ""}`}</div></div>
   <div id="kl-me"></div>
-  <div id="kl385app" data-mode="${adm ? "admin" : "staff"}">
+  <div id="kl385app" data-mode="${adm ? "admin" : "staff"}" data-me="${klEsc385(me.id)}">
     <div class="kl-tabs" id="kl-tabs">${tabs.map(([k, l]) => `<button class="kl-tab" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="kl-filt" id="kl-filt"><input class="kl-in" id="kl-q" placeholder="&#128269; Search tasks, steps, notes, jobs, customers, cab #" maxlength="80">${adm ? `<select class="kl-in" id="kl-dept"><option value="">All departments</option></select><select class="kl-in" id="kl-who"><option value="">Anyone</option></select><select class="kl-in" id="kl-pri"><option value="">Any priority</option><option value="2">Urgent</option><option value="1">High</option><option value="0">Normal</option></select><select class="kl-in" id="kl-jst"><option value="current">Current jobs</option><option value="done">Done jobs</option><option value="cancelled">Cancelled jobs</option></select>` : ""}</div>
     <div id="kl-list"></div>
@@ -780,10 +780,28 @@ function upPhoto(inp){ var id = inp.getAttribute("data-photo"), f = inp.files &&
 // ---- the editor (admins + managers) ----
 function pick(){ return S.pick ? Promise.resolve(S.pick) : api("/api/kill/pick").then(function(p){ if (p.ok) S.pick = p; return p; }); }
 function splitSteps(txt){ return String(txt || "").split(/\n/).map(function(s){ return s.trim(); }).filter(Boolean); }
-function modal(html){ var m = document.createElement("div"); m.className = "kl-mod"; m.innerHTML = '<div class="kl-mbox">' + html + '</div>'; document.body.appendChild(m); m.addEventListener("click", function(e){ if (e.target === m || e.target.closest("[data-x]")) m.remove(); }); return m; }
+/* Block 385c (Daniel 11/19 10:20): Ross lost a half-typed task 3 times. A tap on the dark area around a pop-up used to close it and throw it away;
+   now only the X closes it (asking first if anything was typed), and what's typed is kept on the device as a draft, so an app switch that
+   reloads the page brings it back too. Never on a shared tablet (the next person would see it). */
+function dkKey(kind, id){ var r = el("kl385app"); return "kl385d:" + ((r && r.getAttribute("data-me")) || "x") + ":" + kind + ":" + id; }   /* Fable audit: per person — two people signing in on one phone / PC never see each other's draft */
+function dkGet(k){ if (!k || shared()) return null; try { var v = JSON.parse(localStorage.getItem(k) || "null"); if (v && Date.now() - v.at < 7 * 86400000) return v; localStorage.removeItem(k); } catch (e) {} return null; }
+function dkDrop(k){ try { if (k) localStorage.removeItem(k); } catch (e) {} }
+function dkSnap(m){ var f = {}; m.querySelectorAll("input[id],textarea[id],select[id]").forEach(function(x){ f[x.id] = x.type === "checkbox" ? (x.checked ? "1" : "0") : x.value; });
+  var c = []; m.querySelectorAll("button.sel").forEach(function(b){ ["data-dept", "data-mgr", "data-person"].forEach(function(a){ if (b.hasAttribute(a)) c.push([a, b.getAttribute(a)]); }); });
+  var pr = m.querySelector("[data-pri].on"); return { f: f, c: c, p: pr ? Number(pr.getAttribute("data-pri")) : null }; }
+function dkFill(m, d){ try { Object.keys(d.f || {}).forEach(function(id){ if (!/^[\w-]+$/.test(id) || id === "kle-pq") return; var x = m.querySelector("#" + id); if (!x || x.type === "file") return; if (x.type === "checkbox") x.checked = d.f[id] === "1"; else x.value = d.f[id]; }); } catch (e) {} }
+function modal(html, dk){ var m = document.createElement("div"); m.className = "kl-mod"; m.innerHTML = '<div class="kl-mbox">' + html + '</div>'; document.body.appendChild(m);
+  var dirty = false, keep = function(){ dirty = true; if (!dk || shared()) return; try { localStorage.setItem(dk, JSON.stringify({ at: Date.now(), d: dkSnap(m) })); } catch (e) {} };
+  m.addEventListener("input", keep); m.addEventListener("change", keep);
+  m.addEventListener("click", function(e){
+    if (e.target.closest("[data-x]")) { if (dirty && !window.confirm("Throw away what you typed?")) return; dkDrop(dk); m.remove(); return; }
+    var b = e.target.closest("button"); if (b && b.id && /-(save|go)$/.test(b.id)) return; if (b) setTimeout(keep, 0); });   // chips / priority count as typing too
+  m.done = function(){ dkDrop(dk); m.remove(); }; m.touched = function(){ dirty = true; }; m.keep = keep; return m; }
 KL.editor = function(taskId, jobId, req){
+  if (KL._busy || document.querySelector(".kl-mod")) return; KL._busy = 1; setTimeout(function(){ KL._busy = 0; }, 4000);   /* Fable audit: never two pop-ups stacked */
   Promise.all([pick(), taskId ? api("/api/kill/task?id=" + taskId) : Promise.resolve(null)]).then(function(a){
-    var p = a[0], d = a[1]; if (!p.ok) return toast(p.error || "Couldn't load", true);
+    var p = a[0], d = a[1]; KL._busy = 0; if (!p.ok) return toast(p.error || "Couldn't load", true);
+    if (taskId && !(d && d.ok)) { if (d && /isn't there|isn't yours/.test(d.error || "")) dkDrop(dkKey("task", (req ? "ok:" : "") + taskId)); return toast((d && d.error) || "Couldn't load \u2014 try again", true); }   /* Opus review: only a task that's really gone clears the draft — a dropped connection keeps it */   /* Fable audit: a draft for a task that's gone never opens an empty editor */
     var t = d && d.ok ? d.task : { title: req ? req.title : "", details: req ? (req.request_note || "") : "", pri: 0, depts: req ? [] : [], mgr_depts: [], people: [], job_id: jobId || null, est: "", due: "" };
     var sel = { depts: (t.depts || []).slice(), mgr: (t.mgr_depts || []).slice(), people: (t.people || []).slice() };
     var h = '<div class="kl-mh">' + (req ? "Approve + assign" : taskId ? "Edit task" : "New Kill List task") + '<button class="kl-lnkb" data-x="1">&times;</button></div>'
@@ -798,13 +816,15 @@ KL.editor = function(taskId, jobId, req){
       + '<label>Part of a job (optional)</label><select class="kl-in" id="kle-job"><option value="">— no job (a shop task) —</option>' + p.jobs.map(function(j){ return '<option value="' + j.id + '"' + (t.job_id === j.id ? " selected" : "") + '>' + (j.no ? esc(j.no) + " · " : "") + esc(j.title) + ' (' + esc(j.kind) + ')</option>'; }).join("") + '</select>'
       + '<div style="display:flex;gap:10px"><div style="flex:1"><label>Estimate, hours (optional)</label><input class="kl-in" id="kle-est" inputmode="decimal" value="' + esc(t.est == null ? "" : t.est) + '"></div><div style="flex:1"><label>Due (optional)</label><input class="kl-in" id="kle-due" type="date" value="' + esc(t.due || "") + '"></div></div>'
       + '<div class="kl-err" id="kle-err"></div><button class="kl-b kl-dn" id="kle-save" style="width:100%;margin-top:12px;padding:14px">' + (req ? "Approve + add to the Kill List" : taskId ? "Save" : "Add to the Kill List") + '</button>';
-    var m = modal(h), q = function(s){ return m.querySelector(s); };
+    var dk = dkKey("task", req ? "ok:" + taskId : taskId || (jobId ? "newj:" + jobId : "new")), dr = dkGet(dk);
+    var m = modal(h, dk), q = function(s){ return m.querySelector(s); };
+    if (dr && dr.d) { dkFill(m, dr.d); sel = { depts: [], mgr: [], people: [] }; (dr.d.c || []).forEach(function(x){ (x[0] === "data-dept" ? sel.depts : x[0] === "data-mgr" ? sel.mgr : sel.people).push(x[1]); }); if (dr.d.p != null) t.pri = dr.d.p; m.touched(); }
     var paint = function(){ m.querySelectorAll("[data-dept]").forEach(function(b){ b.classList.toggle("sel", sel.depts.indexOf(b.getAttribute("data-dept")) > -1); });
       m.querySelectorAll("[data-mgr]").forEach(function(b){ b.classList.toggle("sel", sel.mgr.indexOf(b.getAttribute("data-mgr")) > -1); });
       m.querySelectorAll("[data-person]").forEach(function(b){ b.classList.toggle("sel", sel.people.indexOf(b.getAttribute("data-person")) > -1); }); };
     var prev = function(){ var pv = q("#kle-prev"); if (!pv) return; var st = splitSteps(q("#kle-steps").value); pv.innerHTML = st.length ? '<div class="kl-m">Crew will see:</div><ul class="kl-steps">' + st.map(function(s){ return '<li><span class="kl-bx"></span><span>' + esc(s) + '</span></li>'; }).join("") + '</ul>' : ""; };
-    paint(); if (q("#kle-steps")) { q("#kle-steps").addEventListener("input", prev); q("#kle-split").onclick = function(e){ e.preventDefault(); var ta = q("#kle-steps"); ta.value = ta.value.split(/[,\n]/).map(function(s){ return s.trim(); }).filter(Boolean).join("\n"); prev(); }; }
-    var priV = Number(t.pri) || 0;
+    paint(); if (q("#kle-steps")) { q("#kle-steps").addEventListener("input", prev); q("#kle-split").onclick = function(e){ e.preventDefault(); var ta = q("#kle-steps"); ta.value = ta.value.split(/[,\n]/).map(function(s){ return s.trim(); }).filter(Boolean).join("\n"); prev(); m.keep(); }; }
+    var priV = Number(t.pri) || 0; if (dr && dr.d) { m.querySelectorAll("[data-pri]").forEach(function(x){ x.classList.toggle("on", Number(x.getAttribute("data-pri")) === priV); }); prev(); toast("Draft restored \u2014 pick up where you left off"); }
     m.addEventListener("click", function(e){ var b = e.target.closest("button"); if (!b) return;
       var tog = function(arr, v){ var i = arr.indexOf(v); if (i > -1) arr.splice(i, 1); else arr.push(v); };
       if (b.hasAttribute("data-dept")) { tog(sel.depts, b.getAttribute("data-dept")); paint(); }
@@ -816,11 +836,12 @@ KL.editor = function(taskId, jobId, req){
       var body = { id: taskId && !req ? taskId : undefined, title: q("#kle-title").value, details: q("#kle-det").value, steps: q("#kle-steps") ? splitSteps(q("#kle-steps").value) : undefined, priority: priV,
         job_id: q("#kle-job").value || null, est_hours: q("#kle-est").value, due_date: q("#kle-due").value, depts: sel.depts, mgr_depts: sel.mgr, people: sel.people };
       var go = req ? api("/api/kill/act", Object.assign({ action: "approve", task_id: taskId }, body)) : api("/api/kill/save", body);
-      go.then(function(r){ if (!r.ok) { btn.disabled = false; q("#kle-err").textContent = r.error || "Didn't save"; return; } m.remove(); toast(req ? "✓ Approved" : "✓ Saved"); S.pick = null; KL.reload(); }); };
+      go.then(function(r){ if (!r.ok) { btn.disabled = false; q("#kle-err").textContent = r.error || "Didn't save"; return; } m.done(); toast(req ? "✓ Approved" : "✓ Saved"); S.pick = null; KL.reload(); }); };
   });
 };
 KL.jobEditor = function(jobId){
-  pick().then(function(){
+  if (KL._busy || document.querySelector(".kl-mod")) return;
+  pick().then(function(){ if (document.querySelector(".kl-mod")) return;
     var j0 = (KL._jobs || {})[jobId] || { title: "", kind: "full_build", customer: "", vehicle: "", coyote_order: "", billable: true, department: "Build", notes: "", cabs: [] };
     var p = S.pick; var h = '<div class="kl-mh">' + (jobId ? "Edit job" : "New job") + '<button class="kl-lnkb" data-x="1">&times;</button></div>'
       + '<label>Job title</label><input class="kl-in" id="klj-title" maxlength="140" placeholder="Daniel Kruse Blazer" value="' + esc(j0.title) + '">'
@@ -831,17 +852,21 @@ KL.jobEditor = function(jobId){
       + '<label><input type="checkbox" id="klj-bill"' + (j0.billable !== false ? " checked" : "") + '> Customer labor — bill these hours</label>'
       + '<label>Cabs from production (order # or cab #, commas)</label><input class="kl-in" id="klj-cabs" list="klj-cl" value="' + esc((j0.cabs || []).map(function(c){ return c.order; }).join(", ")) + '"><datalist id="klj-cl">' + p.cabs.map(function(c){ return '<option value="' + esc(c.order) + '">' + esc((c.cab ? "Cab " + c.cab + " · " : "") + c.customer) + '</option>'; }).join("") + '</datalist>'
       + '<label>Notes</label><textarea class="kl-in" id="klj-notes" rows="2">' + esc(j0.notes) + '</textarea><div class="kl-err" id="klj-err"></div><button class="kl-b kl-dn" id="klj-save" style="width:100%;margin-top:12px;padding:14px">Save job</button>';
-    var m = modal(h), q = function(s){ return m.querySelector(s); };
+    var dk = dkKey("job", jobId || "new"), dr = dkGet(dk);
+    var m = modal(h, dk), q = function(s){ return m.querySelector(s); };
+    if (dr && dr.d) { dkFill(m, dr.d); m.touched(); toast("Draft restored \u2014 pick up where you left off"); }
     q("#klj-kind").onchange = function(){ if (this.value === "shop") q("#klj-bill").checked = false; };
     q("#klj-save").onclick = function(){ var btn = this; btn.disabled = true;
       api("/api/kill/job", { id: jobId || undefined, title: q("#klj-title").value, kind: q("#klj-kind").value, department: q("#klj-dept") ? q("#klj-dept").value : undefined, customer: q("#klj-cust").value, vehicle: q("#klj-veh").value,
         coyote_order: q("#klj-ord").value, billable: q("#klj-bill").checked, cabs: q("#klj-cabs").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean), notes: q("#klj-notes").value })
-      .then(function(r){ if (!r.ok) { btn.disabled = false; q("#klj-err").textContent = r.error || "Didn't save"; return; } m.remove(); toast("✓ Job saved"); S.pick = null; KL.reload(); }); };
+      .then(function(r){ if (!r.ok) { btn.disabled = false; q("#klj-err").textContent = r.error || "Didn't save"; return; } m.done(); toast("✓ Job saved"); S.pick = null; KL.reload(); }); };
   });
 };
 KL.request = function(){
-  var m = modal('<div class="kl-mh">Request a task<button class="kl-lnkb" data-x="1">&times;</button></div><div class="kl-m">It goes to Ross. He approves it and assigns it, or tells you why not.</div><label>What needs doing?</label><input class="kl-in" id="klr-t" maxlength="140" placeholder="Air hose reel by bay 3 is leaking"><label>More detail (optional)</label><textarea class="kl-in" id="klr-n" rows="3" maxlength="1000"></textarea><div class="kl-err" id="klr-err"></div><button class="kl-b kl-dn" id="klr-go" style="width:100%;margin-top:12px;padding:14px">Send to Ross</button>');
-  m.querySelector("#klr-go").onclick = function(){ var b = this; b.disabled = true; api("/api/kill/request", { title: m.querySelector("#klr-t").value, note: m.querySelector("#klr-n").value }).then(function(r){ if (!r.ok) { b.disabled = false; m.querySelector("#klr-err").textContent = r.error; return; } m.remove(); toast("✓ Sent to Ross"); if (S.view === "requests") KL.reload(); }); };
+  if (document.querySelector(".kl-mod")) return;
+  var m = modal('<div class="kl-mh">Request a task<button class="kl-lnkb" data-x="1">&times;</button></div><div class="kl-m">It goes to Ross. He approves it and assigns it, or tells you why not.</div><label>What needs doing?</label><input class="kl-in" id="klr-t" maxlength="140" placeholder="Air hose reel by bay 3 is leaking"><label>More detail (optional)</label><textarea class="kl-in" id="klr-n" rows="3" maxlength="1000"></textarea><div class="kl-err" id="klr-err"></div><button class="kl-b kl-dn" id="klr-go" style="width:100%;margin-top:12px;padding:14px">Send to Ross</button>', dkKey("req", "new")), drR = dkGet(dkKey("req", "new"));
+  if (drR && drR.d) { dkFill(m, drR.d); m.touched(); toast("Draft restored \u2014 pick up where you left off"); }
+  m.querySelector("#klr-go").onclick = function(){ var b = this; b.disabled = true; api("/api/kill/request", { title: m.querySelector("#klr-t").value, note: m.querySelector("#klr-n").value }).then(function(r){ if (!r.ok) { b.disabled = false; m.querySelector("#klr-err").textContent = r.error; return; } m.done(); toast("✓ Sent to Ross"); if (S.view === "requests") KL.reload(); }); };
 };
 function pageClick(e){
   var x = e.target.closest("[data-pg],[data-open],[data-a],[data-step],[data-addstep],[data-addnote],[data-edit],[data-mv],[data-approve],[data-sedit],[data-scan],[data-hn],[data-jtasks],[data-jadd],[data-jedit],[data-jst],[data-jmv],[data-tab],[data-clearjob],[data-new]");
@@ -885,6 +910,10 @@ function page(){
   var js = el("kl-jst"); if (js) js.onchange = function(){ S.st = js.value; S.page = 1; KL.reload(); };
   if (KL.mode === "admin") pick().then(function(p){ if (!p || !p.ok) return; var w = el("kl-who"); if (w) w.innerHTML = '<option value="">Anyone</option>' + p.people.map(function(x){ return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; }).join(""); var dd = el("kl-dept"); if (dd) dd.innerHTML = '<option value="">All departments</option>' + p.depts.map(function(x){ return '<option>' + esc(x) + '</option>'; }).join(""); });
   tabs(); KL.reload();
+  if (!shared()) { var best = null, mine = dkKey("", "").slice(0, -1); try { for (var di = 0; di < localStorage.length; di++) { var dkk = localStorage.key(di); if (dkk.indexOf(mine) !== 0) continue; var dv = dkGet(dkk); if (dv && (!best || dv.at > best.at)) best = { k: dkk, at: dv.at }; } } catch (e) {}
+    if (best && Date.now() - best.at < 86400000) setTimeout(function(){ if (document.querySelector(".kl-mod")) return; var ps = best.k.slice(mine.length).split(":"), kd = ps[0], id = ps.slice(1).join(":"), adm = KL.mode === "admin";   // Block 385c: back from another app → the pop-up he was in
+      if (adm && kd === "task" && id === "new") KL.editor(null, null); else if (adm && kd === "task" && /^newj:/.test(id)) KL.editor(null, id.slice(5)); else if (adm && kd === "task" && !/^ok:/.test(id)) KL.editor(id);
+      else if (adm && kd === "job") KL.jobEditor(id === "new" ? null : id); else if (kd === "req" && el("kl385app").parentNode.querySelector('[data-new="req"]')) KL.request(); }, 700); }
 }
 var PCSS = ".kl-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}.kl-tab{padding:9px 14px;border-radius:999px;background:#2c2c2e;font-size:.95rem;font-weight:700;color:#ddd;border:0;cursor:pointer}.kl-tab.on{background:#ffd60a;color:#000}"
  + ".kl-card{display:flex;gap:10px;align-items:flex-start;background:#1c1c1e;border:1px solid #2c2c2e;border-left:6px solid #888;border-radius:12px;padding:11px 12px;margin:0 0 6px}.kl-card .kl-tt{cursor:pointer}"
