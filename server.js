@@ -6945,7 +6945,7 @@ const navBar95 = (isAdmin, showReports = false, tools95 = true, body326 = false)
   return `<style>details.t95>summary::-webkit-details-marker{display:none}</style>
   <div style="text-align:center;margin:-4px 0 14px">
     ${isAdmin ? `<a href="/admin" style="color:#8e8e93;margin-right:16px">Admin console</a>` : ""}
-    <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>${typeof KL_NAV_ON385 !== "undefined" && KL_NAV_ON385 ? `<a href="${isAdmin ? "/killlist" : "/kill"}" style="color:#ff9f0a;margin-right:16px;font-weight:700">Kill List</a>` : ""}
+    <a href="/home" style="color:#8e8e93;margin-right:16px">Home</a>${isAdmin || (typeof KL_NAV_ON385 !== "undefined" && KL_NAV_ON385) ? `<a href="${isAdmin ? "/killlist" : "/kill"}" style="color:#ff9f0a;margin-right:16px;font-weight:700">Kill List</a>` : ""}<!-- Block 385b (Daniel 11/19 09:31): admins always see it, so Ross can load tasks before the switch is ON -->
     <a href="/manager" style="color:#8e8e93;margin-right:16px">Manager console</a>   <!-- Block 157 (owner-rep E2): Manager cockpit -> Manager console, matching "Admin console" -->
     ${isAdmin ? `<a href="/reconcile" style="color:#8e8e93;margin-right:16px">Order Queue</a>` : ""}   <!-- Block 156 (owner-rep E1): White Board -> Order Queue -->
     <a href="/shopboard" style="color:#8e8e93;margin-right:16px">Shop board</a>${/* Block 370 (Daniel 11/5 10:58 "top nav and inside of tools") */ isAdmin || (showReports && tools95 !== "time") ? `
@@ -20970,7 +20970,7 @@ self.addEventListener("notificationclick", (e) => {
       const empsK = async () => { const rows = await db(`employee?select=id,first_name,last_name,role,department,active,pay_type&order=first_name.asc`); return { rows, by: Object.fromEntries(rows.map((e) => [e.id, e])) }; };
       const taskK = async (id) => { if (!isUuid(id)) return null; const [t] = await db(`kill_task?select=*&id=eq.${id}`); return t || null; };
       const recipsK = (t, by) => Object.values(by).filter((e) => e.active !== false && e.id !== meK.id && (klArr385(t.people).includes(e.id) || klArr385(t.depts).includes(e.department) || (e.role === "manager" && klArr385(t.mgr_depts).includes(e.department)))).map((e) => e.id);
-      const bellK = (type, ids, title, bodyTxt, link, urgent) => { try { if (ids && ids.length) void notify(type, [...new Set(ids)], title, bodyTxt, link || "/kill", urgent ? { urgent: true } : undefined); } catch (eN) {} };
+      const bellK = (type, ids, title, bodyTxt, link, urgent) => { try { if (!onK) return;   /* Block 385b (Fable audit 11/19): switch OFF = no Kill List bells — Ross loads tasks ahead of time and the crew cannot open /kill yet */ if (ids && ids.length) void notify(type, [...new Set(ids)], title, bodyTxt, link || "/kill", urgent ? { urgent: true } : undefined); } catch (eN) {} };
       const lastPunchK = async (id) => (await db(`clock_event?select=id,kind,line_id,claimed_at,fix_build_id,body_task_id,wh_task_id&voided=is.false&employee_id=eq.${id}&order=claimed_at.desc&limit=1`))[0] || null;
       const myOpenK = async () => db(`kill_work?select=id,task_id,started_at,billable,back&employee_id=eq.${meK.id}&ended_at=is.null&voided=is.false&order=started_at.asc`);
       const punchK = async (line, kind, at, extra) => db("clock_event", { method: "POST", body: JSON.stringify({ employee_id: meK.id, line_id: line, kind, claimed_at: at.toISOString(), ...(extra || {}) }) });
