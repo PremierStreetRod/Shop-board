@@ -436,6 +436,18 @@ function klSplit385(evsByEmp, worksByEmp, fromMs, toMs, nowMs) {
   }
   return [...out.entries()].map(([k, ms]) => { const [task_id, employee_id, day] = k.split("|"); return { task_id, employee_id, day, ms }; });
 }
+// Block 385e: a long read in batches of 8 pages at once (one wait per 8,000 rows instead of one per 1,000). Needs a stable order.
+// The first batch is ONE page (most reads are short — no wasted empty reads), then 8 at a time.
+async function klAllFast385(path) {
+  const out = [];
+  const first = await db(`${path}&limit=1000&offset=0`); if (!Array.isArray(first)) return out; out.push(...first); if (first.length < 1000) return out;
+  for (let off = 1000; off <= 500000; off += 8000) {
+    const pages = await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((d) => db(`${path}&limit=1000&offset=${off + d * 1000}`)));
+    let short = false; for (const pg of pages) { if (!Array.isArray(pg)) { short = true; break; } out.push(...pg); if (pg.length < 1000) { short = true; break; } }
+    if (short) break;
+  }
+  return out;
+}
 async function klHours385(filter, fromMs, toMs) {   // filter: { taskIds } or { empIds } or {} (everyone)
   const nowMs = Date.now(), fromIso = new Date(fromMs).toISOString(), toIso = new Date(Math.min(toMs, nowMs + 60000)).toISOString();
   const wSel = `kill_work?select=task_id,employee_id,started_at,ended_at,voided&voided=is.false&started_at=lt.${toIso}`, wOrd = `&order=started_at.asc,id.asc`;
@@ -445,8 +457,11 @@ async function klHours385(filter, fromMs, toMs) {   // filter: { taskIds } or { 
   else worksAll = await dbAll252(wSel + wOrd);
   const works = worksAll.filter((w) => !w.ended_at || new Date(w.ended_at).getTime() > fromMs);
   const emps = [...new Set(works.map((w) => w.employee_id))]; if (!emps.length) return [];
-  const evFrom = new Date(Math.min(...works.map((w) => new Date(w.started_at).getTime()), fromMs) - 36 * 3600000).toISOString();
-  const evs = await dbAll252(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${evFrom}&order=claimed_at.asc`);
+  // Block 385e (Daniel 11/20 08:37 "a little slow … will get worse"): only the punches that can matter — from 36 h before the LATER of
+  // "the first work row here" and "the start of the period asked for", to the end of it. Was: from 1970 when the period was "all time",
+  // so every tab read each worker's whole punch history, 1,000 at a time, one batch after another (grew every month).
+  const evFrom = new Date(Math.max(Math.min(...works.map((w) => new Date(w.started_at).getTime())), fromMs) - 36 * 3600000).toISOString();
+  const evs = await klAllFast385(`clock_event?select=employee_id,kind,line_id,claimed_at&voided=is.false&employee_id=in.(${emps.join(",")})&claimed_at=gte.${evFrom}&claimed_at=lt.${toIso}&order=claimed_at.asc,id.asc`);
   const byE = {}, wByE = {}; for (const e of evs) (byE[e.employee_id] = byE[e.employee_id] || []).push(e); for (const w of works) (wByE[w.employee_id] = wByE[w.employee_id] || []).push(w);
   return klSplit385(byE, wByE, fromMs, toMs, nowMs);
 }
@@ -457,11 +472,17 @@ const klQ385 = (h) => Math.round(h * 4) / 4;   // Daniel 11/18 08:58 + 09:25: bi
 // AND that person's latest punch is a clock-in on line 20 (salaried people have no punches: their open row is the whole story).
 async function klOnNow385() {
   const rows = await db(`clock_event?select=employee_id,kind,line_id&voided=is.false&claimed_at=gte.${new Date(Date.now() - 20 * 3600000).toISOString()}&order=claimed_at.desc&limit=1000`).catch(() => []);
-  const seen = new Set(), on = new Set();
-  for (const r of rows) { if (seen.has(r.employee_id)) continue; seen.add(r.employee_id); if (r.kind === "clock_in" && Number(r.line_id) === KL_LINE385) on.add(r.employee_id); }
-  return on;
+  const seen = new Set(), on = new Set(), clocked = new Set();
+  for (const r of rows) { if (seen.has(r.employee_id)) continue; seen.add(r.employee_id); if (r.kind === "clock_in") clocked.add(r.employee_id); if (r.kind === "clock_in" && Number(r.line_id) === KL_LINE385) on.add(r.employee_id); }
+  on.clocked = clocked; return on;
 }
-const klLive385 = (w, onNow, empBy) => onNow.has(w.employee_id) || Boolean(empBy[w.employee_id] && empBy[w.employee_id].pay_type === "salary");
+// Block 385e (Daniel 11/20): the office (Accounting, Marketing) works its Kill List tasks the salaried way — "on it" without moving the clock
+// off Accounting / Marketing time (that move only matters for billing Build's jobs, and it cluttered Kailey's timecard). On it = an open row
+// while they're clocked in anywhere.
+const KL_OFFICE385 = ["Accounting", "Marketing"];
+const klOffice385 = (e) => Boolean(e && KL_OFFICE385.includes(e.department));
+const klLive385 = (w, onNow, empBy) => onNow.has(w.employee_id) || Boolean(empBy[w.employee_id] && empBy[w.employee_id].pay_type === "salary")
+  || Boolean(klOffice385(empBy[w.employee_id]) && w.billable !== true && onNow.clocked && onNow.clocked.has(w.employee_id));   // Fable audit: a BILLED task counts only on the Kill List line, office or not
 // chunked "in (…)" reads — a long build has hundreds of tasks; one URL can't carry them all, and PostgREST caps a read at 1,000 rows
 async function klIn385(head, ids, tail) {
   const parts = []; for (let i = 0; i < ids.length; i += 60) parts.push(ids.slice(i, i + 60));
@@ -475,7 +496,7 @@ async function klBar385(empId) {
     const [meRows, tasks, works, lastRows, jobs, emps, onNow] = await Promise.all([
       db(`employee?select=id,first_name,last_name,role,department,lines,pay_type&id=eq.${empId}`),
       db(`kill_task?select=id,job_id,title,priority,state,sort,depts,mgr_depts,people,created_by,requested_by,created_at,due_date&state=eq.open&order=sort.asc&limit=1000`),
-      db(`kill_work?select=id,task_id,employee_id,started_at,ended_at,back,voided&voided=is.false&ended_at=is.null&limit=1000`),
+      db(`kill_work?select=id,task_id,employee_id,started_at,ended_at,back,voided,billable&voided=is.false&ended_at=is.null&limit=1000`),
       db(`clock_event?select=kind,line_id,claimed_at&voided=is.false&employee_id=eq.${empId}&order=claimed_at.desc&limit=1`),
       db(`kill_job?select=id,title,status,billable&status=in.(open,hold)&limit=1000`),
       db(`employee?select=id,first_name,last_name,department,pay_type&active=is.true`),
@@ -484,7 +505,7 @@ async function klBar385(empId) {
     const me = meRows[0]; if (!me) return null;
     const empBy = Object.fromEntries(emps.map((e) => [e.id, e])), jobBy = Object.fromEntries(jobs.map((j) => [j.id, j]));
     const last = lastRows[0] || null, onLine = Boolean(last && last.kind === "clock_in" && Number(last.line_id) === KL_LINE385), clockedIn = Boolean(last && last.kind === "clock_in");
-    const meLive = onLine || me.pay_type === "salary";
+    const meLive = onLine || me.pay_type === "salary" || (klOffice385(me) && clockedIn && !works.some((w) => w.employee_id === empId && w.billable === true));   // Fable audit: office + an open BILLED row off the Kill List line = "left open", like the floor
     const vis = tasks.filter((t) => klMine385(me, t) || klArr385(t.depts).includes(me.department));   // the bar = what is assigned to ME or MY department (admins see everything on the Kill List page, not here)
     const onTask = {}; for (const w of works) if (klLive385(w, onNow, empBy) || (w.employee_id === empId && meLive)) (onTask[w.task_id] = onTask[w.task_id] || []).push(w.employee_id);
     const mineOpen = works.filter((w) => w.employee_id === empId), myOpenIds = new Set(mineOpen.map((w) => w.task_id));
@@ -508,7 +529,7 @@ async function klBar385(empId) {
 // the two pages are one shell + the script (lists, task cards, the editor all draw from /api/kill/*)
 function klPage385(me, mode, on) {
   const adm = mode === "admin", isAdm = klAdmin385(me), acct = isAdm || (me.role === "manager" && me.department === "Accounting");
-  const tabs = adm ? [["jobs", "Jobs"], ["open", "Open tasks"], ...(isAdm ? [["requested", "Requested"]] : []), ["done", "Done"]] : [["mine", "My list"], ["requests", "My requests"], ["done", "Recently done"]]   /* Fable audit: ONE list — mine + my department's (the bar says "4 for you"; the page must open on those 4) */;
+  const tabs = adm ? [...(acct ? [["jobs", "Jobs"]] : []), ["open", "Open tasks"], ...(isAdm ? [["requested", "Requested"]] : []), ["done", "Done"]] : [["mine", "My list"], ["requests", "My requests"], ["done", "Recently done"]]   /* Fable audit: ONE list — mine + my department's (the bar says "4 for you"; the page must open on those 4) */;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="apple-touch-icon" href="/icon-180.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <meta name="robots" content="noindex, nofollow"><title>Kill List</title>${style}</head>
@@ -517,7 +538,7 @@ function klPage385(me, mode, on) {
   ${nav196(me)}
   ${!on ? `<div style="background:#2a2200;border:1px solid #7a5900;border-radius:12px;padding:10px 14px;margin:0 0 12px;color:#ffd60a;font-weight:700">The Kill List switch is OFF — only admins see this. Load tasks now; the crew sees them when it's turned on (Admin console → Features).</div>` : ""}
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2 style="margin:6px 0">&#9889; Kill List${adm ? "" : ` <span style="opacity:.6;font-size:.6em;font-weight:400">— ${klEsc385(me.first_name)}</span>`}</h2>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">${adm ? `<button class="kl-b kl-dn" data-new="task">+ New task</button><button class="kl-b" data-new="job">+ New job</button>${acct ? `<a class="kl-b" href="/killlist/labor" style="text-decoration:none">Labor by job</a>` : ""}` : `<button class="kl-b" data-new="req">+ Request a task</button>${isAdm || klMgr385(me) ? `<a class="kl-b" href="/killlist" style="text-decoration:none">Manage</a>` : ""}`}</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${adm ? `<button class="kl-b kl-dn" data-new="task">+ New task</button>${acct ? `<button class="kl-b" data-new="job">+ New job</button>` : ""}${acct ? `<a class="kl-b" href="/killlist/labor" style="text-decoration:none">Labor by job</a>` : ""}` : `<button class="kl-b" data-new="req">+ Request a task</button>${isAdm || klMgr385(me) ? `<a class="kl-b" href="/killlist" style="text-decoration:none">Manage</a>` : ""}`}</div></div>
   <div id="kl-me"></div>
   <div id="kl385app" data-mode="${adm ? "admin" : "staff"}" data-me="${klEsc385(me.id)}">
     <div class="kl-tabs" id="kl-tabs">${tabs.map(([k, l]) => `<button class="kl-tab" data-tab="${k}">${l}</button>`).join("")}</div>
@@ -574,7 +595,7 @@ function klLaborPage385(me, d, p) {
       <button class="b" type="button" onclick="window.print()">Print</button><a class="b" href="/killlist/labor.csv?${e(p.qs)}">Excel (CSV)</a></form></div>
   <p style="opacity:.65;font-size:.88rem;margin:6px 0 14px">Hours come from the punches on the Kill List (exact). The job total is rounded once to the quarter hour — that is the number to enter in Coyote. Shop tasks (cleaning, booth filters, show carts) aren't billable and never show here.</p>
   ${d.jobs.length ? d.jobs.map((j) => `<div class="lane"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><b style="font-size:1.05rem">${j.no ? e(j.no) + " · " : ""}${e(j.title)}</b><span class="chip">${e(j.kind)}</span>${j.coyote_order ? `<span class="chip">Coyote order ${e(j.coyote_order)}</span>` : `<span class="chip" style="color:#ffd60a">no Coyote order yet</span>`}${j.cabs ? `<span class="chip">${e(j.cabs)}</span>` : ""}${j.customer ? `<span class="chip">${e(j.customer)}</span>` : ""}
-      <span style="margin-left:auto;display:flex;gap:8px;align-items:center" class="noprint">${j.billed_at ? `<span style="color:#30d158;font-weight:700">&#10003; Billed in Coyote ${e(phxDate(new Date(j.billed_at).getTime()))}${j.billed_by ? " · " + e(j.billed_by) : ""}</span>${j.newH ? ` <span class="new">+${j.newH} h new since billed</span>` : ""} <button class="b" onclick="klBill385('${j.id}','unbilled',this)">Undo</button>` : `<button class="b" style="background:#1f7a36" onclick="klBill385('${j.id}','billed',this)">&#10003; Billed in Coyote</button>`}</span></div>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center" class="noprint">${j.billed_at ? `<span style="color:#30d158;font-weight:700">&#10003; Billed in Coyote ${e(phxDate(new Date(j.billed_at).getTime()))}${j.billed_by ? " · " + e(j.billed_by) : ""}</span>${j.newH ? ` <span class="new">+${j.newH} h new since billed</span>` : ""} <button class="b" onclick="klBill385('${j.id}','unbilled',this)">Undo</button>` : `<button class="b" style="background:#2c2c2e;border:1px solid #30d158;color:#30d158" onclick="klBill385('${j.id}','billed',this)">Mark billed in Coyote</button>`}</span></div>
     ${j.rows.length ? `<table style="margin-top:8px"><tr><th style="width:110px">Day</th><th style="width:170px">Person</th><th>Tasks</th><th class="num" style="width:90px">Exact h</th></tr>${j.rows.map((r) => `<tr${r.isNew ? ' style="background:#2b2410"' : ""}><td>${e(r.day)}</td><td>${e(r.name)}</td><td>${e(r.tasks)}</td><td class="num">${r.h.toFixed(2)}${r.isNew ? ' <span class="new">new</span>' : ""}</td></tr>`).join("")}
       <tr><td colspan="3" style="text-align:right;opacity:.7">Job total (exact)</td><td class="num">${j.exact.toFixed(2)}</td></tr><tr><td colspan="3" style="text-align:right;font-weight:800">To bill (quarter hours)</td><td class="num" style="font-weight:800;font-size:1.05rem">${j.bill.toFixed(2)}</td></tr></table>`
       : `<div style="opacity:.6;margin-top:6px">No hours this period yet.</div>`}</div>`).join("") : `<div class="lane" style="opacity:.7">No billable jobs yet. Ross adds jobs on the Kill List (Manage → + New job).</div>`}
@@ -700,7 +721,11 @@ function showLater(){ var v = ""; try { v = sessionStorage.getItem("kl385toast")
 // ---------------------------------------------------------------- the PAGES (/kill · /killlist) -------------------------------
 var S = { view: null, page: 1, q: "", dept: "", who: "", pri: "", job: "", open: {}, pick: null, st: "current" };
 function el(id){ return document.getElementById(id); }
-function pager(r){ if (r.pages <= 1) return ""; return '<div class="kl-pg"><button class="kl-b" data-pg="1"' + (r.page <= 1 ? " disabled" : "") + '>&laquo; First</button><button class="kl-b" data-pg="' + (r.page - 1) + '"' + (r.page <= 1 ? " disabled" : "") + '>&lsaquo; Previous</button><span>Page ' + r.page + ' of ' + r.pages + ' · ' + r.total + '</span><button class="kl-b" data-pg="' + (r.page + 1) + '"' + (r.page >= r.pages ? " disabled" : "") + '>Next &rsaquo;</button><button class="kl-b" data-pg="' + r.pages + '"' + (r.page >= r.pages ? " disabled" : "") + '>Last &raquo;</button></div>'; }
+function pager(r){ if (r.pages <= 1) return ""; return '<div class="kl-pg"><button class="kl-b" data-pg="1"' + (r.page <= 1 ? " disabled" : "") + '>&laquo; First</button><button class="kl-b" data-pg="' + (r.page - 1) + '"' + (r.page <= 1 ? " disabled" : "") + '>&lsaquo; Previous</button><span>Page ' + r.page + ' of ' + r.pages + ' · ' + r.total + ' in all</span><button class="kl-b" data-pg="' + (r.page + 1) + '"' + (r.page >= r.pages ? " disabled" : "") + '>Next &rsaquo;</button><button class="kl-b" data-pg="' + r.pages + '"' + (r.page >= r.pages ? " disabled" : "") + '>Last &raquo;</button></div>'; }
+/* Block 385e: the due date says itself — "Due Fri 11/21", yellow on the day, red once it's late (open tasks) */
+function dueChip(d, state){ var t = new Date(), today = t.getFullYear() + "-" + ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
+  var p = String(d).split("-"), dt = new Date(+p[0], +p[1] - 1, +p[2]), lbl = dt.toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
+  if (state === "open" && d < today) return chip("LATE \u2014 was due " + lbl, "#ff453a"); if (state === "open" && d === today) return chip("Due today", "#ffd60a"); return chip("Due " + lbl, "#8e8e93"); }
 function chip(txt, color){ return '<span class="kl-chip" style="color:' + color + ';border-color:' + color + '55;background:' + color + '1a">' + esc(txt) + '</span>'; }
 function stepsBar(r){ if (!r.steps) return ""; var p = Math.round(100 * r.checked / r.steps); return '<div class="kl-sb"><i style="width:' + p + '%"></i></div><span class="kl-m">' + r.checked + ' of ' + r.steps + ' steps</span>'; }
 function rowHtml(r){
@@ -708,7 +733,7 @@ function rowHtml(r){
     : r.state === "requested" ? '<span class="kl-m">Waiting for Ross' + (r.request_note ? " — " + esc(r.request_note) : "") + '</span>' : r.state === "declined" ? '<span class="kl-m">Declined' + (r.decline_reason ? ": " + esc(r.decline_reason) : "") + '</span>'
     : r.on.length ? '<span style="color:#30d158;font-weight:700">&#9679; ' + esc(r.on.join(", ")) + ' on it</span>' : r.myOpen ? '<span style="color:#ffd60a;font-weight:700">you left it open &mdash; Resume</span>' : r.hours ? '<span class="kl-m">paused</span>' : '<span class="kl-m">nobody on it yet</span>';
   var adm = KL.mode === "admin", up = adm && S.view === "open" ? '<div class="kl-arw"><button data-mv="up" data-id="' + r.id + '">&uarr;</button><button data-mv="down" data-id="' + r.id + '">&darr;</button></div>' : "";
-  return '<div class="kl-card" data-row="' + r.id + '" style="border-left-color:' + r.color + '">' + up + '<div class="kl-tt" data-open="' + r.id + '"><div class="kl-n">' + pri(r.pri) + esc(r.title) + '</div><div class="kl-m">' + chip(r.dept || "—", r.color) + (r.who && r.who !== r.dept ? ' ' + esc(r.who) : "") + (r.job ? ' · <b>' + (r.job.no ? esc(r.job.no) + " " : "") + esc(r.job.title) + '</b>' + (r.job.billable ? "" : " (shop)") : "") + (r.due ? " · due " + esc(r.due) : "") + '</div>'
+  return '<div class="kl-card" data-row="' + r.id + '" style="border-left-color:' + r.color + '">' + up + '<div class="kl-tt" data-open="' + r.id + '"><div class="kl-n">' + pri(r.pri) + esc(r.title) + '</div><div class="kl-m">' + chip(r.dept || "—", r.color) + (r.who && r.who !== r.dept ? ' ' + esc(r.who) : "") + (r.job ? ' · <b>' + (r.job.no ? esc(r.job.no) + " " : "") + esc(r.job.title) + '</b>' + (r.job.billable ? "" : " (shop)") : "") + (r.due ? " " + dueChip(r.due, r.state) : "") + '</div>'
     + '<div class="kl-m" style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' + stepsBar(r) + (r.hours ? '<span class="kl-m">' + r.hours + ' h' + (r.est ? " of " + r.est + " est." : "") + '</span>' : (r.est ? '<span class="kl-m">est. ' + r.est + ' h</span>' : "")) + ' ' + state + '</div></div>'
     + (adm && r.can && r.can.edit && r.state === "open" ? '<button class="kl-lnkb" data-edit="' + r.id + '">Edit</button>' : "") + '</div><div class="kl-det" id="kl-det-' + r.id + '"></div>';
 }
@@ -727,18 +752,18 @@ KL.reload = function(){ var v = S.view; var as = KL.mode === "admin" ? "&as=admi
     if (v === "jobs") h = r.rows.map(jobHtml).join("") || '<div class="kl-m" style="padding:14px">No jobs here yet. Tap &plus; New job.</div>';
     else h = r.rows.map(rowHtml).join("") || '<div class="kl-m" style="padding:14px">' + (v === "mine" ? "Nothing on your list right now. Need something done? Tap + Request a task." : v === "requested" ? "No requests waiting." : "Nothing here.") + '</div>';
     if (S.job && v !== "jobs") h = '<div class="kl-m" style="margin:0 0 8px">Showing one job\'s tasks · <a class="kl-lnk" href="#" data-clearjob="1">show all</a></div>' + h;
-    el("kl-list").innerHTML = h + pager(r);
+    el("kl-list").innerHTML = h + pager(r) + (r.note && r.rows.length ? '<div class="kl-m" style="padding:8px 2px">' + esc(r.note) + '</div>' : "");
     var want = (location.hash.match(/t=([0-9a-f-]{36})/) || [])[1]; if (want && el("kl-det-" + want)) { KL.detail(want); location.hash = ""; }
     Object.keys(S.open).forEach(function(id){ if (S.open[id] && el("kl-det-" + id)) KL.detail(id, true); });
   });
 };
 function jobHtml(j){
   var adm = KL.mode === "admin"; KL._jobs = KL._jobs || {}; KL._jobs[j.id] = j;
-  return '<div class="kl-card" style="border-left-color:' + j.color + '">' + (adm && S.st === "current" ? '<div class="kl-arw"><button data-jmv="up" data-id="' + j.id + '">&uarr;</button><button data-jmv="down" data-id="' + j.id + '">&darr;</button></div>' : "")
+  return '<div class="kl-card kl-jcard" style="border-left-color:' + j.color + '">' + (adm && S.st === "current" ? '<div class="kl-arw"><button data-jmv="up" data-id="' + j.id + '">&uarr;</button><button data-jmv="down" data-id="' + j.id + '">&darr;</button></div>' : "")
     + '<div class="kl-tt"><div class="kl-n">' + (j.no ? '<span class="kl-m" style="font-weight:800">' + esc(j.no) + '</span> ' : "") + esc(j.title) + ' ' + chip(j.kindLabel, j.color) + (j.status === "hold" ? ' ' + chip("ON HOLD", "#ffd60a") : "") + (j.billable ? "" : ' ' + chip("not billed", "#8e8e93")) + '</div>'
     + '<div class="kl-m">' + [j.customer, j.vehicle].filter(Boolean).map(esc).join(" · ") + (j.coyote_order ? " · Coyote order " + esc(j.coyote_order) : (j.billable ? ' · <span style="color:#ffd60a">no Coyote order yet</span>' : "")) + (j.cabs.length ? " · Cab " + j.cabs.map(function(c){ return esc(c.cab || c.order); }).join(", ") : "") + '</div>'
     + '<div class="kl-m">' + j.done + ' of ' + j.tasks + ' tasks done · ' + j.hours + ' h' + (j.billed_at ? ' · <span style="color:#30d158">billed in Coyote ' + new Date(j.billed_at).toLocaleDateString() + '</span>' : "") + '</div></div>'
-    + '<div class="kl-btns" style="flex-wrap:wrap;justify-content:flex-end"><button class="kl-lnkb" data-jtasks="' + j.id + '">Tasks</button>' + (adm ? '<button class="kl-lnkb" data-jadd="' + j.id + '">+ Task</button><button class="kl-lnkb" data-jedit="' + j.id + '">Edit</button>'
+    + '<div class="kl-btns kl-jbtns"><button class="kl-lnkb" data-jtasks="' + j.id + '">Tasks</button>' + (adm ? '<button class="kl-lnkb" data-jadd="' + j.id + '">+ Task</button><button class="kl-lnkb" data-jedit="' + j.id + '">Edit</button>'
     + (j.status === "open" ? '<button class="kl-lnkb" data-jst="hold" data-id="' + j.id + '">Hold</button><button class="kl-lnkb" data-jst="done" data-id="' + j.id + '">Done</button>' : j.status === "hold" ? '<button class="kl-lnkb" data-jst="open" data-id="' + j.id + '">Resume</button><button class="kl-lnkb" data-jst="done" data-id="' + j.id + '">Done</button>' : '<button class="kl-lnkb" data-jst="open" data-id="' + j.id + '">Re-open</button>') : "") + '</div></div>';
 }
 KL.detail = function(id, quiet){
@@ -812,7 +837,7 @@ KL.editor = function(taskId, jobId, req){
     if (ST) h += '<label>Steps</label><div id="kle-slist"></div><input type="hidden" id="kle-sstate">';
     h += '<label>' + (ST ? "Add more steps" : "Steps") + ' — one per line <a href="#" class="kl-lnk" id="kle-split" style="float:right">Split on commas</a></label><textarea class="kl-in" id="kle-steps" rows="' + (ST ? 2 : 4) + '" placeholder="Shut booth off, lock out&#10;Pull + bag the ceiling filters"></textarea><div class="kl-prev" id="kle-prev"></div>';
     h += '<label>Who does it (any mix)</label><div class="kl-m">Departments</div><div class="kl-chips" id="kle-depts">' + p.depts.map(function(x){ return '<button class="kl-pick" data-dept="' + esc(x) + '">' + esc(x) + '</button>'; }).join("") + '</div>'
-      + '<div class="kl-m">Managers of</div><div class="kl-chips" id="kle-mgr">' + p.depts.map(function(x){ return '<button class="kl-pick" data-mgr="' + esc(x) + '">' + esc(x) + ' managers</button>'; }).join("") + '</div>'
+      + (function(){ var md = (p.mgrDepts || p.depts).slice(); sel.mgr.forEach(function(x){ if (md.indexOf(x) < 0) md.push(x); }); return md.length ? '<div class="kl-m">Managers of</div><div class="kl-chips" id="kle-mgr">' + md.map(function(x){ var none = (p.mgrDepts || p.depts).indexOf(x) < 0; return '<button class="kl-pick" data-mgr="' + esc(x) + '"' + (none ? ' style="border-color:#ff453a;color:#ff9f0a"' : "") + '>' + esc(x) + (none ? " managers \u2014 nobody! tap to remove" : " managers") + '</button>'; }).join("") + '</div>' : '<div class="kl-chips" id="kle-mgr"></div>'; })()
       + '<div class="kl-m">People <input class="kl-in" id="kle-pq" placeholder="find a name" style="width:auto;padding:6px 9px;display:inline-block"></div><div class="kl-chips kl-ppl" id="kle-ppl">' + p.people.map(function(x){ return '<button class="kl-pick" data-person="' + x.id + '" data-name="' + esc(x.name.toLowerCase()) + '" style="--c:' + x.color + '">' + esc(x.name) + ' <span class="kl-m">' + esc(x.dept) + '</span></button>'; }).join("") + '</div>'
       + '<label>Priority</label><div class="kl-seg" id="kle-pri">' + ["Normal", "High", "Urgent"].map(function(x, i){ return '<button data-pri="' + i + '" class="' + (Number(t.pri) === i ? "on" : "") + '">' + x + '</button>'; }).join("") + '</div>'
       + '<label>Part of a job (optional)</label><select class="kl-in" id="kle-job"><option value="">— no job (a shop task) —</option>' + p.jobs.map(function(j){ return '<option value="' + j.id + '"' + (t.job_id === j.id ? " selected" : "") + '>' + (j.no ? esc(j.no) + " · " : "") + esc(j.title) + ' (' + esc(j.kind) + ')</option>'; }).join("") + '</select>'
@@ -932,13 +957,14 @@ function page(){
   if (!shared()) { var best = null, mine = dkKey("", "").slice(0, -1); try { for (var di = 0; di < localStorage.length; di++) { var dkk = localStorage.key(di); if (dkk.indexOf(mine) !== 0) continue; var dv = dkGet(dkk); if (dv && (!best || dv.at > best.at)) best = { k: dkk, at: dv.at }; } } catch (e) {}
     if (best && Date.now() - best.at < 86400000) setTimeout(function(){ if (document.querySelector(".kl-mod")) return; var ps = best.k.slice(mine.length).split(":"), kd = ps[0], id = ps.slice(1).join(":"), adm = KL.mode === "admin";   // Block 385c: back from another app → the pop-up he was in
       if (adm && kd === "task" && id === "new") KL.editor(null, null); else if (adm && kd === "task" && /^newj:/.test(id)) KL.editor(null, id.slice(5)); else if (adm && kd === "task" && !/^ok:/.test(id)) KL.editor(id);
-      else if (adm && kd === "job") KL.jobEditor(id === "new" ? null : id); else if (kd === "req" && el("kl385app").parentNode.querySelector('[data-new="req"]')) KL.request(); }, 700); }
+      else if (adm && kd === "job" && document.querySelector('[data-new="job"]')) KL.jobEditor(id === "new" ? null : id); else if (kd === "req" && el("kl385app").parentNode.querySelector('[data-new="req"]')) KL.request(); }, 700); }
 }
 var PCSS = ".kl-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}.kl-tab{padding:9px 14px;border-radius:999px;background:#2c2c2e;font-size:.95rem;font-weight:700;color:#ddd;border:0;cursor:pointer}.kl-tab.on{background:#ffd60a;color:#000}"
  + ".kl-card{display:flex;gap:10px;align-items:flex-start;background:#1c1c1e;border:1px solid #2c2c2e;border-left:6px solid #888;border-radius:12px;padding:11px 12px;margin:0 0 6px}.kl-card .kl-tt{cursor:pointer}"
  + ".kl-chip{font-size:.72rem;font-weight:800;padding:2px 7px;border-radius:999px;border:1px solid;margin-right:4px;white-space:nowrap}.kl-sb{display:inline-block;width:80px;height:6px;background:#333;border-radius:4px;overflow:hidden;vertical-align:middle}.kl-sb i{display:block;height:100%;background:#30d158}"
  + ".kl-det:empty{display:none}.kl-dbox{background:#151517;border:1px solid #2c2c2e;border-radius:12px;padding:12px;margin:-2px 0 10px}.kl-sh{font-size:.8rem;color:#8e8e93;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px}"
- + ".kl-srow{display:flex;gap:4px;align-items:center;margin:4px 0}.kl-srow .kl-in{flex:1;min-width:0;padding:8px 9px;resize:none;overflow:hidden;line-height:1.25;font-family:inherit;display:block}.kl-srm .kl-in{text-decoration:line-through;opacity:.45}.kl-sck{color:#30d158;font-weight:900;flex:none}.kl-sarr{background:#2c2c2e;border:0;border-radius:7px;color:#fff;width:32px;height:34px;font-size:.8rem;flex:none;cursor:pointer}.kl-sarr:disabled{opacity:.25}.kl-sadm{display:inline-flex;gap:4px;align-items:center;flex:none}.kl-sadm .kl-lnkb{min-width:32px;min-height:34px}@media(max-width:600px){.kl-steps li.kl-adm{flex-wrap:wrap;row-gap:2px;border-bottom:1px solid #2c2c2e}.kl-steps li.kl-adm>span:not(.kl-by):not(.kl-sadm){flex:1 1 calc(100% - 46px)}.kl-steps li.kl-adm .kl-sadm{margin-left:auto}.kl-steps li.kl-adm .kl-by{margin-left:37px}}"
+ + "@media(max-width:600px){.kl-pg{flex-wrap:wrap;gap:6px}.kl-pg span{flex:1 1 100%;order:-1;text-align:center}.kl-pg .kl-b{flex:1 1 0;padding:10px 4px;white-space:nowrap}}.kl-jcard{flex-wrap:wrap}.kl-jcard>.kl-tt{flex:1 1 220px}.kl-jbtns{flex:1 1 100%;flex-wrap:wrap;gap:2px 10px;border-top:1px solid #2c2c2e;margin-top:4px;padding-top:4px}.kl-jbtns .kl-lnkb{min-height:34px}"   // Block 385e: job links under the job (a phone squeezed the name into one word a line)
+  + ".kl-srow{display:flex;gap:4px;align-items:center;margin:4px 0}.kl-srow .kl-in{flex:1;min-width:0;padding:8px 9px;resize:none;overflow:hidden;line-height:1.25;font-family:inherit;display:block}.kl-srm .kl-in{text-decoration:line-through;opacity:.45}.kl-sck{color:#30d158;font-weight:900;flex:none}.kl-sarr{background:#2c2c2e;border:0;border-radius:7px;color:#fff;width:32px;height:34px;font-size:.8rem;flex:none;cursor:pointer}.kl-sarr:disabled{opacity:.25}.kl-sadm{display:inline-flex;gap:4px;align-items:center;flex:none}.kl-sadm .kl-lnkb{min-width:32px;min-height:34px}@media(max-width:600px){.kl-steps li.kl-adm{flex-wrap:wrap;row-gap:2px;border-bottom:1px solid #2c2c2e}.kl-steps li.kl-adm>span:not(.kl-by):not(.kl-sadm){flex:1 1 calc(100% - 46px)}.kl-steps li.kl-adm .kl-sadm{margin-left:auto}.kl-steps li.kl-adm .kl-by{margin-left:37px}}"
   + ".kl-steps{list-style:none;padding:0;margin:4px 0}.kl-steps li{display:flex;gap:9px;align-items:center;padding:5px 0;font-size:1rem}.kl-bx{width:28px;height:28px;border-radius:7px;border:2px solid #636366;background:transparent;color:#000;font-weight:900;flex:none;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.kl-bx.on{background:#30d158;border-color:#30d158}"
  + ".kl-dn2{color:#8e8e93;text-decoration:line-through}.kl-by{margin-left:auto;color:#8e8e93;font-size:.78rem;white-space:nowrap}.kl-row0{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}"
  + ".kl-in{background:#000;border:1px solid #3a3a3c;border-radius:9px;padding:10px 11px;font-size:16px;color:#fff;width:100%;box-sizing:border-box}.kl-row0 .kl-in{flex:1;min-width:160px;width:auto}"
@@ -16022,7 +16048,7 @@ const handleRequest355 = async (req, res) => {
       // Block 98c: clocked ONTO a real line that has no workable cab — tell the
       // tech where the line stands instead of a bare clock-out screen.
       let lineStat98 = null;
-      if (clockedIn && last && !(help338 && help338.label) && last.line_id !== SHOP_LINE_ID && last.line_id !== FIX_LINE_ID && last.line_id !== 14) {
+      if (clockedIn && last && !(help338 && help338.label) && last.line_id !== SHOP_LINE_ID && last.line_id !== FIX_LINE_ID && last.line_id !== 14 && Number(last.line_id) !== KL_LINE385) {   // Block 385e: on the Kill List the Kill List bar is the card — no "No cab to work right now"
         const lnB98 = await db(`build?select=order_number,state,queue_pos,created_at&line_id=eq.${last.line_id}&state=in.(active,rework,awaiting_inspection,upcoming)&order=created_at&limit=30`);
         // Block 124 (logic audit M5): only the "no cab to work" card when the
         // line has NO cab being worked. If an active/rework cab is on it, the
@@ -21057,11 +21083,19 @@ self.addEventListener("notificationclick", (e) => {
         const staffViews = ["mine", "dept", "requests", "done"], adminViews = ["open", "requested", "done", "jobs"];
         const asAdmin = url.searchParams.get("as") === "admin" && (admK || mgrK);
         if (!(asAdmin ? adminViews : staffViews).includes(view)) return json(400, { ok: false, error: "Unknown list" });
-        const E = await empsK();
-        const [jobsAll, openWorkAll, onNowK] = await Promise.all([dbAll252(`kill_job?select=*&order=sort.asc,created_at.asc,id.asc`), db(`kill_work?select=task_id,employee_id&ended_at=is.null&voided=is.false&limit=1000`), klOnNow385()]);
+        // Block 385e: everything this list needs that doesn't depend on anything else goes in ONE wave (the tasks used to wait their turn)
+        const doneSince = q || fJob ? "" : `&done_at=gte.${new Date(Date.now() - 365 * 86400000).toISOString()}`;   // Done = the last 12 months unless searching / one job's
+        const srcP = view === "jobs" ? Promise.resolve([]) : view === "done" ? klAllFast385(`kill_task?select=*&state=eq.done${doneSince}&order=done_at.desc,id.asc`)
+          : view === "requested" ? (admK ? db(`kill_task?select=*&state=eq.requested&order=created_at.asc&limit=2000`) : Promise.resolve([]))
+          : view === "requests" ? db(`kill_task?select=*&requested_by=eq.${meK.id}&order=created_at.desc&limit=200`)
+          : klAllFast385(`kill_task?select=*&state=eq.open&order=sort.asc,created_at.asc,id.asc`);
+        const qq = q.replace(/[*%\\(),."']/g, " ").trim(), qEnc = encodeURIComponent("*" + qq.replace(/\s+/g, "*") + "*");   // Block 385e: the database searches the step + note wording (was: the first 1,000 rows only)
+        const hitP = qq && view !== "jobs" ? Promise.all([klAllFast385(`kill_step?select=task_id&cancelled=is.false&text=ilike.${qEnc}&order=id.asc`), klAllFast385(`kill_note?select=task_id&hidden=is.false&note=ilike.${qEnc}&order=id.asc`)]).catch(() => [[], []]) : Promise.resolve([[], []]);   // Fable audit: a one-letter search can match 20,000 steps — 8 pages at a time, and never for the Jobs tab
+        const [E, jobsAll, openWorkAll, onNowK, src0, hits] = await Promise.all([empsK(), dbAll252(`kill_job?select=*&order=sort.asc,created_at.asc,id.asc`), db(`kill_work?select=task_id,employee_id,billable&ended_at=is.null&voided=is.false&limit=1000`), klOnNow385(), srcP, hitP]);
         const openWork = openWorkAll.filter((w) => klLive385(w, onNowK, E.by));   // Fable audit: "on it" = on the Kill List line right now
         const jobBy = Object.fromEntries(jobsAll.map((j) => [j.id, j]));
         if (view === "jobs") {
+          if (!(admK || (mgrK && meK.department === "Accounting"))) return json(403, { ok: false, error: "Jobs are for admins and accounting" });   // Block 385e (Daniel 11/20 08:52)
           const st = String(url.searchParams.get("st") || "current");
           let jl = jobsAll.filter((j) => st === "done" ? j.status === "done" : st === "cancelled" ? j.status === "cancelled" : ["open", "hold"].includes(j.status));
           if (q) jl = jl.filter((j) => [klNo385(j), j.title, j.customer, j.vehicle, j.coyote_order, j.notes].join(" ").toLowerCase().includes(q));
@@ -21080,11 +21114,7 @@ self.addEventListener("notificationclick", (e) => {
               tasks: ts.length, done: ts.filter((t) => t.state === "done").length, hours: klH385(hrsJ.filter((h) => tJob[h.task_id] === j.id).reduce((a, h) => a + h.ms, 0)),
               billed_at: j.billed_at, done_at: j.done_at }; }) });
         }
-        let src;
-        if (view === "done") src = await dbAll252(`kill_task?select=*&state=eq.done&order=done_at.desc,id.asc`);
-        else if (view === "requested") src = admK ? await db(`kill_task?select=*&state=eq.requested&order=created_at.asc&limit=2000`) : [];
-        else if (view === "requests") src = await db(`kill_task?select=*&requested_by=eq.${meK.id}&order=created_at.desc&limit=200`);
-        else src = await dbAll252(`kill_task?select=*&state=eq.open&order=sort.asc,created_at.asc,id.asc`);
+        const src = src0;
         let rows = src.filter((t) => {
           if (view === "requests" || view === "requested") return true;
           if (asAdmin) return admK || klArr385(t.depts).includes(meK.department) || klArr385(t.mgr_depts).includes(meK.department) || klArr385(t.people).some((id) => E.by[id] && E.by[id].department === meK.department) || t.created_by === meK.id;
@@ -21097,37 +21127,36 @@ self.addEventListener("notificationclick", (e) => {
         if (fPri != null) rows = rows.filter((t) => (t.priority || 0) === fPri);
         if (fJob) rows = rows.filter((t) => t.job_id === fJob);
         if (q) {
-          const notes = await db(`kill_note?select=task_id,note&hidden=is.false&limit=10000`).catch(() => []);
-          const steps = await db(`kill_step?select=task_id,text&cancelled=is.false&limit=20000`).catch(() => []);
-          const extraTxt = {}; for (const n of notes) extraTxt[n.task_id] = (extraTxt[n.task_id] || "") + " " + n.note; for (const s2 of steps) extraTxt[s2.task_id] = (extraTxt[s2.task_id] || "") + " " + s2.text;
+          const inText = new Set([...hits[0], ...hits[1]].map((x) => x.task_id));
           rows = rows.filter((t) => { const j = t.job_id ? jobBy[t.job_id] : null;
-            return [t.title, t.details, t.request_note, extraTxt[t.id], j ? [klNo385(j), j.title, j.customer, j.vehicle, j.coyote_order].join(" ") : "", klWho385(t, E.by)].join(" ").toLowerCase().includes(q); });
+            return inText.has(t.id) || [t.title, t.details, t.request_note, j ? [klNo385(j), j.title, j.customer, j.vehicle, j.coyote_order].join(" ") : "", klWho385(t, E.by)].join(" ").toLowerCase().includes(q); });
         }
-        if (view !== "done" && view !== "requests" && view !== "requested") rows.sort((a, b) => (b.priority || 0) - (a.priority || 0) || ((a.job_id ? (jobBy[a.job_id] || {}).sort || 0 : -1) - (b.job_id ? (jobBy[b.job_id] || {}).sort || 0 : -1)) || (Number(a.sort) - Number(b.sort)) || String(a.created_at).localeCompare(String(b.created_at)));
+        const todayK = phxDate(Date.now()), lateK = (t) => (t.state === "open" && t.due_date && String(t.due_date) < todayK ? 1 : 0);   // Block 385e: late first
+        if (view !== "done" && view !== "requests" && view !== "requested") rows.sort((a, b) => lateK(b) - lateK(a) || (b.priority || 0) - (a.priority || 0) || ((a.job_id ? (jobBy[a.job_id] || {}).sort || 0 : -1) - (b.job_id ? (jobBy[b.job_id] || {}).sort || 0 : -1)) || (Number(a.sort) - Number(b.sort)) || String(a.created_at).localeCompare(String(b.created_at)));
         if (asAdmin && view === "open") rows.sort((a, b) => (Number(a.sort) - Number(b.sort)) || String(a.created_at).localeCompare(String(b.created_at)));
         const total = rows.length, pg = rows.slice((page - 1) * per, page * per), ids = pg.map((t) => t.id);
         const [steps, hrs] = await Promise.all([ids.length ? db(`kill_step?select=task_id,checked_at,cancelled&task_id=in.(${ids.join(",")})&limit=5000`) : [], klHours385({ taskIds: ids }, 0, Date.now() + 60000)]);
-        return json(200, { ok: true, total, page, pages: Math.max(1, Math.ceil(total / per)), rows: pg.map((t) => {
+        return json(200, { ok: true, total, page, pages: Math.max(1, Math.ceil(total / per)), note: view === "done" && doneSince ? "Showing what was finished in the last 12 months \u2014 search (or pick a job) to find anything older." : "", rows: pg.map((t) => {
           const st = steps.filter((x) => x.task_id === t.id && !x.cancelled), j = t.job_id ? jobBy[t.job_id] : null, d = klDeptOf385(t, E.by);
           const hBy = {}; for (const h of hrs) if (h.task_id === t.id) hBy[h.employee_id] = (hBy[h.employee_id] || 0) + h.ms;
           return { id: t.id, title: t.title, pri: t.priority || 0, state: t.state, job: j ? { id: j.id, no: klNo385(j), title: j.title, kind: KL_KINDS385[j.kind] || "", billable: j.billable } : null, dept: d, color: KL_COLOR385[d] || "#8e8e93", who: klWho385(t, E.by),
             steps: st.length, checked: st.filter((x) => x.checked_at).length, hours: klH385(Object.values(hBy).reduce((a, b) => a + b, 0)), est: t.est_hours, due: t.due_date,
             on: openWork.filter((w) => w.task_id === t.id).map((w) => klName385(E.by[w.employee_id])).filter(Boolean), meOn: openWork.some((w) => w.task_id === t.id && w.employee_id === meK.id), myOpen: openWorkAll.some((w) => w.task_id === t.id && w.employee_id === meK.id),
-            workers: Object.entries(hBy).map(([id, ms]) => ({ name: klName385(E.by[id]), h: klH385(ms) })),
+            workers: Object.entries(hBy).map(([id, ms]) => ({ name: klName385(E.by[id]), h: klH385(ms) })).sort((x, y) => y.h - x.h || String(x.name).localeCompare(String(y.name)))   /* Fable audit: most hours first — the order used to follow whichever punch the database returned first */,
             done_at: t.done_at, done_by: klName385(E.by[t.done_by]), requested_by: klName385(E.by[t.requested_by]), request_note: t.request_note || "", decline_reason: t.decline_reason || "", created_at: t.created_at,
             can: { edit: klCanEdit385(meK, t, E.by) } }; }) });
       }
 
       // ---- one task, everything about it ----
       if (url.pathname === "/api/kill/task" && req.method === "GET") {
-        const t = await taskK(url.searchParams.get("id")); if (!t) return json(404, { ok: false, error: "That task isn't there anymore" });
-        const E = await empsK();
+        // Block 385e: everything about one task in one wave (was 4 waits in a row); the job (if any) is the only read that waits for the task
+        const tq = String(url.searchParams.get("id") || ""); if (!isUuid(tq)) return json(404, { ok: false, error: "That task isn't there anymore" });
+        const [t, E, steps, notes, photos, work, onNowT, hrs] = await Promise.all([taskK(tq), empsK(), db(`kill_step?select=*&task_id=eq.${tq}&order=sort.asc,created_at.asc`), db(`kill_note?select=*&task_id=eq.${tq}&order=created_at.asc`),
+          db(`kill_photo?select=id,uploaded_by,created_at,hidden&task_id=eq.${tq}&order=created_at.asc`), db(`kill_work?select=employee_id,started_at,ended_at,voided,billable&task_id=eq.${tq}&voided=is.false&ended_at=is.null`), klOnNow385(), klHours385({ taskIds: [tq] }, 0, Date.now() + 60000)]);
+        if (!t) return json(404, { ok: false, error: "That task isn't there anymore" });
         if (!klSees385(meK, t) && !(mgrK && klCanEdit385(meK, t, E.by))) return json(403, { ok: false, error: "That task isn't yours to see" });
-        const [steps, notes, photos, work, job] = await Promise.all([db(`kill_step?select=*&task_id=eq.${t.id}&order=sort.asc,created_at.asc`), db(`kill_note?select=*&task_id=eq.${t.id}&order=created_at.asc`),
-          db(`kill_photo?select=id,uploaded_by,created_at,hidden&task_id=eq.${t.id}&order=created_at.asc`), db(`kill_work?select=employee_id,started_at,ended_at,voided&task_id=eq.${t.id}&voided=is.false&ended_at=is.null`),
-          t.job_id ? db(`kill_job?select=*&id=eq.${t.job_id}`).then((r) => r[0] || null) : null]);
-        const onNowT = await klOnNow385(), liveT = work.filter((w) => klLive385(w, onNowT, E.by));
-        const hrs = await klHours385({ taskIds: [t.id] }, 0, Date.now() + 60000);
+        const job = t.job_id ? (await db(`kill_job?select=*&id=eq.${t.job_id}`))[0] || null : null;
+        const liveT = work.filter((w) => klLive385(w, onNowT, E.by));
         const hBy = {}; for (const h of hrs) hBy[h.employee_id] = (hBy[h.employee_id] || 0) + h.ms;
         const canEdit = klCanEdit385(meK, t, E.by), seeHidden = canEdit;
         return json(200, { ok: true, task: { id: t.id, title: t.title, details: t.details, pri: t.priority || 0, state: t.state, est: t.est_hours, due: t.due_date, depts: klArr385(t.depts), mgr_depts: klArr385(t.mgr_depts), people: klArr385(t.people),
@@ -21138,7 +21167,7 @@ self.addEventListener("notificationclick", (e) => {
           notes: notes.filter((n) => seeHidden || !n.hidden).map((n) => ({ id: n.id, note: n.note, by: klName385(E.by[n.author_id]), at: n.created_at, hidden: n.hidden })),
           photos: photos.filter((p) => seeHidden || !p.hidden).map((p) => ({ id: p.id, by: klName385(E.by[p.uploaded_by]), at: p.created_at })),
           on: liveT.map((w) => klName385(E.by[w.employee_id])).filter(Boolean), meOn: liveT.some((w) => w.employee_id === meK.id), myOpen: work.some((w) => w.employee_id === meK.id),
-          workers: Object.entries(hBy).map(([id, ms]) => ({ name: klName385(E.by[id]), h: klH385(ms) })), hours: klH385(Object.values(hBy).reduce((a, b) => a + b, 0)),
+          workers: Object.entries(hBy).map(([id, ms]) => ({ name: klName385(E.by[id]), h: klH385(ms) })).sort((x, y) => y.h - x.h || String(x.name).localeCompare(String(y.name)))   /* Fable audit: most hours first — the order used to follow whichever punch the database returned first */, hours: klH385(Object.values(hBy).reduce((a, b) => a + b, 0)),
           can: { edit: canEdit, approve: admK && t.state === "requested", work: klSees385(meK, t) && t.state === "open" } });
       }
 
@@ -21147,7 +21176,8 @@ self.addEventListener("notificationclick", (e) => {
         if (!admK && !mgrK) return json(403, { ok: false, error: "Admins and managers only" });
         const E = await empsK();
         const [jobs, cabs] = await Promise.all([db(`kill_job?select=id,job_no,title,kind,status&status=in.(open,hold)&order=sort.asc&limit=1000`), db(`build?select=id,order_number,cab_number,customer_name,state&order=created_at.desc&limit=400`)]);
-        return json(200, { ok: true, depts: admK ? KL_DEPTS385 : [meK.department], admin: admK, myDept: meK.department,
+        const mgrDepts = KL_DEPTS385.filter((d) => E.rows.some((e) => e.active !== false && e.role === "manager" && e.department === d));   // Block 385e: Build / Warehouse / Marketing have nobody
+        return json(200, { ok: true, depts: admK ? KL_DEPTS385 : [meK.department], mgrDepts: admK ? mgrDepts : mgrDepts.filter((d) => d === meK.department), admin: admK, myDept: meK.department,
           people: E.rows.filter((e) => e.active !== false && (admK || e.department === meK.department)).map((e) => ({ id: e.id, name: klName385(e), dept: e.department || "", color: KL_COLOR385[e.department] || "#8e8e93" })),
           jobs: jobs.map((j) => ({ id: j.id, no: klNo385(j), title: j.title, kind: KL_KINDS385[j.kind] || "" })), kinds: KL_KINDS385,
           cabs: cabs.map((b) => ({ id: b.id, order: b.order_number, cab: b.cab_number || "", customer: b.customer_name || "" })) });
@@ -21161,6 +21191,7 @@ self.addEventListener("notificationclick", (e) => {
         const t0 = b.id ? await taskK(b.id) : null; if (b.id && !t0) return json(404, { ok: false, error: "That task isn't there anymore" });
         const draft = { depts: clean(b.depts, (d) => KL_DEPTS385.includes(d)), mgr_depts: clean(b.mgr_depts, (d) => KL_DEPTS385.includes(d)), people: clean(b.people, (id) => isUuid(id) && E.by[id] && E.by[id].active !== false) };
         if (!draft.depts.length && !draft.mgr_depts.length && !draft.people.length) return json(400, { ok: false, error: "Pick who does it — a department, its managers, or people" });
+        { const noMgr = draft.mgr_depts.filter((d) => !E.rows.some((e) => e.active !== false && e.role === "manager" && e.department === d)); if (noMgr.length) return json(400, { ok: false, error: `Nobody manages ${noMgr.join(" / ")} — pick the department or people instead` }); }   // Block 385e
         if (!klCanEdit385(meK, draft, E.by) || (t0 && !klCanEdit385(meK, t0, E.by))) return json(403, { ok: false, error: mgrK ? "Managers add tasks inside their own department" : "Admins and managers only" });
         const title = String(b.title || "").trim().slice(0, 140); if (!title) return json(400, { ok: false, error: "Give it a title" });
         const pri = [0, 1, 2].includes(Number(b.priority)) ? Number(b.priority) : 0;
@@ -21228,21 +21259,23 @@ self.addEventListener("notificationclick", (e) => {
           const [last, mine, jobRows] = await Promise.all([lastPunchK(meK.id), myOpenK(), t.job_id ? db(`kill_job?select=id,billable,status&id=eq.${t.job_id}`) : []]);
           if (mine.some((w) => w.task_id === t.id)) {   // already on it (paused by lunch / a line move) → only the clock moves
             if (!(last && last.kind === "clock_in") && meK.pay_type !== "salary" && !admK) return json(400, { ok: false, error: "Clock in first, then resume it" });   // Fable audit
-            if (last && last.kind === "clock_in" && Number(last.line_id) !== KL_LINE385 && meK.pay_type !== "salary") {
+            if (last && last.kind === "clock_in" && Number(last.line_id) !== KL_LINE385 && !(meK.pay_type === "salary" || (klOffice385(meK) && mine.find((w) => w.task_id === t.id).billable !== true))) {
               const back = await klSnap385(last); const outR = new Date(Math.max(nowK.getTime(), new Date(last.claimed_at).getTime() + 1000)); await punchK(last.line_id, "clock_out_early", outR, { reason: "Switched to the Kill List" }); await punchK(KL_LINE385, "clock_in", new Date(outR.getTime() + 1000));
               await db(`kill_work?id=eq.${mine.find((w) => w.task_id === t.id).id}`, { method: "PATCH", body: JSON.stringify({ back }) });
               logEvent("kill.resume", meK.id, { ...jl, from_line: last.line_id });
             }
             return json(200, { ok: true, paused: [] });
           }
-          const clocked = Boolean(last && last.kind === "clock_in"), salaried = meK.pay_type === "salary" || [17, 18].includes(Number(last && last.line_id));
-          if (!clocked && !salaried && !admK) return json(400, { ok: false, error: "Clock in first, then start it" });
           const billable = Boolean(jobRows[0] && jobRows[0].billable && jobRows[0].status !== "cancelled");
+          // Fable audit: the office skips the clock move only for tasks that aren't billed (and only when not already on the Kill List line —
+          // there the normal path keeps their Back). A customer job's task moves the clock like anyone's, so Kailey can bill it.
+          const clocked = Boolean(last && last.kind === "clock_in"), salaried = meK.pay_type === "salary" || [17, 18].includes(Number(last && last.line_id)), noMove = salaried || (klOffice385(meK) && !billable && Number(last && last.line_id) !== KL_LINE385);
+          if (!clocked && !salaried && !admK) return json(400, { ok: false, error: "Clock in first, then start it" });
           const keep = b.keep === true && !billable && !mine.some((w) => w.billable);
           const paused = keep ? [] : mine;
           if (paused.length) await db(`kill_work?id=in.(${paused.map((w) => w.id).join(",")})`, { method: "PATCH", body: JSON.stringify({ ended_at: nowK.toISOString(), end_reason: "auto_pause" }) });
           let back = null, startAt = nowK;
-          if (clocked && !salaried) {
+          if (clocked && !noMove) {
             if (Number(last.line_id) !== KL_LINE385) {
               back = await klSnap385(last);
               const outAt = new Date(Math.max(nowK.getTime(), new Date(last.claimed_at).getTime() + 1000));   // never before the last punch
@@ -21252,7 +21285,7 @@ self.addEventListener("notificationclick", (e) => {
           }
           await db("kill_work", { method: "POST", body: JSON.stringify({ task_id: t.id, employee_id: meK.id, started_at: startAt.toISOString(), billable, back }) });
           const pausedT = paused.length ? await db(`kill_task?select=id,title&id=in.(${paused.map((w) => w.task_id).join(",")})`) : [];
-          logEvent("kill.start", meK.id, { ...jl, title: t.title, from_line: last ? last.line_id : null, moved: Boolean(back && clocked && !salaried && Number(last.line_id) !== KL_LINE385), paused: paused.map((w) => w.task_id), keep });
+          logEvent("kill.start", meK.id, { ...jl, title: t.title, from_line: last ? last.line_id : null, moved: Boolean(back && clocked && !noMove && Number(last.line_id) !== KL_LINE385), paused: paused.map((w) => w.task_id), keep });
           return json(200, { ok: true, paused: pausedT.map((x) => x.title) });
         }
         if (act === "pause") {
@@ -21316,6 +21349,7 @@ self.addEventListener("notificationclick", (e) => {
           }
           const draft = { depts: [...new Set(klArr385(b.depts).filter((d) => KL_DEPTS385.includes(d)))], mgr_depts: [...new Set(klArr385(b.mgr_depts).filter((d) => KL_DEPTS385.includes(d)))], people: [...new Set(klArr385(b.people).filter((id) => isUuid(id) && E.by[id]))] };
           if (!draft.depts.length && !draft.mgr_depts.length && !draft.people.length) return json(400, { ok: false, error: "Pick who does it" });
+          { const noMgr = draft.mgr_depts.filter((d) => !E.rows.some((e) => e.active !== false && e.role === "manager" && e.department === d)); if (noMgr.length) return json(400, { ok: false, error: `Nobody manages ${noMgr.join(" / ")} — pick the department or people instead` }); }   // Block 385e
           const pri = [0, 1, 2].includes(Number(b.priority)) ? Number(b.priority) : 0;
           const title = String(b.title || t.title).trim().slice(0, 140) || t.title;
           let jobId = null; if (b.job_id && isUuid(b.job_id)) { const [j] = await db(`kill_job?select=id&id=eq.${b.job_id}`); jobId = j ? j.id : null; }
@@ -21405,7 +21439,7 @@ self.addEventListener("notificationclick", (e) => {
 
       // ---- jobs (admins; managers for their own department's jobs) ----
       if (url.pathname === "/api/kill/job" && req.method === "POST") {
-        if (!admK && !mgrK) return json(403, { ok: false, error: "Admins and managers only" });
+        if (!admK && !(mgrK && meK.department === "Accounting")) return json(403, { ok: false, error: "Jobs are for admins and accounting" });   // Block 385e: floor managers don't make / change jobs
         const b = await body(req);
         const j0 = b.id ? (isUuid(b.id) ? (await db(`kill_job?select=*&id=eq.${b.id}`))[0] : null) : null; if (b.id && !j0) return json(404, { ok: false, error: "That job isn't there anymore" });
         const act = String(b.action || "save");
