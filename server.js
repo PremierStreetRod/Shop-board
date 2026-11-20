@@ -752,8 +752,8 @@ KL.detail = function(id, quiet){
     if (t.request_note) h += '<div class="kl-m">Asked for by ' + esc(t.requested_by) + ': ' + esc(t.request_note) + '</div>';
     if (t.reopen_reason) h += '<div class="kl-m" style="color:#ffd60a">Re-opened: ' + esc(t.reopen_reason) + '</div>';
     if (d.steps.length) { h += '<div class="kl-sh">Steps · ' + d.steps.filter(function(s){ return s.checked; }).length + ' of ' + d.steps.length + '</div><ul class="kl-steps">';
-      d.steps.forEach(function(s){ h += '<li><button class="kl-bx' + (s.checked ? " on" : "") + '" data-step="' + s.id + '" data-on="' + (s.checked ? 1 : 0) + '"' + (t.state !== "open" ? " disabled" : "") + '>' + (s.checked ? "&#10003;" : "") + '</button><span class="' + (s.checked ? "kl-dn2" : "") + '">' + esc(s.text) + '</span><span class="kl-by">' + (s.checked ? esc(s.by) + " " + new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : (s.added ? "" : "")) + '</span>'
-        + (d.can.edit && t.state === "open" ? '<button class="kl-lnkb" data-sedit="' + s.id + '">&#9998;</button><button class="kl-lnkb" data-scan="' + s.id + '">&times;</button>' : "") + '</li>'; });
+      d.steps.forEach(function(s, si){ h += '<li' + (d.can.edit && t.state === "open" ? ' class="kl-adm"' : "") + '><button class="kl-bx' + (s.checked ? " on" : "") + '" data-step="' + s.id + '" data-on="' + (s.checked ? 1 : 0) + '"' + (t.state !== "open" ? " disabled" : "") + '>' + (s.checked ? "&#10003;" : "") + '</button><span class="' + (s.checked ? "kl-dn2" : "") + '">' + esc(s.text) + '</span><span class="kl-by">' + (s.checked ? esc(s.by) + " " + new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : (s.added ? "" : "")) + '</span>'
+        + (d.can.edit && t.state === "open" ? '<span class="kl-sadm"><button class="kl-sarr" data-smv="' + s.id + '" data-d="-1"' + (si === 0 ? " disabled" : "") + ' aria-label="Move up">&#9650;</button><button class="kl-sarr" data-smv="' + s.id + '" data-d="1"' + (si === d.steps.length - 1 ? " disabled" : "") + ' aria-label="Move down">&#9660;</button><button class="kl-lnkb" data-sedit="' + s.id + '">&#9998;</button><button class="kl-lnkb" data-scan="' + s.id + '">&times;</button></span>' : "") + '</li>'; });
       h += '</ul>'; }
     if (t.state === "open" && d.can.work) h += '<div class="kl-row0"><input class="kl-in" id="kl-ns-' + id + '" placeholder="+ add a step you found" maxlength="300"><button class="kl-b" data-addstep="' + id + '">Add step</button></div>';
     h += '<div class="kl-sh">Who\'s worked it</div><div class="kl-m">' + (d.workers.length ? d.workers.map(function(w){ return esc(w.name) + " " + w.h + " h"; }).join(" · ") + " · total " + d.hours + " h" : "No time on it yet") + (d.on.length ? ' · <span style="color:#30d158">&#9679; ' + esc(d.on.join(", ")) + ' on it now</span>' : "") + '</div>';
@@ -807,8 +807,10 @@ KL.editor = function(taskId, jobId, req){
     var h = '<div class="kl-mh">' + (req ? "Approve + assign" : taskId ? "Edit task" : "New Kill List task") + '<button class="kl-lnkb" data-x="1">&times;</button></div>'
       + '<label>Title</label><input class="kl-in" id="kle-title" maxlength="140" value="' + esc(t.title) + '">'
       + '<label>Details (optional)</label><textarea class="kl-in" id="kle-det" rows="3" maxlength="4000">' + esc(t.details) + '</textarea>';
-    if (!taskId || req) h += '<label>Steps — one per line <a href="#" class="kl-lnk" id="kle-split" style="float:right">Split on commas</a></label><textarea class="kl-in" id="kle-steps" rows="4" placeholder="Shut booth off, lock out&#10;Pull + bag the ceiling filters"></textarea><div class="kl-prev" id="kle-prev"></div>';
-    else h += '<div class="kl-m" style="margin-top:10px">Steps are edited on the task itself (&#9998; / &times;), and anyone on it can add one.</div>';
+    /* Block 385d (Daniel 11/20 08:07): Edit shows every step — fix the wording, move it up / down, remove it (Undo), add more */
+    var ST = taskId && !req && d && d.ok ? (d.steps || []).map(function(x){ return { id: x.id, text: x.text, ck: !!x.checked, rm: false }; }) : null;
+    if (ST) h += '<label>Steps</label><div id="kle-slist"></div><input type="hidden" id="kle-sstate">';
+    h += '<label>' + (ST ? "Add more steps" : "Steps") + ' — one per line <a href="#" class="kl-lnk" id="kle-split" style="float:right">Split on commas</a></label><textarea class="kl-in" id="kle-steps" rows="' + (ST ? 2 : 4) + '" placeholder="Shut booth off, lock out&#10;Pull + bag the ceiling filters"></textarea><div class="kl-prev" id="kle-prev"></div>';
     h += '<label>Who does it (any mix)</label><div class="kl-m">Departments</div><div class="kl-chips" id="kle-depts">' + p.depts.map(function(x){ return '<button class="kl-pick" data-dept="' + esc(x) + '">' + esc(x) + '</button>'; }).join("") + '</div>'
       + '<div class="kl-m">Managers of</div><div class="kl-chips" id="kle-mgr">' + p.depts.map(function(x){ return '<button class="kl-pick" data-mgr="' + esc(x) + '">' + esc(x) + ' managers</button>'; }).join("") + '</div>'
       + '<div class="kl-m">People <input class="kl-in" id="kle-pq" placeholder="find a name" style="width:auto;padding:6px 9px;display:inline-block"></div><div class="kl-chips kl-ppl" id="kle-ppl">' + p.people.map(function(x){ return '<button class="kl-pick" data-person="' + x.id + '" data-name="' + esc(x.name.toLowerCase()) + '" style="--c:' + x.color + '">' + esc(x.name) + ' <span class="kl-m">' + esc(x.dept) + '</span></button>'; }).join("") + '</div>'
@@ -818,7 +820,23 @@ KL.editor = function(taskId, jobId, req){
       + '<div class="kl-err" id="kle-err"></div><button class="kl-b kl-dn" id="kle-save" style="width:100%;margin-top:12px;padding:14px">' + (req ? "Approve + add to the Kill List" : taskId ? "Save" : "Add to the Kill List") + '</button>';
     var dk = dkKey("task", req ? "ok:" + taskId : taskId || (jobId ? "newj:" + jobId : "new")), dr = dkGet(dk);
     var m = modal(h, dk), q = function(s){ return m.querySelector(s); };
-    if (dr && dr.d) { dkFill(m, dr.d); sel = { depts: [], mgr: [], people: [] }; (dr.d.c || []).forEach(function(x){ (x[0] === "data-dept" ? sel.depts : x[0] === "data-mgr" ? sel.mgr : sel.people).push(x[1]); }); if (dr.d.p != null) t.pri = dr.d.p; m.touched(); }
+    if (ST) { if (dr && dr.d && dr.d.f && dr.d.f["kle-sstate"]) { try { var was = JSON.parse(dr.d.f["kle-sstate"]), live = {}; ST.forEach(function(x){ live[x.id] = x; });   // the draft's order / wording / removals, on top of what's there now
+        var got = {}, nx = []; (was || []).forEach(function(x){ if (x && live[x.id] && !got[x.id]) { got[x.id] = 1; nx.push({ id: x.id, text: String(x.text == null ? live[x.id].text : x.text), ck: live[x.id].ck, rm: !!x.rm }); } });
+        ST.forEach(function(x){ if (!got[x.id]) nx.push(x); }); ST = nx; } catch (e) {} }
+      var sBox = m.querySelector("#kle-slist"), sKeep = function(){ m.querySelector("#kle-sstate").value = JSON.stringify(ST); };
+      var sGrow = function(ta){ ta.style.height = "auto"; ta.style.height = Math.max(38, ta.scrollHeight + 2) + "px"; };   /* Fable audit: the whole step shows, however long */
+      var sPaint = function(){ sBox.innerHTML = ST.length ? ST.map(function(x, i){ return '<div class="kl-srow' + (x.rm ? " kl-srm" : "") + '">'
+          + '<button class="kl-sarr" data-smu="' + i + '"' + (i === 0 || x.rm ? " disabled" : "") + ' aria-label="Move up">&#9650;</button><button class="kl-sarr" data-smd="' + i + '"' + (i === ST.length - 1 || x.rm ? " disabled" : "") + ' aria-label="Move down">&#9660;</button>'
+          + (x.ck ? '<span class="kl-sck" title="Already checked off">&#10003;</span>' : "") + '<textarea class="kl-in" rows="1" data-sti="' + i + '" maxlength="300"' + (x.rm ? " disabled" : "") + '>' + esc(x.text) + '</textarea>'
+          + '<button class="kl-lnkb" data-srm="' + i + '">' + (x.rm ? "Undo" : "&times;") + '</button></div>'; }).join("") : '<div class="kl-m">No steps yet \u2014 add them below.</div>'; sKeep(); sBox.querySelectorAll("textarea").forEach(sGrow); };
+      sBox.addEventListener("input", function(e){ var i = e.target.getAttribute("data-sti"); if (i != null && ST[i]) { if (/[\r\n]/.test(e.target.value)) e.target.value = e.target.value.replace(/\s*[\r\n]+\s*/g, " "); ST[i].text = e.target.value; sGrow(e.target); sKeep(); } });
+      sBox.addEventListener("click", function(e){ var b = e.target.closest("button"); if (!b || b.disabled) return; var i;
+        if ((i = b.getAttribute("data-smu")) != null) { i = +i; var a1 = ST[i]; ST[i] = ST[i - 1]; ST[i - 1] = a1; }
+        else if ((i = b.getAttribute("data-smd")) != null) { i = +i; var a2 = ST[i]; ST[i] = ST[i + 1]; ST[i + 1] = a2; }
+        else if ((i = b.getAttribute("data-srm")) != null) { ST[+i].rm = !ST[+i].rm; } else return;
+        sPaint(); m.touched(); });
+      sPaint(); }
+    if (dr && dr.d) { dkFill(m, dr.d); if (ST) m.querySelector("#kle-sstate").value = JSON.stringify(ST); sel = { depts: [], mgr: [], people: [] }; (dr.d.c || []).forEach(function(x){ (x[0] === "data-dept" ? sel.depts : x[0] === "data-mgr" ? sel.mgr : sel.people).push(x[1]); }); if (dr.d.p != null) t.pri = dr.d.p; m.touched(); }
     var paint = function(){ m.querySelectorAll("[data-dept]").forEach(function(b){ b.classList.toggle("sel", sel.depts.indexOf(b.getAttribute("data-dept")) > -1); });
       m.querySelectorAll("[data-mgr]").forEach(function(b){ b.classList.toggle("sel", sel.mgr.indexOf(b.getAttribute("data-mgr")) > -1); });
       m.querySelectorAll("[data-person]").forEach(function(b){ b.classList.toggle("sel", sel.people.indexOf(b.getAttribute("data-person")) > -1); }); };
@@ -833,7 +851,7 @@ KL.editor = function(taskId, jobId, req){
       else if (b.hasAttribute("data-pri")) { priV = Number(b.getAttribute("data-pri")); m.querySelectorAll("[data-pri]").forEach(function(x){ x.classList.toggle("on", x === b); }); } });
     q("#kle-pq").addEventListener("input", function(){ var v = this.value.toLowerCase(); m.querySelectorAll("[data-person]").forEach(function(b){ b.style.display = !v || b.getAttribute("data-name").indexOf(v) > -1 ? "" : "none"; }); });
     q("#kle-save").onclick = function(){ var btn = this; btn.disabled = true;
-      var body = { id: taskId && !req ? taskId : undefined, title: q("#kle-title").value, details: q("#kle-det").value, steps: q("#kle-steps") ? splitSteps(q("#kle-steps").value) : undefined, priority: priV,
+      var body = { id: taskId && !req ? taskId : undefined, title: q("#kle-title").value, details: q("#kle-det").value, steps: q("#kle-steps") ? splitSteps(q("#kle-steps").value) : undefined, steps_edit: ST ? ST.map(function(x){ return { id: x.id, text: x.text, remove: x.rm }; }) : undefined, priority: priV,
         job_id: q("#kle-job").value || null, est_hours: q("#kle-est").value, due_date: q("#kle-due").value, depts: sel.depts, mgr_depts: sel.mgr, people: sel.people };
       var go = req ? api("/api/kill/act", Object.assign({ action: "approve", task_id: taskId }, body)) : api("/api/kill/save", body);
       go.then(function(r){ if (!r.ok) { btn.disabled = false; q("#kle-err").textContent = r.error || "Didn't save"; return; } m.done(); toast(req ? "✓ Approved" : "✓ Saved"); S.pick = null; KL.reload(); }); };
@@ -869,7 +887,7 @@ KL.request = function(){
   m.querySelector("#klr-go").onclick = function(){ var b = this; b.disabled = true; api("/api/kill/request", { title: m.querySelector("#klr-t").value, note: m.querySelector("#klr-n").value }).then(function(r){ if (!r.ok) { b.disabled = false; m.querySelector("#klr-err").textContent = r.error; return; } m.done(); toast("✓ Sent to Ross"); if (S.view === "requests") KL.reload(); }); };
 };
 function pageClick(e){
-  var x = e.target.closest("[data-pg],[data-open],[data-a],[data-step],[data-addstep],[data-addnote],[data-edit],[data-mv],[data-approve],[data-sedit],[data-scan],[data-hn],[data-jtasks],[data-jadd],[data-jedit],[data-jst],[data-jmv],[data-tab],[data-clearjob],[data-new]");
+  var x = e.target.closest("[data-pg],[data-open],[data-a],[data-step],[data-addstep],[data-addnote],[data-edit],[data-mv],[data-approve],[data-sedit],[data-scan],[data-smv],[data-hn],[data-jtasks],[data-jadd],[data-jedit],[data-jst],[data-jmv],[data-tab],[data-clearjob],[data-new]");
   if (!x) return; var id = x.getAttribute("data-id");
   if (x.hasAttribute("data-tab")) { S.view = x.getAttribute("data-tab"); S.page = 1; S.open = {}; if (S.view !== "open") S.job = S.job && S.view === "done" ? S.job : ""; tabs(); return KL.reload(); }
   if (x.hasAttribute("data-new")) { var n = x.getAttribute("data-new"); if (n === "task") return KL.editor(null, null); if (n === "job") return KL.jobEditor(null); if (n === "req") return KL.request(); }
@@ -881,9 +899,10 @@ function pageClick(e){
   if (x.hasAttribute("data-mv")) { var cards = [].slice.call(document.querySelectorAll("#kl-list .kl-card[data-row]")), ci = cards.indexOf(x.closest(".kl-card")), nb = cards[x.getAttribute("data-mv") === "up" ? ci - 1 : ci + 1];
     return KL.act("move", id, { dir: x.getAttribute("data-mv"), other_id: nb ? nb.getAttribute("data-row") : undefined }, function(){ KL.reload(); }); }
   if (x.hasAttribute("data-step")) { x.disabled = true; var tid = x.closest(".kl-det").id.slice(7); return KL.act(x.getAttribute("data-on") === "1" ? "uncheck" : "check", tid, { step_id: x.getAttribute("data-step") }, function(){ KL.detail(tid, true); }); }
+  if (x.hasAttribute("data-smv")) { var tid3 = x.closest(".kl-det").id.slice(7); x.disabled = true; return KL.act("movestep", tid3, { step_id: x.getAttribute("data-smv"), dir: Number(x.getAttribute("data-d")) }, function(){ KL.detail(tid3, true); }).then(function(r){ if (!r || !r.ok) x.disabled = false; }); }   // Block 385d
   if (x.hasAttribute("data-sedit") || x.hasAttribute("data-scan")) { var tid2 = x.closest(".kl-det").id.slice(7);
     if (x.hasAttribute("data-scan")) { if (!window.confirm("Take this step off the list?")) return; return KL.act("cancelstep", tid2, { step_id: x.getAttribute("data-scan") }, function(){ KL.detail(tid2, true); }); }
-    var nt = window.prompt("Step:", x.parentNode.querySelector("span").textContent); if (nt == null) return; return KL.act("editstep", tid2, { step_id: x.getAttribute("data-sedit"), text: nt }, function(){ KL.detail(tid2, true); }); }
+    var nt = window.prompt("Step:", x.closest("li").querySelector("span").textContent); if (nt == null) return; return KL.act("editstep", tid2, { step_id: x.getAttribute("data-sedit"), text: nt }, function(){ KL.detail(tid2, true); }); }
   if (x.hasAttribute("data-hn")) { var tid3 = x.closest(".kl-det").id.slice(7); return KL.act("hidenote", tid3, { item_id: x.getAttribute("data-hn"), hidden: x.getAttribute("data-h") === "1" }, function(){ KL.detail(tid3, true); }); }
   if (x.hasAttribute("data-addstep")) { var i1 = el("kl-ns-" + x.getAttribute("data-addstep")); return KL.act("addstep", x.getAttribute("data-addstep"), { text: i1.value }, function(){ KL.detail(x.getAttribute("data-addstep"), true); }); }
   if (x.hasAttribute("data-addnote")) { var i2 = el("kl-nn-" + x.getAttribute("data-addnote")); return KL.act("note", x.getAttribute("data-addnote"), { note: i2.value }, function(){ KL.detail(x.getAttribute("data-addnote"), true); }); }
@@ -919,7 +938,8 @@ var PCSS = ".kl-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}.kl-t
  + ".kl-card{display:flex;gap:10px;align-items:flex-start;background:#1c1c1e;border:1px solid #2c2c2e;border-left:6px solid #888;border-radius:12px;padding:11px 12px;margin:0 0 6px}.kl-card .kl-tt{cursor:pointer}"
  + ".kl-chip{font-size:.72rem;font-weight:800;padding:2px 7px;border-radius:999px;border:1px solid;margin-right:4px;white-space:nowrap}.kl-sb{display:inline-block;width:80px;height:6px;background:#333;border-radius:4px;overflow:hidden;vertical-align:middle}.kl-sb i{display:block;height:100%;background:#30d158}"
  + ".kl-det:empty{display:none}.kl-dbox{background:#151517;border:1px solid #2c2c2e;border-radius:12px;padding:12px;margin:-2px 0 10px}.kl-sh{font-size:.8rem;color:#8e8e93;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px}"
- + ".kl-steps{list-style:none;padding:0;margin:4px 0}.kl-steps li{display:flex;gap:9px;align-items:center;padding:5px 0;font-size:1rem}.kl-bx{width:28px;height:28px;border-radius:7px;border:2px solid #636366;background:transparent;color:#000;font-weight:900;flex:none;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.kl-bx.on{background:#30d158;border-color:#30d158}"
+ + ".kl-srow{display:flex;gap:4px;align-items:center;margin:4px 0}.kl-srow .kl-in{flex:1;min-width:0;padding:8px 9px;resize:none;overflow:hidden;line-height:1.25;font-family:inherit;display:block}.kl-srm .kl-in{text-decoration:line-through;opacity:.45}.kl-sck{color:#30d158;font-weight:900;flex:none}.kl-sarr{background:#2c2c2e;border:0;border-radius:7px;color:#fff;width:32px;height:34px;font-size:.8rem;flex:none;cursor:pointer}.kl-sarr:disabled{opacity:.25}.kl-sadm{display:inline-flex;gap:4px;align-items:center;flex:none}.kl-sadm .kl-lnkb{min-width:32px;min-height:34px}@media(max-width:600px){.kl-steps li.kl-adm{flex-wrap:wrap;row-gap:2px;border-bottom:1px solid #2c2c2e}.kl-steps li.kl-adm>span:not(.kl-by):not(.kl-sadm){flex:1 1 calc(100% - 46px)}.kl-steps li.kl-adm .kl-sadm{margin-left:auto}.kl-steps li.kl-adm .kl-by{margin-left:37px}}"
+  + ".kl-steps{list-style:none;padding:0;margin:4px 0}.kl-steps li{display:flex;gap:9px;align-items:center;padding:5px 0;font-size:1rem}.kl-bx{width:28px;height:28px;border-radius:7px;border:2px solid #636366;background:transparent;color:#000;font-weight:900;flex:none;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.kl-bx.on{background:#30d158;border-color:#30d158}"
  + ".kl-dn2{color:#8e8e93;text-decoration:line-through}.kl-by{margin-left:auto;color:#8e8e93;font-size:.78rem;white-space:nowrap}.kl-row0{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}"
  + ".kl-in{background:#000;border:1px solid #3a3a3c;border-radius:9px;padding:10px 11px;font-size:16px;color:#fff;width:100%;box-sizing:border-box}.kl-row0 .kl-in{flex:1;min-width:160px;width:auto}"
  + ".kl-note{background:#1c1c1e;border-radius:8px;padding:7px 9px;margin:4px 0}.kl-hid{opacity:.45}.kl-ph img{width:84px;height:84px;object-fit:cover;border-radius:8px;margin:0 6px 6px 0}.kl-cam{background:#1d3a24}"
@@ -21150,8 +21170,26 @@ self.addEventListener("notificationclick", (e) => {
         const row = { title, details: String(b.details || "").slice(0, 4000), priority: pri, est_hours: est, due_date: due, job_id: jobId, ...draft, updated_at: nowK.toISOString() };
         let t;
         if (t0) {
+          if ((Array.isArray(b.steps_edit) || klArr385(b.steps).length) && t0.state !== "open") return json(400, { ok: false, error: "That task isn't open — re-open it to change its steps" });   // Fable audit: a finished task's steps are history
           [t] = await db(`kill_task?id=eq.${t0.id}`, { method: "PATCH", body: JSON.stringify(row) });
           logEvent("kill.edited", meK.id, { task_id: t0.id, job_id: jobId, title, was: { title: t0.title, priority: t0.priority, depts: t0.depts, mgr_depts: t0.mgr_depts, people: t0.people, job_id: t0.job_id } });
+          if (Array.isArray(b.steps_edit) || klArr385(b.steps).length) {   // Block 385d: the step list from Edit — wording, order, removals, new ones
+            const cur = await db(`kill_step?select=id,text,sort,checked_at&task_id=eq.${t0.id}&cancelled=is.false&order=sort.asc,created_at.asc`);
+            const byId = Object.fromEntries(cur.map((x) => [x.id, x])), seen = new Set(), order = [];
+            for (const x of (Array.isArray(b.steps_edit) ? b.steps_edit : []).slice(0, 300)) { if (!x || !isUuid(x.id) || !byId[x.id] || seen.has(x.id)) continue; seen.add(x.id); order.push({ s: byId[x.id], text: String(x.text == null ? "" : x.text).trim().slice(0, 300), rm: x.remove === true }); }
+            for (const x of cur) if (!seen.has(x.id)) order.push({ s: x, text: x.text, rm: false });   // added by the crew while he was editing → kept, at the end
+            const ops = []; let n = 0, edited = 0, removed = 0;
+            for (const o of order) {
+              if (o.rm) { removed++; ops.push(db(`kill_step?id=eq.${o.s.id}`, { method: "PATCH", body: JSON.stringify({ cancelled: true }) })); continue; }
+              n++; const p = {}; if (Number(o.s.sort) !== n * 10) p.sort = n * 10; if (o.text && o.text !== o.s.text) { p.text = o.text; edited++; }
+              if (Object.keys(p).length) ops.push(db(`kill_step?id=eq.${o.s.id}`, { method: "PATCH", body: JSON.stringify(p) }));
+            }
+            const fresh = klArr385(b.steps).map((x) => String(x || "").trim().slice(0, 300)).filter(Boolean).slice(0, 60);
+            if (fresh.length) ops.push(db("kill_step", { method: "POST", body: JSON.stringify(fresh.map((text, i) => ({ task_id: t0.id, text, sort: (n + i + 1) * 10, added_by: meK.id }))) }));
+            await Promise.all(ops);
+            const moved = order.filter((o) => !o.rm).map((o) => o.s.id).join() !== cur.filter((x) => !order.find((o) => o.rm && o.s.id === x.id)).map((x) => x.id).join();
+            if (edited || removed || moved || fresh.length) logEvent("kill.steps_edited", meK.id, { task_id: t0.id, job_id: jobId, title, edited, removed, moved, added: fresh.length, was: cur.map((x) => x.text) });
+          }
           const added = recipsK(row, E.by).filter((id) => !recipsK(t0, E.by).includes(id));
           bellK("kill.assigned", added, `Kill List: ${title}`, `${klName385(meK)} added you to it${pri === 2 ? " — URGENT" : ""}.`, "/kill", pri === 2);
         } else {
@@ -21304,6 +21342,18 @@ self.addEventListener("notificationclick", (e) => {
           const last = await db(`kill_step?select=sort&task_id=eq.${t.id}&order=sort.desc&limit=1`);
           await db("kill_step", { method: "POST", body: JSON.stringify({ task_id: t.id, text, sort: (last[0] ? Number(last[0].sort) || 0 : 0) + 10, added_by: meK.id }) });
           logEvent("kill.step_added", meK.id, { ...jl, text });
+          return json(200, { ok: true });
+        }
+        if (act === "movestep") {   // Block 385d: ▲ / ▼ on the opened task (admins + managers who can edit it)
+          if (!canEdit) return json(403, { ok: false, error: "Admins and managers only" });
+          if (t.state !== "open") return json(400, { ok: false, error: "That task isn't open" });
+          const all = await db(`kill_step?select=id,sort&task_id=eq.${t.id}&cancelled=is.false&order=sort.asc,created_at.asc`);
+          const i = all.findIndex((x) => x.id === b.step_id), j = i + (Number(b.dir) < 0 ? -1 : 1);
+          if (i < 0) return json(404, { ok: false, error: "That step isn't there anymore" });
+          if (j < 0 || j >= all.length) return json(200, { ok: true });
+          [all[i], all[j]] = [all[j], all[i]];
+          await Promise.all(all.map((x, k) => (Number(x.sort) !== (k + 1) * 10 ? db(`kill_step?id=eq.${x.id}`, { method: "PATCH", body: JSON.stringify({ sort: (k + 1) * 10 }) }) : null)).filter(Boolean));
+          logEvent("kill.step_moved", meK.id, { ...jl, step_id: b.step_id, dir: Number(b.dir) < 0 ? "up" : "down" });
           return json(200, { ok: true });
         }
         if (act === "editstep" || act === "cancelstep") {
